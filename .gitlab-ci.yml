@@ -1,0 +1,53 @@
+variables:
+  #GCOV: "/usr/bin/gcov-5"
+  EXTRA_MODULES: "tls,pkcs11,xts"
+  #SOFTHSM2_CONF_LINUX: "/home/gitlab-runner/softhsm2.conf"
+  #SOFTHSM2_LIB_LINUX:  "/home/gitlab-runner/SoftHSMv2-inst/lib/softhsm/libsofthsm2.so"
+
+build-linux-all-shared-gcc:
+  script:
+    - export CC=gcc
+    - export CXX=g++
+    - $CXX --version
+    - ./configure.py --module-policy=bsi --enable-modules=$EXTRA_MODULES --cc="$CC" --cc-bin="$CXX" --prefix=/tmp/botan-installation
+    - make -j 4
+    - ./botan-test --run-long-tests --run-online-tests
+    #- ./botan-test --pkcs11-lib="$SOFTHSM2_LIB_LINUX" pkcs11
+  tags:
+    - Ubuntu
+    - "16.10"
+    - x64
+  except:
+    - tags
+
+build-linux-all-shared-clang:
+  script:
+    - export CC=clang
+    - export CXX=clang++
+    - $CXX --version
+    - ./configure.py --module-policy=bsi --enable-modules=$EXTRA_MODULES --cc="$CC" --cc-bin="$CXX" --prefix=/tmp/botan-installation
+    - make -j 4
+    - ./botan-test --run-long-tests --run-online-tests
+    #- ./botan-test --pkcs11-lib="$SOFTHSM2_LIB_LINUX" pkcs11
+  tags:
+    - Ubuntu
+    - "16.10"
+    - x64
+  except:
+    - tags
+
+build-linux-trusteddisk-modules-shared-gcc:
+  script:
+    - export CC=gcc
+    - export CXX=g++
+    - $CXX --version
+    - ./configure.py --module-policy=bsi --enable-modules=pkcs11,xts,sha1,sha1_sse2,eme_pkcs1,eme_raw,x509,emsa_pkcs1 --cc="$CC" --cc-bin="$CXX" --prefix=/tmp/botan-installation
+    - make -j 4
+    - ./botan-test --run-long-tests --run-online-tests
+    #- ./botan-test --pkcs11-lib="$SOFTHSM2_LIB_LINUX" pkcs11
+  tags:
+    - Ubuntu
+    - "16.10"
+    - x64
+  except:
+    - tags
