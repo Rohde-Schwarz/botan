@@ -35,6 +35,9 @@ Connection_Cipher_State::Connection_Cipher_State(Protocol_Version version,
    m_nonce_bytes_from_handshake(suite.nonce_bytes_from_handshake()),
    m_nonce_bytes_from_record(suite.nonce_bytes_from_record())
    {
+   BOTAN_UNUSED(version);
+   BOTAN_UNUSED(uses_encrypt_then_mac);
+
    SymmetricKey mac_key, cipher_key;
    InitializationVector iv;
 
