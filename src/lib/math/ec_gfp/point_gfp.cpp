@@ -364,12 +364,12 @@ PointGFp Blinded_Point_Multiply::blinded_multiply(const BigInt& scalar_in,
    It takes a random walk through (a subset of) the set of addition
    chains that end in k.
    */
-   for(size_t i = scalar_bits; i > 0; i--)
+   for(size_t i = scalar_bits - 1; i > 0; i--)
       {
       const int32_t ki = scalar.get_bit(i);
 
       // choose gamma from -h,...,h
-      const int32_t gamma = static_cast<int32_t>((rng.next_byte() % (2*m_h))) - m_h;
+      const int32_t gamma = static_cast<int32_t>((rng.next_byte() % (2*m_h + 1))) - m_h;
       const int32_t l = gamma - 2*alpha + ki - (ki ^ 1);
 
       R.mult2(m_ws);
