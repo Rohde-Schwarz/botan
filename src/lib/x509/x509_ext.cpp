@@ -92,7 +92,7 @@ Extensions::create_extn_obj(const OID& oid,
    else if ( oid == OIDS::lookup( "netscape-cert-type" ) )
       {
       // ignore netscape-cert-type extension for TrustedDisk
-      return nullptr;
+      return extn;
       }
    else
       {
