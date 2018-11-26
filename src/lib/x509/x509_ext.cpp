@@ -89,10 +89,10 @@ Extensions::create_extn_obj(const OID& oid,
       {
       extn.reset(new Cert_Extension::Authority_Information_Access);
       }
-   else if ( oid == OIDS::lookup( "netscape-cert-type" ) )
+   else if(oid == OIDS::lookup("netscape-cert-type"))
       {
-      // ignore netscape-cert-type extension for TrustedDisk
-      return extn;
+      // mark critical netscape-cert-type extension as non-critical for TrustedDisk
+      extn.reset(new Cert_Extension::Unknown_Extension(oid, false));
       }
    else
       {
