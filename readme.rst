@@ -21,7 +21,7 @@ Versioning
 ----------------------------------------
 
 The versioning scheme used here is based on that of the
-`original project <https://botan.randombit.net/manual/versions.html>`_. In case
+`original project <https://botan.randombit.net/news.html>`_. In case
 there are differences between an official release version and an approved version,
 the approved version number will contain the original version it is based on followed by
 a `RSCSN` suffix. For example, the version 2.4.0-RSCS1 is based on the official
@@ -80,7 +80,7 @@ Documentation
 ----------------------------------------
 
 Botan provides a comprehensive `API documentation <https://botan.randombit.net/doxygen/>`_ as well as
-a users `handbook <https://botan.randombit.net/manual/>`_.
+a users `handbook <https://botan.randombit.net/handbook/>`_.
 
 API documentation and the handbook for the latest version approved by the BSI can be found here:
 
@@ -122,13 +122,13 @@ TLS
 Botan contains a TLS Policy class `BSI_TR_02102_2 <src/lib/tls/tls_policy.h>`_ that only allows the algorithms recommended in
 BSI technical guideline `02102-2 <https://www.bsi.bund.de/DE/Publikationen/TechnischeRichtlinien/tr02102/index_htm.html>`_.
 This policy can be passed whereever a ``TLS_Policy`` reference is accepted by the API.
-For more information, see the `handbook <https://botan.randombit.net/manual/tls.html>`_.
+For more information, see the `handbook <https://botan.randombit.net/handbook/api_ref/tls.html>`_.
 
 
 Random Number Generation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Botan contains an implementation of `NIST SP 800-90A <http://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf>`_'s `HMAC_DRBG <src/lib/rng/hmac_drbg.h>`_.
+Botan contains an implementation of `NIST SP 800-90A <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf>`_'s `HMAC_DRBG <src/lib/rng/hmac_drbg.h>`_.
 The parameters reseed interval, maximum number of bytes per request and the entropy source(s) for
 seeding and reseeding can be configured per ``HMAC_DRBG`` instance. For example,
 a ``PKCS11_RNG`` can be used as an entropy source::
@@ -138,6 +138,6 @@ a ``PKCS11_RNG`` can be used as an entropy source::
 
 ``HMAC_DRBG`` will automatically reseed whenever the reseed interval or maximum number
 of bytes per request are exceeded. On platforms which support ``fork()``, it will also
-automatically reseed after a fork. For more information, see the `handbook <https://botan.randombit.net/manual/rng.html>`_.
+automatically reseed after a fork. For more information, see the `handbook <https://botan.randombit.net/handbook/api_ref/rng.html>`_.
 
 
