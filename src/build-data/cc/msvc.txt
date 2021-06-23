@@ -58,6 +58,6 @@ default-debug -> "$(LINKER) /DEBUG"
 </binary_link_commands>
 
 <mach_abi_linking>
-all       -> "/MD /bigobj"
-all-debug -> "/MDd /bigobj"
+all       -> "/MD /bigobj /D_DISABLE_EXTENDED_ALIGNED_STORAGE /std:c++17"
+all-debug -> "/MDd /bigobj /D_DISABLE_EXTENDED_ALIGNED_STORAGE /std:c++17"
 </mach_abi_linking>
