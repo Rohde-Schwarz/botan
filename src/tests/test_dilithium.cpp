@@ -89,18 +89,21 @@ Test::Result run_dilithium_test(const char* test_name, const VarMap& vars )
 
         return result;
     }
-    std::vector<Test::Result> run() override
-    {
-        std::vector<Test::Result> results;
 
-    #if defined(BOTAN_HAS_DILITHIUM)
-        results.push_back(run_kyber_test("Dilithium 2 API"));
-    #endif
-
-        return results;
-    }
-};
-BOTAN_REGISTER_TEST("dilithium", "dilithium_kat", DILITHIUM_Tests);
+#define REGISTER_KYBER_KAT_TEST(mode)                                                                                  \
+    class DILITHIUM_KAT_##mode final : public Text_Based_Test                                                              \
+    {                                                                                                                  \
+      public:                                                                                                          \
+        DILITHIUM_KAT_##mode() : Text_Based_Test("pubkey/dilithium_" #mode ".vec", "count,seed,mslen,msg,pk,sk,smlen,sm" )            \
+        {                                                                                                              \
+        }                                                                                                              \
+                                                                                                                       \
+        Test::Result run_one_test(const std::string &name, const VarMap &vars) override                                \
+        {                                                                                                              \
+            return run_dilithium_test("Dilithium_" #mode, vars);                          \
+        }                                                                                                              \
+    };                                                                                                                 \
+    BOTAN_REGISTER_TEST("dilithium", "dilithium_kat_" #mode, DILITHIUM_KAT_##mode)
 
 } // namespace
 

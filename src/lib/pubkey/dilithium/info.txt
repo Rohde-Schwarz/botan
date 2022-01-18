@@ -1,0 +1,10 @@
+<defines>
+DILITHIUM -> 20220118
+</defines>
+
+<header:public>
+dilithium_sign.h
+</header:public>
+
+<requires>
+</requires>
