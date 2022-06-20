@@ -26,6 +26,10 @@ kdf1_iso18033
 sp800_108
 sp800_56c
 
+# pbkdf
+argon2
+argon2fmt
+
 # pk_pad
 eme_oaep
 emsa_pssr
@@ -42,6 +46,8 @@ ecgdsa
 ecies
 eckcdsa
 ecdh
+kyber
+kyber_90s
 xmss
 
 # rng
@@ -97,12 +103,15 @@ noekeon
 noekeon_simd
 seed
 serpent
-serpent_simd
 serpent_avx2
+serpent_simd
 shacal2
-shacal2_x86
+shacal2_armv8
+shacal2_avx2
 shacal2_simd
+shacal2_x86
 sm4
+sm4_armv8
 threefish_512
 threefish_512_avx2
 twofish
@@ -121,7 +130,7 @@ chacha_avx2
 ofb
 rc4
 salsa20
-shake_cipher
+#shake_cipher # not recommended, but needed for kyber
 
 # kdf
 hkdf
@@ -133,12 +142,13 @@ sp800_56a
 # pubkey
 cecpq1
 curve25519
+ec_h2c
 ed25519
 elgamal
 gost_3410
 mce
-rfc6979
 newhope
+rfc6979
 sm2
 
 # pk_pad
@@ -148,13 +158,13 @@ emsa_raw
 emsa_x931
 
 # hash
-blake2
+#blake2 # not recommended, but needed for argon2
 comb4p
 gost_3411
 md4
 md5
 rmd160
-shake
+#shake # not recommended, but needed for kyber
 skein
 #sha1 // needed for x509
 sm3
@@ -166,11 +176,12 @@ keccak
 chacha_rng
 
 # mac
+blake2mac
 poly1305
 siphash
 x919_mac
 
-# misc
+# passhash
 bcrypt
 
 </prohibited>
