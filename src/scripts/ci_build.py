@@ -77,6 +77,12 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache, ro
         # much faster compiling via the amalgamation than individual files.
         flags += ['--amalgamation']
 
+    if target == 'shared' and target_cc == 'gcc':
+        # Disable SSE 4.1 on GCC because:
+        #   error: attribute(target("sse41")) is unknown
+        #     #pragma GCC target ("sse41")
+        flags += ['--disable-sse4.1']
+
     if target in ['bsi', 'nist']:
         # Arbitrarily test disable static on module policy builds
         flags += ['--module-policy=%s' % (target), '--disable-static']
