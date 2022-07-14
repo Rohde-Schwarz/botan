@@ -67,5 +67,5 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
-      - run: ./src/scripts/ci/setup_gh_actions.bat
+      - run: choco install jom
       - run: python3 ./src/scripts/ci_build.py --cc='${{ matrix.compiler }}' --cpu=${{ matrix.platform }} --make-tool=jom ${{ matrix.target }}
