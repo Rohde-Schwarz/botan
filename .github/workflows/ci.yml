@@ -49,7 +49,7 @@ jobs:
 
   windows-build:
     name: Builds on Windows
-    runs-on: ${{ matrix.host_os }}
+    runs-on: windows-latest
 
     strategy:
       fail-fast: false
@@ -59,11 +59,24 @@ jobs:
           - target: static
             compiler: msvc
             platform: x86_amd64
-            host_os: windows-2019
+            make_tool: jom
+          - target: static
+            compiler: gcc
+            target_compiler: gcc
+            platform: x86_amd64
+            make_tool: mingw32-make
 
     steps:
       - name: Enable Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1.10.0
       - uses: actions/checkout@v2
-      - run: choco install jom
-      - run: python3 ./src/scripts/ci_build.py --cc='${{ matrix.compiler }}' --cpu=${{ matrix.platform }} --make-tool=jom ${{ matrix.target }}
+      - name: Install JOM
+        if: matrix.make_tool == 'jom'
+        run: choco install jom
+      - run: |
+          python3 ./src/scripts/ci_build.py       \
+             --os=windows                         \
+             --cc='${{ matrix.target_compiler }}' \
+             --cpu=${{ matrix.platform }}         \
+             --make-tool=${{ matrix.make_tool }}  \
+             ${{ matrix.target }}
