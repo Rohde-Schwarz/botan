@@ -18,7 +18,8 @@ on:
     branches: [ master ]
 
 jobs:
-  ci:
+  unix-build:
+    name: Builds on Unix Systems
     runs-on: ${{ matrix.host_os }}
 
     strategy:
@@ -45,3 +46,26 @@ jobs:
                ${{ runner.os }}-${{ matrix.compiler }}-${{ matrix.target }}-
       - run: ./src/scripts/ci/setup_gh_actions.sh ${{ matrix.target }}
       - run: ./src/scripts/ci_build.py --cc '${{ matrix.compiler }}' ${{ matrix.target }}
+
+  windows-build:
+    name: Builds on Windows
+    runs-on: ${{ matrix.host_os }}
+
+    strategy:
+      fail-fast: false
+
+      matrix:
+        include:
+          - target: static
+            compiler: msvc
+            platform: x86
+            host_os: windows-2019
+          - target: static
+            compiler: msvc
+            platform: x86_amd64
+            host_os: windows-2019
+
+    steps:
+      - uses: actions/checkout@v2
+      - run: ./src/scripts/ci/setup_gh_actions.bat
+      - run: ./src/scripts/ci_build --cc='${{ matrix.compiler }}' --cpu=${{ matrix.platform }} --without-python3 --make-tool=jom ${{ matrix.target }}
