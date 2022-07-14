@@ -13,6 +13,8 @@
 
 #include <botan/mem_ops.h>
 
+#include <stdexcept>
+
 namespace Botan {
 
 /**
