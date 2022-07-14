@@ -10,6 +10,8 @@
 
 #include <botan/secmem.h>
 
+#include <string>
+
 namespace Botan {
 
 class RandomNumberGenerator;
