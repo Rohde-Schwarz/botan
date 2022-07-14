@@ -58,10 +58,6 @@ jobs:
         include:
           - target: static
             compiler: msvc
-            platform: x86
-            host_os: windows-2019
-          - target: static
-            compiler: msvc
             platform: x86_amd64
             host_os: windows-2019
 
