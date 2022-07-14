@@ -66,6 +66,8 @@ jobs:
             host_os: windows-2019
 
     steps:
+      - name: Enable Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1.10.0
       - uses: actions/checkout@v2
       - run: choco install jom
       - run: python3 ./src/scripts/ci_build.py --cc='${{ matrix.compiler }}' --cpu=${{ matrix.platform }} --make-tool=jom ${{ matrix.target }}
