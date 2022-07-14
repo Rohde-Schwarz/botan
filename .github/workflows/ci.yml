@@ -1,0 +1,47 @@
+
+# (C) 2022 René Meusel, Rohde & Schwarz Cybersecurity
+# Botan is released under the Simplified BSD License (see license.txt)
+#
+# This is a backport to have some rudimentary CI before officially switching to
+# Botan's upstream GitHub Actions.
+
+name: ci
+
+permissions:
+  contents: read
+  # implicitly all other scopes not listed become none
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  ci:
+    runs-on: ${{ matrix.host_os }}
+
+    strategy:
+      fail-fast: false
+
+      matrix:
+        include:
+          - target: shared
+            compiler: gcc
+            host_os: ubuntu-20.04
+          - target: shared
+            compiler: clang
+            host_os: ubuntu-20.04
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+            path: |
+              ~/.ccache
+              /Users/runner/Library/Caches/ccache
+            key: ${{ runner.os }}-${{ matrix.compiler }}-${{ matrix.target }}-${{ github.run_id }}
+            restore-keys: |
+               ${{ runner.os }}-${{ matrix.compiler }}-${{ matrix.target }}-
+      - run: ./src/scripts/ci/setup_gh_actions.sh ${{ matrix.target }}
+      - run: ./src/scripts/ci_build.py --cc '${{ matrix.compiler }}' ${{ matrix.target }}
