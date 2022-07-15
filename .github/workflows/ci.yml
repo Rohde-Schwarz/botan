@@ -1,4 +1,5 @@
 
+# (C) 2022 Jack Lloyd
 # (C) 2022 René Meusel, Rohde & Schwarz Cybersecurity
 # Botan is released under the Simplified BSD License (see license.txt)
 #
@@ -17,22 +18,53 @@ on:
   pull_request:
     branches: [ master ]
 
+# cancel running workflows when new commits are being pushed in pull requests
+# but not on the master branch
+concurrency:
+  group: ${{ github.workflow }} @ ${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
-  unix-build:
-    name: Builds on Unix Systems
-    runs-on: ${{ matrix.host_os }}
+  ci:
+    name: Build and Test
 
     strategy:
       fail-fast: false
-
       matrix:
+        target: [ static, shared, bsi, nist ]
+        os: [ linux, macos, windows ]
+        architecture: [ x86, x86_amd64 ]
+        compiler: [ clang, gcc, msvc ]
+
         include:
-          - target: shared
-            compiler: gcc
-            host_os: ubuntu-20.04
-          - target: shared
+          - os: linux
+            host_os: ubuntu-latest
+            make_tool: make
+            ccache: ccache
+          - os: macos
+            host_os: macos-latest
+            make_tool: make
+            ccache: ccache
+          - os: windows
+            host_os: windows-latest
+            make_tool: jom
+            ccache: sccache
+
+        exclude:
+          - os: linux
+            architecture: x86
+          - os: macos
+            architecture: x86
+          - os: linux
+            compiler: msvc
+          - os: macos
+            compiler: msvc
+          - os: windows
             compiler: clang
-            host_os: ubuntu-20.04
+          - os: windows
+            compiler: gcc
+
+    runs-on: ${{ matrix.host_os }}
 
     steps:
       - uses: actions/checkout@v2
@@ -43,41 +75,13 @@ jobs:
               /Users/runner/Library/Caches/ccache
             key: ${{ runner.os }}-${{ matrix.compiler }}-${{ matrix.target }}-${{ github.run_id }}
             restore-keys: |
-               ${{ runner.os }}-${{ matrix.compiler }}-${{ matrix.target }}-
-      - run: ./src/scripts/ci/setup_gh_actions.sh ${{ matrix.target }}
-      - run: ./src/scripts/ci_build.py --cc '${{ matrix.compiler }}' ${{ matrix.target }}
+               ${{ runner.os }}-${{ matrix.compiler }}-${{ matrix.target }}
 
-  windows-build:
-    name: Builds on Windows
-    runs-on: windows-latest
+      - name: Setup Build Host (Unix)
+        run: ./src/scripts/ci/setup_gh_actions.sh ${{ matrix.target }}
+        if: os != 'windows'
+      - name: Setup Build Host (Windows)
+        run: ./src/scripts/ci/setup_gh_actions.ps1 ${{ matrix.target }}
+        if: os == 'windows'
 
-    strategy:
-      fail-fast: false
-
-      matrix:
-        include:
-          - target: static
-            compiler: msvc
-            platform: x86_amd64
-            make_tool: jom
-          - target: static
-            compiler: msvc
-            platform: x86
-            make_tool: jom
-
-    steps:
-      - name: Enable Developer Command Prompt
-        uses: ilammy/msvc-dev-cmd@v1.10.0
-        with:
-          arch: ${{ matrix.platform }}
-      - uses: actions/checkout@v2
-      - name: Install JOM
-        if: matrix.make_tool == 'jom'
-        run: choco install jom
-      - run: |
-          python3 ./src/scripts/ci_build.py       `
-             --os=windows                         `
-             --cc='${{ matrix.compiler }}'        `
-             --cpu=${{ matrix.platform }}         `
-             --make-tool=${{ matrix.make_tool }}  `
-             ${{ matrix.target }}
+      - run: ./src/scripts/ci_build.py --os= --cc='${{ matrix.compiler }}' --cpu='${{ matrix.architecture }}' --make-tool='${{ matrix.make_tool }}' --compiler-cache='${{ matrix.ccache }}' ${{ matrix.target }}
