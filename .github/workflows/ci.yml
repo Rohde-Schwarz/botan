@@ -41,23 +41,23 @@ jobs:
             host_os: ubuntu-latest
             make_tool: make
             ccache: ccache
-          - os: macos
+          - os: osx
             host_os: macos-latest
             make_tool: make
             ccache: ccache
           - os: windows
-            host_os: windows-latest
+            host_os: windows-2019
             make_tool: jom
             ccache: sccache
 
         exclude:
           - os: linux
             architecture: x86
-          - os: macos
+          - os: osx
             architecture: x86
           - os: linux
             compiler: msvc
-          - os: macos
+          - os: osx
             compiler: msvc
           - os: windows
             compiler: clang
