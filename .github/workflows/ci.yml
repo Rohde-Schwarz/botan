@@ -79,9 +79,9 @@ jobs:
 
       - name: Setup Build Host (Unix)
         run: ./src/scripts/ci/setup_gh_actions.sh ${{ matrix.target }}
-        if: os != 'windows'
+        if: matrix.os != 'windows'
       - name: Setup Build Host (Windows)
         run: ./src/scripts/ci/setup_gh_actions.ps1 ${{ matrix.target }}
-        if: os == 'windows'
+        if: matrix.os == 'windows'
 
       - run: ./src/scripts/ci_build.py --os= --cc='${{ matrix.compiler }}' --cpu='${{ matrix.architecture }}' --make-tool='${{ matrix.make_tool }}' --compiler-cache='${{ matrix.ccache }}' ${{ matrix.target }}
