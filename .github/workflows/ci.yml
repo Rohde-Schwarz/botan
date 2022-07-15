@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ linux, macos, windows ]
+        os: [ linux, osx, windows ]
         target: [ static, shared ]
         compiler: [ clang, gcc, msvc ]
         architecture: [ x86, x86_amd64 ]
