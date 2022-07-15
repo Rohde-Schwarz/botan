@@ -62,7 +62,6 @@ jobs:
             make_tool: jom
           - target: static
             compiler: gcc
-            target_compiler: gcc
             platform: x86_amd64
             make_tool: mingw32-make
 
@@ -76,7 +75,7 @@ jobs:
       - run: |
           python3 ./src/scripts/ci_build.py       `
              --os=windows                         `
-             --cc='${{ matrix.target_compiler }}' `
+             --cc='${{ matrix.compiler }}'        `
              --cpu=${{ matrix.platform }}         `
              --make-tool=${{ matrix.make_tool }}  `
              ${{ matrix.target }}
