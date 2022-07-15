@@ -61,13 +61,15 @@ jobs:
             platform: x86_amd64
             make_tool: jom
           - target: static
-            compiler: gcc
-            platform: x86_amd64
-            make_tool: mingw32-make
+            compiler: msvc
+            platform: x86
+            make_tool: jom
 
     steps:
       - name: Enable Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1.10.0
+        with:
+          arch: ${{ matrix.platform }}
       - uses: actions/checkout@v2
       - name: Install JOM
         if: matrix.make_tool == 'jom'
