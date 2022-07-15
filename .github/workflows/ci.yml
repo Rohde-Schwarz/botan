@@ -31,10 +31,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [ static, shared, bsi, nist ]
         os: [ linux, macos, windows ]
-        architecture: [ x86, x86_amd64 ]
+        target: [ static, shared ]
         compiler: [ clang, gcc, msvc ]
+        architecture: [ x86, x86_amd64 ]
 
         include:
           - os: linux
@@ -84,4 +84,4 @@ jobs:
         run: ./src/scripts/ci/setup_gh_actions.ps1 ${{ matrix.target }}
         if: matrix.os == 'windows'
 
-      - run: ./src/scripts/ci_build.py --os= --cc='${{ matrix.compiler }}' --cpu='${{ matrix.architecture }}' --make-tool='${{ matrix.make_tool }}' --compiler-cache='${{ matrix.ccache }}' ${{ matrix.target }}
+      - run: ./src/scripts/ci_build.py --os=${{ matrix.os }} --cc='${{ matrix.compiler }}' --cpu='${{ matrix.architecture }}' --make-tool='${{ matrix.make_tool }}' --compiler-cache='${{ matrix.ccache }}' ${{ matrix.target }}
