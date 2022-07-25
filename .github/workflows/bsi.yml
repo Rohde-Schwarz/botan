@@ -1,0 +1,92 @@
+
+# (C) 2020,2022 Jack Lloyd
+# (C) 2022      René Meusel, Rohde & Schwarz Cybersecurity
+#
+# Botan is released under the Simplified BSD License (see license.txt)
+
+name: BSI Builds
+
+permissions:
+  contents: read
+  # implicitly all other scopes not listed become none
+
+on:
+  push:
+    branches: [ botan/3.0.0 ]
+  pull_request:
+    branches: [ botan/3.0.0 ]
+
+# cancel running workflows when new commits are being pushed in pull requests
+# but not on the master branch
+concurrency:
+  group: ${{ github.workflow }} @ ${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  utility:
+    name: "Utility"
+    strategy:
+      fail-fast: false
+
+      matrix:
+        include:
+          - jobname: Documentation
+            target: pdf_docs
+            artifacts: |
+              build/docs/handbook/botan.pdf
+              build/docs/doxygen/
+            host_os: ubuntu-22.04
+          - jobname: Coverage Report
+            target: coverage
+            artifacts: lcov-out/
+            host_os: ubuntu-22.04
+
+    runs-on: ${{ matrix.host_os }}
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Build Agent
+        uses: ./.github/actions/setup-build-agent
+        with:
+          target: ${{ matrix.target }}
+          cache-key: bsi-${{ matrix.host_os }}-${{ matrix.target }}
+
+      - name: Build and Test Botan
+        run: python3 ./src/scripts/ci_build.py --with-bsi-policy ${{ matrix.target }}
+
+      - name: Archive Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.jobname }}
+          path: ${{ matrix.artifacts }}
+        if: ${{ matrix.artifacts != '' }}
+
+  bsi_tests:
+    name: "BSI Build Policy Tests"
+    strategy:
+      fail-fast: false
+
+      matrix:
+        # basic configuration combinations should run on all target platforms
+        target:    [ static, shared ]
+        platform:  [
+          { host_os: windows-2022, compiler: msvc,  make_tool: jom },
+          { host_os: windows-2019, compiler: msvc,  make_tool: jom },
+          { host_os: ubuntu-22.04, compiler: gcc,   make_tool: make },
+          { host_os: ubuntu-22.04, compiler: clang, make_tool: make },
+          { host_os: macos-latest, compiler: clang, make_tool: make }
+        ]
+
+    runs-on: ${{ matrix.platform.host_os }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Build Agent
+        uses: ./.github/actions/setup-build-agent
+        with:
+          target: ${{ matrix.target }}
+          cache-key: bsi-${{ matrix.platform.host_os }}-${{ matrix.platform.compiler }}-${{ matrix.target }}
+
+      - name: Build and Test Botan
+        run: python3 ./src/scripts/ci_build.py --with-bsi-policy --cc='${{ matrix.platform.compiler }}' --make-tool='${{ matrix.platform.make_tool }}' ${{ matrix.target }}

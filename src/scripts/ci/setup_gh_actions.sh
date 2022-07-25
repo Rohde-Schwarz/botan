@@ -16,6 +16,22 @@ ARCH="$2"
 
 SCRIPT_LOCATION=$(cd "$(dirname "$0")"; pwd)
 
+setup_softhsm_and_tpm_linux() {
+    sudo apt-get -qq install softhsm2 libtspi-dev
+
+    sudo chgrp -R "$(id -g)" /var/lib/softhsm/ /etc/softhsm
+    sudo chmod g+w /var/lib/softhsm/tokens
+
+    softhsm2-util --init-token --free --label test --pin 123456 --so-pin 12345678
+    echo "PKCS11_LIB=/usr/lib/softhsm/libsofthsm2.so" >> "$GITHUB_ENV"
+}
+
+setup_softhsm_macos() {
+    brew install softhsm
+    softhsm2-util --init-token --free --label test --pin 123456 --so-pin 12345678
+    echo "PKCS11_LIB=/usr/local/lib/softhsm/libsofthsm2.so" >> "$GITHUB_ENV"
+}
+
 if type -p "apt-get"; then
     sudo apt-get -qq update
     sudo apt-get -qq install ccache
@@ -23,8 +39,9 @@ if type -p "apt-get"; then
     if [ "$TARGET" = "valgrind" ]; then
         sudo apt-get -qq install valgrind
 
-    elif [ "$TARGET" = "shared" ] || [ "$TARGET" = "examples" ] ; then
+    elif [ "$TARGET" = "amalgamation" ] || [ "$TARGET" = "static" ] || [ "$TARGET" = "shared" ] || [ "$TARGET" = "examples" ] ; then
         sudo apt-get -qq install libboost-dev
+        setup_softhsm_and_tpm_linux
 
     elif [ "$TARGET" = "clang" ]; then
         sudo apt-get -qq install clang
@@ -61,22 +78,20 @@ if type -p "apt-get"; then
 
     elif [ "$TARGET" = "coverage" ] || [ "$TARGET" = "sanitizer" ]; then
         if [ "$TARGET" = "coverage" ]; then
-            sudo apt-get -qq install lcov python3-coverage
+            sudo apt-get -qq install lcov python3-coverage gdb
             pip install --user codecov
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         fi
 
-        sudo apt-get -qq install softhsm2 libtspi-dev libboost-dev
+        sudo apt-get -qq install libboost-dev
+        setup_softhsm_and_tpm_linux
 
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    elif [ "$TARGET" = "docs" ] || [ "$TARGET" = "pdf_docs" ]; then
+        sudo apt-get -qq install doxygen python3-docutils python3-sphinx
 
-        sudo chgrp -R "$(id -g)" /var/lib/softhsm/ /etc/softhsm
-        sudo chmod g+w /var/lib/softhsm/tokens
-
-        softhsm2-util --init-token --free --label test --pin 123456 --so-pin 12345678
-        echo "PKCS11_LIB=/usr/lib/softhsm/libsofthsm2.so" >> "$GITHUB_ENV"
-
-    elif [ "$TARGET" = "docs" ]; then
-        sudo apt-get -qq install doxygen python-docutils python3-sphinx
+        if [ "$TARGET" = "pdf_docs" ]; then
+            sudo apt-get -qq install latexmk texlive-latex-extra
+        fi
     fi
 else
     export HOMEBREW_NO_AUTO_UPDATE=1
@@ -84,6 +99,7 @@ else
 
     if [ "$TARGET" = "shared" ]; then
         brew install boost
+        setup_softhsm_macos
     fi
 fi
 

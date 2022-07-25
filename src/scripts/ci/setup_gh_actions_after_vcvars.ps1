@@ -11,4 +11,8 @@ if ($args[0] -in @('shared')) {
 
     $boostincdir = Join-Path -Path $env:DEPENDENCIES_LOCATION -ChildPath "boost.1.79.0/lib/native/include"
     echo "BOOST_INCLUDEDIR=$boostincdir" >> $env:GITHUB_ENV
+
+    # set up SoftHSM token
+    # C:\SoftHSM2\bin\softhsm2-util.exe --init-token --free --label test --pin 123456 --so-pin 12345678
+    # echo "PKCS11_LIB=C:/SoftHSM2/lib/softhsm2-x64.dll" >> $env:GITHUB_ENV
 }

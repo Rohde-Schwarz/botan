@@ -46,6 +46,7 @@ def known_targets():
         'cross-riscv64',
         'cross-win64',
         'docs',
+        'pdf_docs',
         'emscripten',
         'examples',
         'fuzzers',
@@ -81,7 +82,7 @@ def build_targets(target, target_os):
 
 def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
                     root_dir, build_dir, test_results_dir, pkcs11_lib, use_gdb,
-                    disable_werror, extra_cxxflags, disabled_tests):
+                    disable_werror, extra_cxxflags, disabled_tests, bsi_policy):
     # pylint: disable=too-many-branches,too-many-statements,too-many-arguments,too-many-locals
 
     """
@@ -141,6 +142,9 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
     if ccache is not None:
         flags += ['--no-store-vc-rev', '--compiler-cache=%s' % (ccache)]
 
+    if bsi_policy:
+        flags += ['--module-policy=bsi', '--enable-modules=tls12,tls13,tls_cbc,pkcs11,xts']
+
     if not disable_werror:
         flags += ['--werror-mode']
 
@@ -160,8 +164,12 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
         # tls is optional for bsi/nist but add it so verify tests work with these minimized configs
         flags += ['--module-policy=%s' % (target), '--enable-modules=tls12']
 
-    if target == 'docs':
-        flags += ['--with-doxygen', '--with-sphinx', '--with-rst2man']
+    if target in ['docs', 'pdf_docs']:
+        flags += ['--with-doxygen', '--with-sphinx']
+        if target == 'docs':
+            flags += ['--with-rst2man']
+        elif target == 'pdf_docs':
+            flags += ['--with-pdf']
         test_cmd = None
 
     if target == 'cross-win64':
@@ -354,13 +362,15 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
         if target_os == 'linux':
             flags += ['--with-lzma']
 
-        if target in ['coverage']:
-            flags += ['--with-tpm']
-            test_cmd += ['--run-online-tests']
-            if pkcs11_lib and os.access(pkcs11_lib, os.R_OK):
-                test_cmd += ['--pkcs11-lib=%s' % (pkcs11_lib)]
+        if target in ['coverage'] or bsi_policy:
+            if target_os == 'linux':
+                flags += ['--with-tpm']
+            if test_cmd:
+                test_cmd += ['--run-online-tests']
+                if pkcs11_lib and os.access(pkcs11_lib, os.R_OK):
+                    test_cmd += ['--pkcs11-lib=%s' % (pkcs11_lib)]
 
-    if target in ['coverage', 'sanitizer']:
+    if test_cmd and (target in ['coverage', 'sanitizer'] or bsi_policy):
         test_cmd += ['--run-long-tests']
 
         if target_os == 'windows' and target == 'sanitizer':
@@ -492,6 +502,9 @@ def parse_args(args):
     parser.add_option('--pkcs11-lib', default=os.getenv('PKCS11_LIB'), metavar='LIB',
                       help='Set PKCS11 lib to use for testing')
 
+    parser.add_option('--with-bsi-policy', dest='use_bsi_policy', action='store_true', default=False,
+                      help='Enable BSI build policy')
+
     parser.add_option('--disable-werror', action='store_true', default=False,
                       help='Allow warnings to compile')
 
@@ -617,7 +630,7 @@ def main(args=None):
             target, options.os, options.cpu, options.cc, options.cc_bin,
             options.compiler_cache, root_dir, build_dir, options.test_results_dir,
             options.pkcs11_lib, options.use_gdb, options.disable_werror,
-            options.extra_cxxflags, options.disabled_tests)
+            options.extra_cxxflags, options.disabled_tests, options.use_bsi_policy)
 
         cmds.append([py_interp, os.path.join(root_dir, 'configure.py')] + config_flags)
 
@@ -632,7 +645,7 @@ def main(args=None):
 
         make_cmd += ['-k']
 
-        if target == 'docs':
+        if target in ['docs', 'pdf_docs']:
             cmds.append(make_cmd + ['docs'])
         else:
             if options.compiler_cache is not None:
@@ -640,10 +653,10 @@ def main(args=None):
 
             make_targets = ['libs', 'tests', 'cli']
 
-            if target in ['coverage', 'fuzzers']:
+            if target in ['coverage', 'fuzzers'] and not options.use_bsi_policy:
                 make_targets += ['fuzzer_corpus_zip', 'fuzzers']
 
-            if target in ['coverage', 'sanitizer'] and options.os not in ['windows']:
+            if target in ['coverage', 'sanitizer'] and options.os not in ['windows'] and not options.use_bsi_policy:
                 make_targets += ['bogo_shim']
 
             cmds.append(make_prefix + make_cmd + make_targets)
@@ -654,7 +667,7 @@ def main(args=None):
         if run_test_command is not None:
             cmds.append(run_test_command)
 
-        if target in ['coverage', 'sanitizer'] and options.os != 'windows':
+        if target in ['coverage', 'sanitizer'] and options.os != 'windows' and not options.use_bsi_policy:
             if not options.boringssl_dir:
                 raise Exception('coverage build needs --boringssl-dir')
 
@@ -666,12 +679,14 @@ def main(args=None):
                          '-shim-path', os.path.abspath(os.path.join(build_dir, 'botan_bogo_shim')),
                          '-shim-config', os.path.abspath(os.path.join(root_dir, 'src', 'bogo_shim', 'config.json'))])
 
-        if target in ['coverage', 'fuzzers']:
+        if target in ['coverage', 'fuzzers'] and not options.use_bsi_policy:
             cmds.append([py_interp, os.path.join(root_dir, 'src/scripts/test_fuzzers.py'),
                          os.path.join(build_dir, 'fuzzer_corpus'),
                          os.path.join(build_dir, 'build/fuzzer')])
 
-        if target in ['shared', 'coverage', 'sanitizer'] and options.os != 'windows':
+        # The BSI build policy restricts the available CLI commands and the test_cli.py scripts
+        # cannot deal with that and fail. That should be fixed at a later point.
+        if target in ['shared', 'coverage', 'sanitizer'] and options.os != 'windows' and not options.use_bsi_policy:
             botan_exe = os.path.join(build_dir, 'botan-cli.exe' if options.os == 'windows' else 'botan')
 
             args = ['--threads=%d' % (options.build_jobs)]
@@ -689,7 +704,9 @@ def main(args=None):
         if root_dir != '.':
             python_tests.append('--test-data-dir=%s' % root_dir)
 
-        if target in ['shared', 'coverage'] and not (options.os == 'windows' and options.cpu == 'x86'):
+        # The BSI build policy restricts the available FFI APIs and the test_python.py script
+        # cannot deal with that and fail. That should be fixed at a later point.
+        if target in ['shared', 'coverage'] and not (options.os == 'windows' and options.cpu == 'x86') and not options.use_bsi_policy:
             cmds.append([py_interp, '-b'] + python_tests)
 
         if target in ['shared', 'static', 'bsi', 'nist']:
@@ -705,13 +722,17 @@ def main(args=None):
                          'BUILD_DIR_LINK_PATH=-L%s/lib' % (install_prefix)])
 
         if target in ['coverage']:
-            if have_prog('coverage'):
+            # The BSI build policy restricts the available FFI APIs and the
+            # test_python.py script cannot deal with that and fail. That should
+            # be fixed at a later point.
+            if have_prog('coverage') and not options.use_bsi_policy:
                 cmds.append(['coverage', 'run', '--branch',
                              '--rcfile', os.path.join(root_dir, 'src/configs/coverage.rc')] +
                             python_tests)
 
-            if have_prog('codecov'):
+            if have_prog('codecov') and not options.use_bsi_policy:
                 # If codecov exists assume we are in CI and report to codecov.io
+                # Except when running the BSI-specific CI builds.
                 cmds.append(['indir:%s' % root_dir, 'codecov', '--required', '--gcov-root', build_dir,
                              '>', os.path.join(build_dir, 'codecov_stdout.log')])
             else:
@@ -725,8 +746,9 @@ def main(args=None):
                 cmds.append(['lcov', '--list', cov_file])
                 cmds.append(['genhtml', cov_file, '--output-directory', os.path.join(build_dir, 'lcov-out')])
 
-        cmds.append(make_cmd + ['clean'])
-        cmds.append(make_cmd + ['distclean'])
+        if target not in ['pdf_docs', 'coverage'] and not options.use_bsi_policy:
+            cmds.append(make_cmd + ['clean'])
+            cmds.append(make_cmd + ['distclean'])
 
     for cmd in cmds:
         if options.dry_run:
