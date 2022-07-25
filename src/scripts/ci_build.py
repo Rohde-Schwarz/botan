@@ -564,7 +564,7 @@ def main(args=None):
 
         make_cmd += ['-k']
 
-        if target == 'docs':
+        if target in ['docs', 'pdf_docs']:
             cmds.append(make_cmd + ['docs'])
         else:
             if options.compiler_cache is not None:
