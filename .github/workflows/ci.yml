@@ -30,8 +30,8 @@ jobs:
 
       matrix:
         include:
-          - target: pdf_docs
-            jobname: Documentation
+          - jobname: Documentation
+            target: pdf_docs
             artifacts: |
               build/docs/handbook/botan.pdf
               build/docs/doxygen/

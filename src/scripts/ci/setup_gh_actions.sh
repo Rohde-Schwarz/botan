@@ -68,7 +68,7 @@ if type -p "apt-get"; then
         sudo apt-get -qq install doxygen python-docutils python3-sphinx
 
         if [ "$TARGET" = "pdf_docs" ]; then
-            sudo apt-get -qq install latexmk texlive-latex-recommended
+            sudo apt-get -qq install latexmk texlive-latex-extra
         fi
     fi
 else
