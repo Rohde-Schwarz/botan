@@ -29,12 +29,13 @@ jobs:
       fail-fast: false
 
       matrix:
-        - target: pdf_docs
-          jobname: Documentation
-          artifacts: |
-            build/docs/handbook/botan.pdf
-            build/docs/doxygen/
-          host_os: ubuntu-latest
+        include:
+          - target: pdf_docs
+            jobname: Documentation
+            artifacts: |
+              build/docs/handbook/botan.pdf
+              build/docs/doxygen/
+            host_os: ubuntu-latest
 
     runs-on: ${{ matrix.host_os }}
     steps:
