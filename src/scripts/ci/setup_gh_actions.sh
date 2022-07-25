@@ -64,7 +64,7 @@ if type -p "apt-get"; then
         softhsm2-util --init-token --free --label test --pin 123456 --so-pin 12345678
         echo "PKCS11_LIB=/usr/lib/softhsm/libsofthsm2.so" >> "$GITHUB_ENV"
 
-    elif [ "$TARGET" = "docs" ]; then
+    elif [ "$TARGET" = "docs" ] || [ "$TARGET" = "pdf_docs" ]; then
         sudo apt-get -qq install doxygen python-docutils python3-sphinx
     fi
 else
