@@ -42,6 +42,7 @@ def known_targets():
         'cross-ppc64',
         'cross-win64',
         'docs',
+        'pdf_docs',
         'emscripten',
         'fuzzers',
         'lint',
@@ -136,8 +137,12 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin,
         # tls is optional for bsi/nist but add it so verify tests work with these minimized configs
         flags += ['--module-policy=%s' % (target), '--enable-modules=tls']
 
-    if target == 'docs':
-        flags += ['--with-doxygen', '--with-sphinx', '--with-rst2man']
+    if target in ['docs', 'pdf_docs']:
+        flags += ['--with-doxygen', '--with-sphinx']
+        if target == 'docs':
+            flags += ['--with-rst2man']
+        elif target == 'pdf_docs':
+            flags += ['--with-pdf']
         test_cmd = None
 
     if target == 'cross-win64':
