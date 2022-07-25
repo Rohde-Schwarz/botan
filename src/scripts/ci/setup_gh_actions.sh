@@ -66,6 +66,10 @@ if type -p "apt-get"; then
 
     elif [ "$TARGET" = "docs" ] || [ "$TARGET" = "pdf_docs" ]; then
         sudo apt-get -qq install doxygen python-docutils python3-sphinx
+
+        if [ "$TARGET" = "pdf_docs" ]; then
+            sudo apt-get -qq install latexmk
+        fi
     fi
 else
     export HOMEBREW_NO_AUTO_UPDATE=1
