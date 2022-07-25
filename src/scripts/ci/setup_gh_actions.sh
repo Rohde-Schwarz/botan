@@ -13,6 +13,22 @@ set -ex
 
 TARGET=$1
 
+setup_softhsm_and_tpm_linux() {
+    sudo apt-get -qq install softhsm2 libtspi-dev
+
+    sudo chgrp -R "$(id -g)" /var/lib/softhsm/ /etc/softhsm
+    sudo chmod g+w /var/lib/softhsm/tokens
+
+    softhsm2-util --init-token --free --label test --pin 123456 --so-pin 12345678
+    echo "PKCS11_LIB=/usr/lib/softhsm/libsofthsm2.so" >> "$GITHUB_ENV"
+}
+
+setup_softhsm_macos() {
+    brew install softhsm
+    softhsm2-util --init-token --free --label test --pin 123456 --so-pin 12345678
+    echo "PKCS11_LIB=/usr/local/lib/softhsm/libsofthsm2.so" >> "$GITHUB_ENV"
+}
+
 if type -p "apt-get"; then
     sudo apt-get -qq update
     sudo apt-get -qq install ccache
@@ -22,6 +38,7 @@ if type -p "apt-get"; then
 
     elif [ "$TARGET" = "static" ] || [ "$TARGET" = "amalgamation" ] || [ "$TARGET" = "shared" ]; then
         sudo apt-get -qq install libboost-all-dev
+        setup_softhsm_and_tpm_linux
 
     elif [ "$TARGET" = "clang" ]; then
         sudo apt-get -qq install clang
@@ -52,20 +69,20 @@ if type -p "apt-get"; then
         sudo apt-get -qq install pylint
 
     elif [ "$TARGET" = "coverage" ]; then
-        sudo apt-get -qq install g++-8 softhsm2 libtspi-dev lcov python-coverage libboost-all-dev gdb
+        sudo apt-get -qq install g++-8 lcov python-coverage libboost-all-dev gdb
         pip install --user codecov
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
         git clone --depth 1 --branch jack/runner-20210401 https://github.com/randombit/boringssl.git
 
-        sudo chgrp -R "$(id -g)" /var/lib/softhsm/ /etc/softhsm
-        sudo chmod g+w /var/lib/softhsm/tokens
+        setup_softhsm_and_tpm_linux
 
-        softhsm2-util --init-token --free --label test --pin 123456 --so-pin 12345678
-        echo "PKCS11_LIB=/usr/lib/softhsm/libsofthsm2.so" >> "$GITHUB_ENV"
-
-    elif [ "$TARGET" = "docs" ]; then
+    elif [ "$TARGET" = "docs" ] || [ "$TARGET" = "pdf_docs" ]; then
         sudo apt-get -qq install doxygen python-docutils python3-sphinx
+
+        if [ "$TARGET" = "pdf_docs" ]; then
+            sudo apt-get -qq install latexmk texlive-latex-extra
+        fi
     fi
 else
     export HOMEBREW_NO_AUTO_UPDATE=1
@@ -76,6 +93,7 @@ else
 
     elif [ "$TARGET" = "static" ] || [ "$TARGET" = "amalgamation" ] || [ "$TARGET" = "shared" ]; then
         brew install boost
+        setup_softhsm_macos
     fi
 fi
 
