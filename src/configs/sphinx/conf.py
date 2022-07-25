@@ -187,7 +187,7 @@ htmlhelp_basename = 'botandoc'
 # Grouping the document tree into LaTeX files. List of tuples
 # (source start file, target name, title, author, documentclass [howto/manual]).
 
-authors = u'Jack Lloyd \\and Daniel Neus \\and Ren\u00e9 Korthaus \\and Juraj Somorovsky \\and Tobias Niemann'
+authors = u'Jack Lloyd \\and Daniel Neus \\and Ren\u00e9 Fischer \\and Juraj Somorovsky \\and Tobias Niemann \\and Philippe Lieser \\and Ren\u00e9 Meusel'
 latex_documents = [
     ('contents', 'botan.tex', u'Botan Reference Guide', authors, 'manual'),
 ]
