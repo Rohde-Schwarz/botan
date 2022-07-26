@@ -36,6 +36,10 @@ jobs:
               build/docs/handbook/botan.pdf
               build/docs/doxygen/
             host_os: ubuntu-latest
+          - jobname: Coverage
+            target: coverage
+            artifacts: lcov-out/
+            host_os: ubuntu-latest
 
     runs-on: ${{ matrix.host_os }}
     steps:
@@ -48,7 +52,7 @@ jobs:
           cache-key: bsi-${{ matrix.host_os }}-${{ matrix.target }}
 
       - name: Build and Test Botan
-        run: python3 ./src/scripts/ci_build.py ${{ matrix.target }}
+        run: python3 ./src/scripts/ci_build.py --with-bsi-policy ${{ matrix.target }}
 
       - name: Archive Artifacts
         uses: actions/upload-artifact@v3

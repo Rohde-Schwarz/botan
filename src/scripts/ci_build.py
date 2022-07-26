@@ -302,10 +302,8 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin,
         if target_os == 'linux':
             flags += ['--with-lzma']
 
-        if target in ['coverage']:
-            flags += ['--with-tpm']
-
         if target in ['coverage'] or bsi_policy:
+            flags += ['--with-tpm']
             test_cmd += ['--run-online-tests']
             if pkcs11_lib and os.access(pkcs11_lib, os.R_OK):
                 test_cmd += ['--pkcs11-lib=%s' % (pkcs11_lib)]
@@ -580,10 +578,10 @@ def main(args=None):
 
             make_targets = ['libs', 'tests', 'cli']
 
-            if target in ['coverage', 'fuzzers']:
+            if target in ['coverage', 'fuzzers'] and not options.use_bsi_policy:
                 make_targets += ['fuzzer_corpus_zip', 'fuzzers']
 
-            if target in ['coverage']:
+            if target in ['coverage'] and not options.use_bsi_policy:
                 make_targets += ['bogo_shim']
 
             cmds.append(make_prefix + make_cmd + make_targets)
@@ -594,7 +592,7 @@ def main(args=None):
         if run_test_command is not None:
             cmds.append(run_test_command)
 
-        if target == 'coverage':
+        if target == 'coverage' and not options.use_bsi_policy:
             runner_dir = os.path.abspath(os.path.join(root_dir, 'boringssl', 'ssl', 'test', 'runner'))
 
             cmds.append(['indir:%s' % (runner_dir),
@@ -603,7 +601,7 @@ def main(args=None):
                          '-shim-path', os.path.abspath(os.path.join(root_dir, 'botan_bogo_shim')),
                          '-shim-config', os.path.abspath(os.path.join(root_dir, 'src', 'bogo_shim', 'config.json'))])
 
-        if target in ['coverage', 'fuzzers']:
+        if target in ['coverage', 'fuzzers'] and not options.use_bsi_policy:
             cmds.append([py_interp, os.path.join(root_dir, 'src/scripts/test_fuzzers.py'),
                          os.path.join(root_dir, 'fuzzer_corpus'),
                          os.path.join(root_dir, 'build/fuzzer')])
@@ -662,14 +660,15 @@ def main(args=None):
                              '--rcfile', os.path.join(root_dir, 'src/configs/coverage.rc'),
                              python_tests])
 
-            if have_prog('codecov'):
+            if have_prog('codecov') and not options.use_bsi_policy:
                 # If codecov exists assume we are in CI and report to codecov.io
+                # Except when running the BSI-specific CI builds.
                 cmds.append(['codecov', '>', 'codecov_stdout.log'])
             else:
                 # Otherwise generate a local HTML report
                 cmds.append(['genhtml', cov_file, '--output-directory', 'lcov-out'])
 
-        if target not in ['pdf_docs']:
+        if target not in ['pdf_docs', 'coverage'] and not options.use_bsi_policy:
             cmds.append(make_cmd + ['clean'])
             cmds.append(make_cmd + ['distclean'])
 
