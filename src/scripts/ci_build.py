@@ -308,7 +308,7 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin,
             if pkcs11_lib and os.access(pkcs11_lib, os.R_OK):
                 test_cmd += ['--pkcs11-lib=%s' % (pkcs11_lib)]
 
-    if target in ['coverage', 'sanitizer']:
+    if target in ['coverage', 'sanitizer'] or bsi_policy:
         test_cmd += ['--run-long-tests']
 
     flags += ['--cc-bin=%s' % (cc_bin)]
@@ -621,7 +621,9 @@ def main(args=None):
 
         python_tests = os.path.join(root_dir, 'src/scripts/test_python.py')
 
-        if target in ['shared', 'coverage']:
+        # The BSI build policy restricts the available FFI APIs and the test_python.py script
+        # cannot deal with that and fail. That should be fixed at a later point.
+        if target in ['shared', 'coverage'] and not options.use_bsi_policy:
 
             if options.os == 'windows':
                 if options.cpu == 'x86':
