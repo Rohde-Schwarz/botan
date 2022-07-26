@@ -26,6 +26,7 @@ setup_softhsm_and_tpm_linux() {
 setup_softhsm_macos() {
     brew install softhsm
     softhsm2-util --init-token --free --label test --pin 123456 --so-pin 12345678
+    echo "PKCS11_LIB=/usr/local/lib/softhsm/libsofthsm2.dylib" >> "$GITHUB_ENV"
 }
 
 if type -p "apt-get"; then
