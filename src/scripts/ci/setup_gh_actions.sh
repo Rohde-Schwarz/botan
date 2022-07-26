@@ -23,6 +23,11 @@ setup_softhsm_and_tpm_linux() {
     echo "PKCS11_LIB=/usr/lib/softhsm/libsofthsm2.so" >> "$GITHUB_ENV"
 }
 
+setup_softhsm_macos() {
+    brew install softhsm
+    softhsm2-util --init-token --free --label test --pin 123456 --so-pin 12345678
+}
+
 if type -p "apt-get"; then
     sudo apt-get -qq update
     sudo apt-get -qq install ccache
@@ -87,6 +92,7 @@ else
 
     elif [ "$TARGET" = "static" ] || [ "$TARGET" = "amalgamation" ] || [ "$TARGET" = "shared" ]; then
         brew install boost
+        setup_softhsm_macos
     fi
 fi
 
