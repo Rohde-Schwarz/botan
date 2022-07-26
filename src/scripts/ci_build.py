@@ -75,7 +75,7 @@ def build_targets(target, target_os):
 
 def determine_flags(target, target_os, target_cpu, target_cc, cc_bin,
                     ccache, root_dir, pkcs11_lib, use_gdb, disable_werror, extra_cxxflags,
-                    disabled_tests):
+                    disabled_tests, bsi_policy):
     # pylint: disable=too-many-branches,too-many-statements,too-many-arguments,too-many-locals
 
     """
@@ -117,6 +117,9 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin,
 
     if ccache is not None:
         flags += ['--no-store-vc-rev', '--compiler-cache=%s' % (ccache)]
+
+    if bsi_policy:
+        flags += ['--module-policy=bsi', '--enable-modules=tls,tls_cbc,pkcs11,xts']
 
     if not disable_werror:
         flags += ['--werror-mode']
@@ -426,6 +429,9 @@ def parse_args(args):
     parser.add_option('--without-pylint3', dest='use_pylint3', action='store_false',
                       help='Disable using python3 pylint')
 
+    parser.add_option('--with-bsi-policy', dest='use_bsi_policy', action='store_true', default=False,
+                      help='Enable BSI build policy')
+
     parser.add_option('--disable-werror', action='store_true', default=False,
                       help='Allow warnings to compile')
 
@@ -549,7 +555,7 @@ def main(args=None):
             target, options.os, options.cpu, options.cc,
             options.cc_bin, options.compiler_cache, root_dir,
             options.pkcs11_lib, options.use_gdb, options.disable_werror,
-            options.extra_cxxflags, options.disabled_tests)
+            options.extra_cxxflags, options.disabled_tests, options.use_bsi_policy)
 
         cmds.append([py_interp, os.path.join(root_dir, 'configure.py')] + config_flags)
 
