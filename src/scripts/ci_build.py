@@ -305,9 +305,10 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin,
         if target in ['coverage'] or bsi_policy:
             if target_os == 'linux':
                 flags += ['--with-tpm']
-            test_cmd += ['--run-online-tests']
-            if pkcs11_lib and os.access(pkcs11_lib, os.R_OK):
-                test_cmd += ['--pkcs11-lib=%s' % (pkcs11_lib)]
+            if test_cmd:
+                test_cmd += ['--run-online-tests']
+                if pkcs11_lib and os.access(pkcs11_lib, os.R_OK):
+                    test_cmd += ['--pkcs11-lib=%s' % (pkcs11_lib)]
 
     if target in ['coverage', 'sanitizer'] or bsi_policy:
         test_cmd += ['--run-long-tests']
