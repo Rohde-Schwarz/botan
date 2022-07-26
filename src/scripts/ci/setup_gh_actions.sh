@@ -13,6 +13,16 @@ set -ex
 
 TARGET=$1
 
+setup_softhsm_and_tpm_linux() {
+    sudo apt-get -qq install softhsm2 libtspi-dev
+
+    sudo chgrp -R "$(id -g)" /var/lib/softhsm/ /etc/softhsm
+    sudo chmod g+w /var/lib/softhsm/tokens
+
+    softhsm2-util --init-token --free --label test --pin 123456 --so-pin 12345678
+    echo "PKCS11_LIB=/usr/lib/softhsm/libsofthsm2.so" >> "$GITHUB_ENV"
+}
+
 if type -p "apt-get"; then
     sudo apt-get -qq update
     sudo apt-get -qq install ccache
@@ -22,6 +32,7 @@ if type -p "apt-get"; then
 
     elif [ "$TARGET" = "static" ] || [ "$TARGET" = "amalgamation" ] || [ "$TARGET" = "shared" ]; then
         sudo apt-get -qq install libboost-all-dev
+        setup_softhsm_and_tpm_linux
 
     elif [ "$TARGET" = "clang" ]; then
         sudo apt-get -qq install clang
@@ -58,14 +69,7 @@ if type -p "apt-get"; then
 
         git clone --depth 1 --branch jack/runner-20210401 https://github.com/randombit/boringssl.git
 
-    elif [ "$TARGET" = "static" ] || [ "$TARGET" = "shared" ] || [ "$TARGET" = "coverage" ]; then
-        sudo apt-get -qq install g++-8 softhsm2 libtspi-dev
-
-        sudo chgrp -R "$(id -g)" /var/lib/softhsm/ /etc/softhsm
-        sudo chmod g+w /var/lib/softhsm/tokens
-
-        softhsm2-util --init-token --free --label test --pin 123456 --so-pin 12345678
-        echo "PKCS11_LIB=/usr/lib/softhsm/libsofthsm2.so" >> "$GITHUB_ENV"
+        setup_softhsm_and_tpm_linux
 
     elif [ "$TARGET" = "docs" ] || [ "$TARGET" = "pdf_docs" ]; then
         sudo apt-get -qq install doxygen python-docutils python3-sphinx
