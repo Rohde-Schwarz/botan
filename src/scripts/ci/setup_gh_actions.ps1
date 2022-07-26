@@ -17,3 +17,7 @@ echo "COMPILER_CACHE_LOCATION=$cache_location" >> $env:GITHUB_ENV
 # define a build requirements directory (to be populated in setup_gh_actions_after_vcvars.ps1)
 $depsdir = Join-Path -Path (Get-Location) -ChildPath dependencies
 echo "DEPENDENCIES_LOCATION=$depsdir" >> $env:GITHUB_ENV
+
+# set up SoftHSM token
+C:\SoftHSM2\bin\softhsm2-util.exe --init-token --free --label test --pin 123456 --so-pin 12345678
+echo "PKCS11_LIB=C:/SoftHSM2/lib/softhsm2-x64.dll" >> "$GITHUB_ENV"
