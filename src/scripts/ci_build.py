@@ -606,7 +606,9 @@ def main(args=None):
                          os.path.join(root_dir, 'fuzzer_corpus'),
                          os.path.join(root_dir, 'build/fuzzer')])
 
-        if target in ['shared', 'coverage'] and options.os != 'windows':
+        # The BSI build policy restricts the available CLI commands and the test_cli.py scripts
+        # cannot deal with that and fail. That should be fixed at a later point.
+        if target in ['shared', 'coverage'] and options.os != 'windows' and not options.use_bsi_policy:
             botan_exe = os.path.join(root_dir, 'botan-cli.exe' if options.os == 'windows' else 'botan')
 
             args = ['--threads=%d' % (options.build_jobs)]
