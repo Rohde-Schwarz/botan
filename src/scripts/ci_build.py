@@ -303,7 +303,8 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin,
             flags += ['--with-lzma']
 
         if target in ['coverage'] or bsi_policy:
-            flags += ['--with-tpm']
+            if target_os == 'linux':
+                flags += ['--with-tpm']
             test_cmd += ['--run-online-tests']
             if pkcs11_lib and os.access(pkcs11_lib, os.R_OK):
                 test_cmd += ['--pkcs11-lib=%s' % (pkcs11_lib)]
@@ -655,7 +656,10 @@ def main(args=None):
             cmds.append(['lcov', '--remove', raw_cov_file, '/usr/*', '--output-file', cov_file])
             cmds.append(['lcov', '--list', cov_file])
 
-            if have_prog('coverage'):
+            # The BSI build policy restricts the available FFI APIs and the
+            # test_python.py script cannot deal with that and fail. That should
+            # be fixed at a later point.
+            if have_prog('coverage') and not options.use_bsi_policy:
                 cmds.append(['coverage', 'run', '--branch',
                              '--rcfile', os.path.join(root_dir, 'src/configs/coverage.rc'),
                              python_tests])
