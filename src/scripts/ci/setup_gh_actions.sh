@@ -52,11 +52,14 @@ if type -p "apt-get"; then
         sudo apt-get -qq install pylint
 
     elif [ "$TARGET" = "coverage" ]; then
-        sudo apt-get -qq install g++-8 softhsm2 libtspi-dev lcov python-coverage libboost-all-dev gdb
+        sudo apt-get -qq install g++-8 lcov python-coverage libboost-all-dev gdb
         pip install --user codecov
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
         git clone --depth 1 --branch jack/runner-20210401 https://github.com/randombit/boringssl.git
+
+    elif [ "$TARGET" = "static" ] || [ "$TARGET" = "shared" ] || [ "$TARGET" = "coverage" ]; then
+        sudo apt-get -qq install g++-8 softhsm2 libtspi-dev
 
         sudo chgrp -R "$(id -g)" /var/lib/softhsm/ /etc/softhsm
         sudo chmod g+w /var/lib/softhsm/tokens
