@@ -310,7 +310,7 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin,
                 if pkcs11_lib and os.access(pkcs11_lib, os.R_OK):
                     test_cmd += ['--pkcs11-lib=%s' % (pkcs11_lib)]
 
-    if target in ['coverage', 'sanitizer'] or bsi_policy:
+    if test_cmd and (target in ['coverage', 'sanitizer'] or bsi_policy):
         test_cmd += ['--run-long-tests']
 
     flags += ['--cc-bin=%s' % (cc_bin)]
