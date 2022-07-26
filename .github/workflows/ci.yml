@@ -70,7 +70,6 @@ jobs:
           { host_os: windows-2019,  compiler: msvc,  make_tool: jom },
           { host_os: ubuntu-latest, compiler: gcc,   make_tool: make },
           { host_os: ubuntu-latest, compiler: clang, make_tool: make },
-          { host_os: macos-latest,  compiler: gcc,   make_tool: make },
           { host_os: macos-latest,  compiler: clang, make_tool: make }
         ]
 
