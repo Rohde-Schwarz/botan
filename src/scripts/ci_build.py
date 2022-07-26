@@ -657,8 +657,9 @@ def main(args=None):
                 # Otherwise generate a local HTML report
                 cmds.append(['genhtml', cov_file, '--output-directory', 'lcov-out'])
 
-        cmds.append(make_cmd + ['clean'])
-        cmds.append(make_cmd + ['distclean'])
+        if target not in ['pdf_docs']:
+            cmds.append(make_cmd + ['clean'])
+            cmds.append(make_cmd + ['distclean'])
 
     for cmd in cmds:
         if options.dry_run:
