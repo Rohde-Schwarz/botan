@@ -46,8 +46,9 @@ ecgdsa
 ecies
 eckcdsa
 ecdh
-kyber
-kyber_90s
+# Disable Kyber for 3.0.0-alpha1 as it wasn't stable, yet.
+# kyber
+# kyber_90s
 xmss
 
 # rng
