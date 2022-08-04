@@ -416,6 +416,7 @@ std::string Test::format_time(uint64_t ns)
    return o.str();
    }
 
+// TODO: this should move to `StdoutReporter`
 std::string Test::Result::result_string() const
    {
    const bool verbose = Test::options().verbose();
