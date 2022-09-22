@@ -126,6 +126,34 @@ class Test_Options
       bool m_abort_on_first_fail;
    };
 
+namespace detail {
+
+template <typename, typename = void>
+constexpr bool has_Botan_to_string = false;
+template <typename T>
+constexpr bool has_Botan_to_string<
+    T,
+    std::void_t<decltype(Botan::to_string(std::declval<T>()))>
+> = true;
+
+template <typename, typename = void>
+constexpr bool has_std_to_string = false;
+template <typename T>
+constexpr bool has_std_to_string<
+    T,
+    std::void_t<decltype(std::to_string(std::declval<T>()))>
+> = true;
+
+template <typename, typename = void>
+constexpr bool has_ostream_operator = false;
+template <typename T>
+constexpr bool has_ostream_operator<
+    T,
+    std::void_t<decltype(operator<<(std::declval<std::ostringstream>(), std::declval<T>()))>
+> = true;
+
+}  // namespace detail
+
 /*
 * A generic test which returns a set of results when run.
 * The tests may not all have the same type (for example test
@@ -258,7 +286,7 @@ class Test
                   }
                else
                   {
-                  out << " produced unexpected result '" << produced << "' expected '" << expected << "'";
+                  out << " produced unexpected result '" << to_string(produced) << "' expected '" << to_string(expected) << "'";
                   return test_failure(out.str());
                   }
                }
@@ -427,6 +455,24 @@ class Test
 
             void start_timer();
             void end_timer();
+
+         private:
+            template <typename T>
+            std::string to_string(const T& v)
+               {
+               if constexpr(detail::has_Botan_to_string<T>)
+                   return Botan::to_string(v);
+               else if constexpr(detail::has_ostream_operator<T>)
+                   {
+                   std::ostringstream oss;
+                   oss << v;
+                   return oss.str();
+                   }
+               else if constexpr(detail::has_std_to_string<T>)
+                   return std::to_string(v);
+               else
+                   return "<?>";
+               }
 
          private:
             std::string m_who;
