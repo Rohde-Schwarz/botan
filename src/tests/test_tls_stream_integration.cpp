@@ -46,6 +46,14 @@ class Timeout_Exception : public std::runtime_error
       using std::runtime_error::runtime_error;
    };
 
+// TODO: Remove this adapter class and go back to a bare `TLS::Policy` once the
+//       TLS 1.3 server implementation is ready for prime time.
+class ASIO_TLS_Policy : public Botan::TLS::Policy
+   {
+   public:
+      bool allow_tls13() const override { return false; }
+   };
+
 class Side
    {
    public:
@@ -86,7 +94,7 @@ class Side
       Botan::AutoSeeded_RNG m_rng;
       Basic_Credentials_Manager m_credentials_manager;
       Botan::TLS::Session_Manager_Noop m_session_mgr;
-      Botan::TLS::Policy m_policy;
+      ASIO_TLS_Policy m_policy;
       Botan::TLS::Context m_ctx;
       std::unique_ptr<ssl_stream> m_stream;
 
