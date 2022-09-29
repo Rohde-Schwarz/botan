@@ -872,7 +872,9 @@ def cli_tls_socket_tests(tmp_dir):
 
     test_cli("sign_cert", "%s %s %s --output=%s" % (ca_cert, priv_key, crt_req, server_cert))
 
-    tls_server = subprocess.Popen([CLI_PATH, 'tls_server', '--max-clients=1',
+    # TODO: remove the --policy parameter once TLS 1.3 server supports version downgrade
+    default_policy = "src/tests/data/tls-policy/default.txt"
+    tls_server = subprocess.Popen([CLI_PATH, 'tls_server', '--max-clients=1', '--policy=%s' % (default_policy),
                                    '--port=%d' % (server_port), server_cert, priv_key],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
