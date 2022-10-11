@@ -154,6 +154,15 @@ constexpr bool has_ostream_operator<
 
 }  // namespace detail
 
+/**
+ * A code location consisting of the source file path and a line
+ */
+struct CodeLocation
+   {
+   std::string path;
+   unsigned int line;
+   };
+
 /*
 * A generic test which returns a set of results when run.
 * The tests may not all have the same type (for example test
@@ -468,6 +477,9 @@ class Test
             void start_timer();
             void end_timer();
 
+            void set_code_location(CodeLocation where) { m_where = std::move(where); }
+            const std::optional<CodeLocation>& code_location() const { return m_where; }
+
          private:
             template <typename T>
             std::string to_string(const T& v)
@@ -499,6 +511,9 @@ class Test
       virtual std::vector<Test::Result> run() = 0;
 
       virtual std::vector<std::string> possible_providers(const std::string&);
+
+      void set_registration_location(CodeLocation location) { m_registration_location = std::move(location); }
+      const std::optional<CodeLocation>& registration_location() const { return m_registration_location; }
 
       static void register_test(const std::string& category,
                                 const std::string& name,
@@ -570,6 +585,8 @@ class Test
    private:
       static Test_Options m_opts;
       static std::unique_ptr<Botan::RandomNumberGenerator> m_test_rng;
+
+      std::optional<CodeLocation> m_registration_location;  /// The source file location where the test was registered
    };
 
 /*
@@ -579,15 +596,20 @@ template<typename Test_Class>
 class TestClassRegistration
    {
    public:
-      TestClassRegistration(const std::string& category, const std::string& name)
+      TestClassRegistration(std::string category, std::string name, CodeLocation registration_location)
          {
-         auto test_maker = []() -> std::unique_ptr<Test> { return std::make_unique<Test_Class>(); };
+         auto test_maker = [=]() -> std::unique_ptr<Test>
+            {
+            auto test = std::make_unique<Test_Class>();
+            test->set_registration_location(std::move(registration_location));
+            return test;
+            };
          Test::register_test(category, name, test_maker);
          }
    };
 
 #define BOTAN_REGISTER_TEST(category, name, Test_Class)                 \
-   const TestClassRegistration<Test_Class> reg_ ## Test_Class ## _tests(category, name)
+   const TestClassRegistration<Test_Class> reg_ ## Test_Class ## _tests(category, name, {__FILE__, __LINE__})
 
 typedef Test::Result (*test_fn)();
 
@@ -608,15 +630,20 @@ class FnTest : public Test
 class TestFnRegistration
    {
    public:
-      TestFnRegistration(const std::string& category, const std::string& name, test_fn fn)
+      TestFnRegistration(const std::string& category, const std::string& name, test_fn fn, CodeLocation registration_location)
          {
-         auto test_maker = [=]() -> std::unique_ptr<Test> { return std::make_unique<FnTest>(fn); };
+         auto test_maker = [=]() -> std::unique_ptr<Test>
+            {
+            auto test = std::make_unique<FnTest>(fn);
+            test->set_registration_location(std::move(registration_location));
+            return test;
+            };
          Test::register_test(category, name, test_maker);
          }
    };
 
 #define BOTAN_REGISTER_TEST_FN(category, name, fn_name) \
-   const TestFnRegistration reg_ ## fn_name(category, name, fn_name)
+   const TestFnRegistration reg_ ## fn_name(category, name, fn_name, {__FILE__, __LINE__})
 
 class VarMap
    {

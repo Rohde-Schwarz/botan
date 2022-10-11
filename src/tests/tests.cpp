@@ -36,6 +36,10 @@ void Test::Result::merge(const Result& other)
       {
       throw Test_Error("Merging tests from different sources");
       }
+   else
+      {
+      m_where = other.m_where;
+      }
 
    m_ns_taken += other.m_ns_taken;
    m_tests_passed += other.m_tests_passed;
@@ -458,7 +462,12 @@ std::string Test::Result::result_string() const
 
    for(size_t i = 0; i != m_fail_log.size(); ++i)
       {
-      report << "Failure " << (i + 1) << ": " << m_fail_log[i] << "\n";
+      report << "Failure " << (i + 1) << ": " << m_fail_log[i];
+      if(m_where)
+         {
+         report << " (at " << m_where->path << ":" << m_where->line << ")";
+         }
+       report << "\n";
       }
 
    if(!m_fail_log.empty() || tests_run() == 0 || verbose)
