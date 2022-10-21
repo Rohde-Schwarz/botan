@@ -234,6 +234,18 @@ class BOTAN_UNSTABLE_API Client_Hello_13 final : public Client_Hello
                  Callbacks& cb,
                  RandomNumberGenerator& rng);
 
+      /**
+       * Select an available certificate chain that is compatible with the
+       * signature algorithm and hostname requirements advertised by the
+       * client.
+       *
+       * This method throws an exception if @p cerds cannot produce a usable
+       * server certificate chain.
+       *
+       * @returns a server certificate chain
+       */
+      std::vector<X509_Certificate> find_certificate_chain(Credentials_Manager& creds) const;
+
    private:
       Client_Hello_13(std::unique_ptr<Client_Hello_Internal> data);
 
@@ -394,6 +406,8 @@ class BOTAN_UNSTABLE_API Server_Hello_13 : public Server_Hello
       static std::variant<Hello_Retry_Request, Server_Hello_13, Server_Hello_12>
       parse(const std::vector<uint8_t>& buf);
 
+      Server_Hello_13(const Client_Hello_13& ch, std::optional<Named_Group> key_exchange_group, RandomNumberGenerator& rng, Callbacks& cb, const Policy& policy);
+
       /**
        * Return desired downgrade version indicated by hello random, if any.
        */
@@ -422,12 +436,13 @@ class BOTAN_UNSTABLE_API Encrypted_Extensions final : public Handshake_Message
    {
    public:
       explicit Encrypted_Extensions(const std::vector<uint8_t>& buf);
+      Encrypted_Extensions(const Client_Hello_13& client_hello, const Policy& policy, Callbacks& cb);
 
       Handshake_Type type() const override { return Handshake_Type::ENCRYPTED_EXTENSIONS; }
 
       const Extensions& extensions() const { return m_extensions; }
 
-      std::vector<uint8_t> serialize() const override { return {}; }
+      std::vector<uint8_t> serialize() const override;
 
    private:
       Extensions m_extensions;

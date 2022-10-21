@@ -1321,7 +1321,67 @@ class Test_TLS_RFC8448_Server : public Test_TLS_RFC8448
    private:
       std::string side() const override { return "Server"; }
 
-      std::vector<Test::Result> simple_1_rtt(const VarMap& /*vars*/) override { return {}; }
+      std::vector<Test::Result> simple_1_rtt(const VarMap& vars) override
+         {
+         auto rng = std::make_unique<Botan_Tests::Fixed_Output_RNG>("");
+
+         // 32 - for server hello random
+         // 32 - for KeyShare (eph. x25519 key pair)  --  I guess?
+         add_entropy(*rng, vars.get_req_bin("Server_RNG_Pool"));
+
+         std::unique_ptr<Server_Context> ctx;
+
+         return {
+            Botan_Tests::CHECK("Send Client Hello", [&](Test::Result& result)
+               {
+               ctx = std::make_unique<Server_Context>(std::move(rng), read_tls_policy("rfc8448_1rtt"), vars.get_req_u64("CurrentTimestamp"), sort_server_extensions, make_mock_signatures(vars));
+               result.confirm("server not closed", !ctx->server.is_closed());
+
+               ctx->server.received_data(vars.get_req_bin("Record_ClientHello_1"));
+
+               ctx->check_callback_invocations(result, "client hello received", {
+                  "tls_emit_data",
+                  "tls_examine_extensions",
+                  "tls_modify_extensions",
+                  "tls_sign_message",
+                  "tls_inspect_handshake_msg_client_hello",
+                  "tls_inspect_handshake_msg_server_hello",
+                  "tls_inspect_handshake_msg_encrypted_extensions",
+                  "tls_inspect_handshake_msg_certificate",
+                  "tls_inspect_handshake_msg_certificate_verify",
+                  "tls_inspect_handshake_msg_finished"
+                  });
+               }),
+
+            Botan_Tests::CHECK("Verify generated messages in server's first flight", [&](Test::Result& result)
+               {
+               const auto& msgs = ctx->observed_handshake_messages();
+
+               result.test_eq("Server Hello", msgs.at("server_hello")[0], strip_message_header(vars.get_opt_bin("Message_ServerHello")));
+               result.test_eq("Encrypted Extensions", msgs.at("encrypted_extensions")[0], strip_message_header(vars.get_opt_bin("Message_EncryptedExtensions")));
+               result.test_eq("Certificate", msgs.at("certificate")[0], strip_message_header(vars.get_opt_bin("Message_Server_Certificate")));
+               result.test_eq("CertificateVerify", msgs.at("certificate_verify")[0], strip_message_header(vars.get_opt_bin("Message_Server_CertificateVerify")));
+
+               result.test_eq("Server's entire first flight", ctx->pull_send_buffer(), concat(vars.get_req_bin("Record_ServerHello"),
+                                                                                              vars.get_req_bin("Record_ServerHandshakeMessages")));
+
+               result.confirm("TLS handshake not yet finished", !ctx->server.is_active());
+               }),
+
+            Botan_Tests::CHECK("Send Client Finished", [&](Test::Result& result)
+               {
+               ctx->server.received_data(vars.get_req_bin("Record_ClientFinished"));
+
+               ctx->check_callback_invocations(result, "client finished received", {
+                  "tls_inspect_handshake_msg_finished",
+                  "tls_session_activated"
+                  });
+
+               result.confirm("TLS handshake finished", ctx->server.is_active());
+               })
+            };
+         }
+
       std::vector<Test::Result> resumed_handshake_with_0_rtt(const VarMap& /*vars*/) override { return {}; }
       std::vector<Test::Result> hello_retry_request(const VarMap& /*vars*/) override { return {}; }
       std::vector<Test::Result> client_authentication(const VarMap& /*vars*/) override { return {}; }

@@ -8,6 +8,9 @@
 * Botan is released under the Simplified BSD License (see license.txt)
 */
 
+#include <functional>
+#include <iterator>
+
 #include <botan/tls_extensions.h>
 #include <botan/internal/tls_reader.h>
 #include <botan/tls_exceptn.h>
@@ -192,11 +195,16 @@ class Key_Share_Entry
       std::unique_ptr<Private_Key> m_private_key;
    };
 
+class Key_Share_ClientHello;
+
 class Key_Share_ServerHello
    {
    public:
       Key_Share_ServerHello(TLS_Data_Reader& reader, uint16_t)
          : m_server_share(reader) {}
+      Key_Share_ServerHello(Named_Group group, Callbacks& cb, RandomNumberGenerator& rng)
+         : m_server_share(group, cb, rng) {}
+
       ~Key_Share_ServerHello() = default;
 
       Key_Share_ServerHello(const Key_Share_ServerHello&) = delete;
@@ -219,6 +227,9 @@ class Key_Share_ServerHello
          {
          return m_server_share;
          }
+
+      secure_vector<uint8_t> exchange(const Key_Share_ClientHello& client_shares, const Policy& policy, Callbacks& cb,
+                                      RandomNumberGenerator& rng) const;
 
       void erase()
          {
@@ -297,6 +308,36 @@ class Key_Share_ClientHello
          m_client_shares.emplace_back(to_offer, cb, rng);
          }
 
+      std::optional<Named_Group> select_group(const Policy& policy) const
+         {
+         std::vector<Named_Group> offered_groups;
+         std::transform(m_client_shares.cbegin(), m_client_shares.cend(),
+                        std::back_inserter(offered_groups),
+                        [](const auto& share) { return share.group(); });
+
+         auto selected_group = policy.choose_key_exchange_group(offered_groups);
+         if(selected_group == Named_Group::NONE)
+            return std::nullopt;
+
+         return selected_group;
+         }
+
+      std::optional<std::reference_wrapper<const Key_Share_Entry>>
+            find_matching_keyshare(const Key_Share_Entry& server_share) const
+         {
+         auto match = std::find_if(m_client_shares.cbegin(), m_client_shares.cend(), [&](const auto& offered)
+            {
+            return offered.group() == server_share.group();
+            });
+
+         if(match == m_client_shares.end())
+            {
+            return std::nullopt;
+            }
+
+         return *match;
+         }
+
       std::vector<uint8_t> serialize() const
          {
          std::vector<uint8_t> shares;
@@ -326,10 +367,7 @@ class Key_Share_ClientHello
          const auto& server_selected = server_share.get_singleton_entry();
 
          // find the client offer that matches the server offer
-         auto match = std::find_if(m_client_shares.cbegin(), m_client_shares.cend(), [&server_selected](const auto& offered)
-            {
-            return offered.group() == server_selected.group();
-            });
+         auto match = find_matching_keyshare(server_selected);
 
          // RFC 8446 4.2.8:
          //   [The KeyShareEntry in the ServerHello] MUST be in the same group
@@ -337,13 +375,12 @@ class Key_Share_ClientHello
          //   has selected for the negotiated key exchange.  Servers MUST NOT
          //   send a KeyShareEntry for any group not indicated in the client's
          //   "supported_groups" extension [...]
-         if(!value_exists(policy.key_exchange_groups(), server_selected.group()) ||
-               match == m_client_shares.cend())
+         if(!value_exists(policy.key_exchange_groups(), server_selected.group()) || !match.has_value())
             {
             throw TLS_Exception(Alert::ILLEGAL_PARAMETER, "Server selected an unexpected key exchange group.");
             }
 
-         return match->exchange(server_selected, policy, cb, rng);
+         return match->get().exchange(server_selected, policy, cb, rng);
          }
 
       void erase()
@@ -355,6 +392,20 @@ class Key_Share_ClientHello
    private:
       std::vector<Key_Share_Entry> m_client_shares;
    };
+
+
+secure_vector<uint8_t> Key_Share_ServerHello::exchange(const Key_Share_ClientHello& client_shares, const Policy& policy,
+      Callbacks& cb,
+      RandomNumberGenerator& rng) const
+   {
+   const auto client_share = client_shares.find_matching_keyshare(m_server_share);
+
+   // The server hello was created based on the client hello's key share set.
+   BOTAN_ASSERT_NOMSG(client_share.has_value());
+
+   return m_server_share.exchange(client_share->get(), policy, cb, rng);
+   }
+
 
 class Key_Share_HelloRetryRequest
    {
@@ -442,6 +493,10 @@ Key_Share::Key_Share(TLS_Data_Reader& reader,
 Key_Share::Key_Share(const Policy& policy, Callbacks& cb, RandomNumberGenerator& rng) :
    m_impl(std::make_unique<Key_Share_Impl>(Key_Share_ClientHello(policy, cb, rng))) {}
 
+// ServerHello
+Key_Share::Key_Share(Named_Group group, Callbacks& cb, RandomNumberGenerator& rng) :
+   m_impl(std::make_unique<Key_Share_Impl>(Key_Share_ServerHello(group, cb, rng))) {}
+
 Key_Share::~Key_Share() = default;
 
 std::vector<uint8_t> Key_Share::serialize(Connection_Side /*whoami*/) const
@@ -467,13 +522,29 @@ secure_vector<uint8_t> Key_Share::exchange(const Key_Share& peer_keyshare,
          },
       [&](const Key_Share_ServerHello& sh, const Key_Share_ClientHello& ch)
          {
-         return ch.exchange(sh, policy, cb, rng);
+         return sh.exchange(ch, policy, cb, rng);
          },
       [](const auto&, const auto&) -> secure_vector<uint8_t>
          {
          throw Botan::Invalid_Argument("can only exchange with ServerHello and ClientHello Key_Share");
          }
       }, m_impl->key_share, peer_keyshare.m_impl->key_share);
+   }
+
+std::optional<Named_Group> Key_Share::select_group(const Policy& policy) const
+   {
+   return std::visit(overloaded
+      {
+      [&](const Key_Share_ClientHello& ch)
+         {
+         return ch.select_group(policy);
+         },
+      [](const auto&) -> std::optional<Named_Group>
+         {
+         throw Botan::Invalid_Argument("can only select a group from a ClientHello Key_Share");
+         }
+      }
+   , m_impl->key_share);
    }
 
 void Key_Share::retry_offer(const Key_Share& retry_request_keyshare,

@@ -15,6 +15,11 @@
 #include <botan/internal/tls_server_impl_12.h>
 #include <botan/tls_magic.h>
 
+#include <botan/internal/tls_server_impl_12.h>
+#if defined(BOTAN_HAS_TLS_13)
+  #include <botan/internal/tls_server_impl_13.h>
+#endif
+
 namespace Botan::TLS {
 
 /*
@@ -26,10 +31,36 @@ Server::Server(Callbacks& callbacks,
                const Policy& policy,
                RandomNumberGenerator& rng,
                bool is_datagram,
-               size_t io_buf_sz) :
-   m_impl(std::make_unique<Server_Impl_12>(callbacks, session_manager, creds, policy,
-                                           rng, is_datagram,io_buf_sz))
+               size_t io_buf_sz)
    {
+   const auto max_version = policy.latest_supported_version(is_datagram);
+
+   if(!max_version.is_pre_tls_13())
+      {
+#if defined(BOTAN_HAS_TLS_13)
+      // TODO: Implement server version detection in the TLS 1.3 server code and
+      //       switch to the TLS 1.2 implementation when requested.
+      //       See the client code for inspiration.
+      if(policy.acceptable_protocol_version(Protocol_Version::TLS_V12) ||
+         policy.acceptable_protocol_version(Protocol_Version::DTLS_V12))
+         {
+         throw Not_Implemented("Protocol downgrade from a TLS 1.3 to 1.2 server "
+                               "is currently not implemented. When offering a "
+                               "TLS 1.3 server, one must disable TLS 1.2 in the "
+                               "protocol policy.");
+         }
+
+      m_impl = std::make_unique<Server_Impl_13>(
+         callbacks, session_manager, creds, policy, rng);
+#else
+      throw Not_Implemented("TLS 1.3 server is not available in this build");
+#endif
+      }
+   else
+      {
+      m_impl = std::make_unique<Server_Impl_12>(
+         callbacks, session_manager, creds, policy, rng, is_datagram, io_buf_sz);
+      }
    }
 
 Server::~Server() = default;

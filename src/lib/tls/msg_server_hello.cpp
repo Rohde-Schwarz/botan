@@ -19,6 +19,7 @@
 #include <botan/internal/tls_session_key.h>
 #include <botan/internal/tls_handshake_io.h>
 #include <botan/internal/tls_handshake_hash.h>
+#include <botan/internal/stl_util.h>
 
 #include <array>
 
@@ -635,6 +636,63 @@ Server_Hello_13::Server_Hello_13(std::unique_ptr<Server_Hello_Internal> data, Se
       throw TLS_Exception(Alert::ILLEGAL_PARAMETER,
                           "Hello Retry Request does not request any changes to Client Hello");
       }
+   }
+
+namespace {
+
+uint16_t choose_ciphersuite(const Client_Hello_13& ch, const Policy& policy)
+   {
+   auto pref_list = ch.ciphersuites();
+   // TODO: DTLS might need to make this version dynamic
+   auto other_list = policy.ciphersuite_list(Protocol_Version::TLS_V13);
+
+   if(policy.server_uses_own_ciphersuite_preferences())
+      {
+      std::swap(pref_list, other_list);
+      }
+
+   for(auto suite_id : pref_list)
+      {
+      if(value_exists(other_list, suite_id))
+         { return suite_id; }
+      }
+
+   // RFC 8446 4.1.1
+   //     If the server is unable to negotiate a supported set of parameters
+   //     [...], it MUST abort the handshake with either a "handshake_failure"
+   //     or "insufficient_security" fatal alert [...].
+   throw TLS_Exception(Alert::HANDSHAKE_FAILURE,
+                       "Can't agree on a ciphersuite with client");
+   }
+}
+
+Server_Hello_13::Server_Hello_13(const Client_Hello_13& ch,
+                                 std::optional<Named_Group> key_exchange_group,
+                                 RandomNumberGenerator& rng,
+                                 Callbacks& cb,
+                                 const Policy& policy)
+   : Server_Hello(std::make_unique<Server_Hello_Internal>(
+                     Protocol_Version::TLS_V12,
+                     ch.session_id(),
+                     make_server_hello_random(rng, Protocol_Version::TLS_V13, cb, policy),
+                     choose_ciphersuite(ch, policy),
+                     uint8_t(0) /* compression method */
+                  ))
+   {
+   // RFC 8446 4.2.1
+   //    A server which negotiates TLS 1.3 MUST respond by sending a
+   //    "supported_versions" extension containing the selected version
+   //    value (0x0304). It MUST set the ServerHello.legacy_version field to
+   //     0x0303 (TLS 1.2).
+   //
+   // Note that the legacy version (TLS 1.2) is set in this constructor's
+   // initializer list, accordingly.
+   m_data->extensions.add(new Supported_Versions(Protocol_Version::TLS_V13));
+
+   if(key_exchange_group.has_value())
+      m_data->extensions.add(new Key_Share(key_exchange_group.value(), cb, rng));
+
+   cb.tls_modify_extensions(m_data->extensions, SERVER);
    }
 
 std::optional<Protocol_Version> Server_Hello_13::random_signals_downgrade() const
