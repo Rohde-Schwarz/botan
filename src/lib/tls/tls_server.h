@@ -66,6 +66,7 @@ class BOTAN_PUBLIC_API(2,0) Server final : public Channel
       * tied to the session and a later renegotiation of the same
       * session can choose a new protocol.
       */
+      BOTAN_DEPRECATED("Use application_protocol() instead.")
       std::string next_protocol() const { return application_protocol(); }
 
       /**
