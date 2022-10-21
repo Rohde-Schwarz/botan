@@ -1001,6 +1001,12 @@ class Shim_Policy final : public Botan::TLS::Policy
                return false;
             }
 
+         if(m_args.flag_set("server") && !version.is_pre_tls_13())
+            {
+            // no TLS 1.3 server tests for now
+            return false;
+            }
+
          return version.known_version();
          }
 
