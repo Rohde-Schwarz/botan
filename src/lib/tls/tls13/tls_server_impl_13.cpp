@@ -61,7 +61,22 @@ void Server_Impl_13::process_post_handshake_msg(Post_Handshake_Message_13 /*msg*
 
 void Server_Impl_13::process_dummy_change_cipher_spec()
    {
-   throw Not_Implemented("NYI: process_dummy_change_cipher_spec");
+   // RFC 8446 5.
+   //    If an implementation detects a change_cipher_spec record received before
+   //    the first ClientHello message or after the peer's Finished message, it MUST be
+   //    treated as an unexpected record type [("unexpected_message" alert)].
+   if(!m_handshake_state.has_client_hello() || m_handshake_state.has_client_finished())
+      {
+      throw TLS_Exception(Alert::UNEXPECTED_MESSAGE, "Received an unexpected dummy Change Cipher Spec");
+      }
+
+   // RFC 8446 5.
+   //    An implementation may receive an unencrypted record of type change_cipher_spec [...]
+   //    at any time after the first ClientHello message has been sent or received
+   //    and before the peer's Finished message has been received [...]
+   //    and MUST simply drop it without further processing.
+   //
+   // ... no further processing.
    }
 
 bool Server_Impl_13::handshake_finished() const
@@ -112,6 +127,18 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello)
    callbacks().tls_examine_extensions(exts, CLIENT);
    send_handshake_message(m_handshake_state.sending(Server_Hello_13(client_hello, selected_group, rng(), callbacks(),
                           policy())));
+
+   // RFC 8446 Appendix D.4  (Middlebox Compatibility Mode)
+   //    The server sends a dummy change_cipher_spec record immediately after
+   //    its first handshake message. This may either be after a ServerHello or
+   //    a HelloRetryRequest.
+   //
+   //    [...] if the client sends a non-empty session ID, the server MUST send
+   //    the change_cipher_spec as described in this appendix.
+   if(policy().tls_13_middlebox_compatibility_mode() || !client_hello.session_id().empty())
+      {
+      send_dummy_change_cipher_spec();
+      }
 
    const auto& server_hello = m_handshake_state.server_hello();
    const auto cipher = Ciphersuite::by_id(server_hello.ciphersuite());
