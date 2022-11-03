@@ -23,6 +23,11 @@ Server_Impl_13::Server_Impl_13(Callbacks& callbacks,
    : Channel_Impl_13(callbacks, session_manager, credentials_manager,
                      rng, policy, true /* is_server */)
    {
+#if defined(BOTAN_HAS_TLS_12)
+   if(policy.allow_tls12())
+      { expect_downgrade({}); }
+#endif
+
    m_transitions.set_expected_next(CLIENT_HELLO);
    }
 
@@ -88,10 +93,35 @@ bool Server_Impl_13::handshake_finished() const
    }
 
 
+void Server_Impl_13::downgrade()
+   {
+   BOTAN_ASSERT_NOMSG(expects_downgrade());
+
+   request_downgrade();
+
+   // After this, no further messages are expected here because this instance
+   // will be replaced by a Server_Impl_12.
+   m_transitions.set_expected_next({});
+   }
+
 void Server_Impl_13::handle(const Client_Hello_12& ch)
    {
+   // The detailed handling of the TLS 1.2 compliant Client Hello is left to
+   // the TLS 1.2 server implementation.
    BOTAN_UNUSED(ch);
-   throw Not_Implemented("TLS 1.3 server received a TLS 1.2 client hello");
+
+   // RFC 8446 Appendix D.2
+   //    If the "supported_versions" extension is absent and the server only
+   //    supports versions greater than ClientHello.legacy_version, the server
+   //    MUST abort the handshake with a "protocol_version" alert.
+   //
+   // If we're not expecting a downgrade, we only support TLS 1.3.
+   if(!expects_downgrade())
+      {
+      throw TLS_Exception(Alert::PROTOCOL_VERSION, "Received a legacy Client Hello");
+      }
+
+   downgrade();
    }
 
 void Server_Impl_13::handle(const Client_Hello_13& client_hello)
@@ -102,6 +132,21 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello)
    if(!preferred_version)
       {
       throw TLS_Exception(Alert::PROTOCOL_VERSION, "No shared TLS version");
+      }
+
+   // RFC 8446 4.2.1
+   //    Servers MUST be prepared to receive ClientHellos that include [the
+   //    supported_versions] extension but do not include 0x0304 in the list
+   //    of versions.
+   //
+   // Also, the client's preferred version may not be TLS 1.3 which results in
+   // a regular protocol downgrade despite the compliant TLS 1.3 Client Hello.
+   if(preferred_version->is_pre_tls_13())
+      {
+      downgrade();
+
+      // Simply await being replaced by a TLS 1.2 implementation...
+      return;
       }
 
    // TODO: Implement support for PSK. For now, we ignore any such extensions

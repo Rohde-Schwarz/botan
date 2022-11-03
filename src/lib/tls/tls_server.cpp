@@ -38,20 +38,11 @@ Server::Server(Callbacks& callbacks,
    if(!max_version.is_pre_tls_13())
       {
 #if defined(BOTAN_HAS_TLS_13)
-      // TODO: Implement server version detection in the TLS 1.3 server code and
-      //       switch to the TLS 1.2 implementation when requested.
-      //       See the client code for inspiration.
-      if(policy.acceptable_protocol_version(Protocol_Version::TLS_V12) ||
-         policy.acceptable_protocol_version(Protocol_Version::DTLS_V12))
-         {
-         throw Not_Implemented("Protocol downgrade from a TLS 1.3 to 1.2 server "
-                               "is currently not implemented. When offering a "
-                               "TLS 1.3 server, one must disable TLS 1.2 in the "
-                               "protocol policy.");
-         }
-
       m_impl = std::make_unique<Server_Impl_13>(
          callbacks, session_manager, creds, policy, rng);
+
+      if(m_impl->expects_downgrade())
+         { m_impl->set_io_buffer_size(io_buf_sz); }
 #else
       throw Not_Implemented("TLS 1.3 server is not available in this build");
 #endif
@@ -67,7 +58,18 @@ Server::~Server() = default;
 
 size_t Server::received_data(const uint8_t buf[], size_t buf_size)
    {
-   return m_impl->received_data(buf, buf_size);
+   auto read = m_impl->received_data(buf, buf_size);
+
+   if(m_impl->is_downgrading())
+      {
+      auto info = m_impl->extract_downgrade_info();
+      m_impl = std::make_unique<Server_Impl_12>(*info);
+
+      // replay peer data received so far
+      read = m_impl->received_data(info->peer_transcript.data(), info->peer_transcript.size());
+      }
+
+   return read;
    }
 
 bool Server::is_active() const

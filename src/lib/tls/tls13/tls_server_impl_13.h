@@ -61,6 +61,8 @@ class Server_Impl_13 : public Channel_Impl_13
       bool handshake_finished() const override;
       // TODO: might need 'prepend_ccs' to implement middlebox compatibility
 
+      void downgrade();
+
    private:
       Server_Handshake_State_13 m_handshake_state;
       Handshake_Transitions m_transitions;

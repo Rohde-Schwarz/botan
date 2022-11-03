@@ -51,6 +51,23 @@ make_server_hello_random(RandomNumberGenerator& rng,
    {
    BOTAN_UNUSED(offered_version);
    auto random = make_hello_random(rng, cb, policy);
+
+   // RFC 8446 4.1.3
+   //    TLS 1.3 has a downgrade protection mechanism embedded in the server's
+   //    random value. TLS 1.3 servers which negotiate TLS 1.2 or below in
+   //    response to a ClientHello MUST set the last 8 bytes of their Random
+   //    value specially in their ServerHello.
+   //
+   //    If negotiating TLS 1.2, TLS 1.3 servers MUST set the last 8 bytes of
+   //    their Random value to the bytes: [DOWNGRADE_TLS12]
+   if(offered_version.is_pre_tls_13() && policy.allow_tls13())
+      {
+      constexpr size_t downgrade_signal_length = sizeof(DOWNGRADE_TLS12);
+      BOTAN_ASSERT_NOMSG(random.size() >= downgrade_signal_length);
+      auto lastbytes = random.data() + random.size() - downgrade_signal_length;
+      store_be(DOWNGRADE_TLS12, lastbytes);
+      }
+
    return random;
    }
 
