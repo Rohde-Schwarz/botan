@@ -8,7 +8,9 @@
 
 #include <botan/internal/tls_server_impl_13.h>
 #include <botan/internal/tls_cipher_state.h>
+#include <botan/internal/loadstor.h>
 #include <botan/credentials_manager.h>
+#include <botan/rng.h>
 
 // TODO: remove me
 #include <botan/internal/tls_handshake_io.h>
@@ -42,6 +44,13 @@ std::vector<X509_Certificate> Server_Impl_13::peer_cert_chain() const
    return {}; // TODO: implement!
               //       Should return the client authentication certificate chain
               //       once client authentication for the server side is ready.
+   }
+
+void Server_Impl_13::send_new_session_ticket(std::chrono::seconds,
+                                             const std::vector<uint8_t>&)
+   {
+   BOTAN_STATE_CHECK(handshake_finished());
+   throw Not_Implemented("NYI: send_new_session_ticket");
    }
 
 void Server_Impl_13::process_handshake_msg(Handshake_Message_13 message)
@@ -86,10 +95,7 @@ void Server_Impl_13::process_dummy_change_cipher_spec()
 
 bool Server_Impl_13::handshake_finished() const
    {
-   // TODO: implement!
-   //       Currently, we're just developing the TLS 1.3 server handshake, so
-   //       it cannot be finished by definition. :o)
-   return false;
+   return m_handshake_state.handshake_finished();
    }
 
 
@@ -169,6 +175,10 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello)
    //       might want to have a factory method returning either HRR or SH
    //       depending on the outcome. Potentially, the handshake state will
    //       be the decisive factor?
+   // TODO: Currently this prefers "available client key share groups" over
+   //       the server's group preference. We might want to leave this policy
+   //       decision to the application by providing appropriate callbacks or
+   //       TLS::Policy configuration.
    const auto selected_group = exts.get<Key_Share>()->select_group(policy());
    if(!selected_group.has_value())
       {

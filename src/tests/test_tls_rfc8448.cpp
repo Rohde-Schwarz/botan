@@ -1327,6 +1327,7 @@ class Test_TLS_RFC8448_Server : public Test_TLS_RFC8448
 
          // 32 - for server hello random
          // 32 - for KeyShare (eph. x25519 key pair)  --  I guess?
+         //  4 - for ticket_age_add (in New Session Ticket)
          add_entropy(*rng, vars.get_req_bin("Server_RNG_Pool"));
 
          std::unique_ptr<Server_Context> ctx;
@@ -1378,6 +1379,11 @@ class Test_TLS_RFC8448_Server : public Test_TLS_RFC8448
                   });
 
                result.confirm("TLS handshake finished", ctx->server.is_active());
+               }),
+
+            Botan_Tests::CHECK("Send Session Ticket", [&](Test::Result&)
+               {
+               // ctx->server.send_new_session_ticket(std::chrono::seconds(60));
                })
             };
          }
