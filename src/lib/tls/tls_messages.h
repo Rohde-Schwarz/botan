@@ -246,6 +246,13 @@ class BOTAN_UNSTABLE_API Client_Hello_13 final : public Client_Hello
        */
       std::vector<X509_Certificate> find_certificate_chain(Credentials_Manager& creds) const;
 
+      /**
+       * Select the preferred protocol version from the list of versions
+       * supported by the client. If no such version can be determind this
+       * returns std::nullopt.
+       */
+      std::optional<Protocol_Version> preferred_version(const Policy& policy) const;
+
    private:
       Client_Hello_13(std::unique_ptr<Client_Hello_Internal> data);
 

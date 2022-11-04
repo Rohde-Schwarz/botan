@@ -98,6 +98,12 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello)
    {
    const auto& exts = client_hello.extensions();
 
+   const auto preferred_version = client_hello.preferred_version(policy());
+   if(!preferred_version)
+      {
+      throw TLS_Exception(Alert::PROTOCOL_VERSION, "No shared TLS version");
+      }
+
    // TODO: Implement support for PSK. For now, we ignore any such extensions
    //       and always revert to a standard key exchange.
    if(!exts.has<Supported_Groups>())

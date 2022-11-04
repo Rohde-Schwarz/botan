@@ -885,6 +885,34 @@ std::vector<X509_Certificate> Client_Hello_13::find_certificate_chain(Credential
                        "Application did not a provide a server certificate chain");
    }
 
+
+std::optional<Protocol_Version> Client_Hello_13::preferred_version(const Policy& policy) const
+   {
+   // RFC 8446 4.2.1
+   //    The "supported_versions" extension is used by the client to indicate
+   //    which versions of TLS it supports and by the server to indicate which
+   //    version it is using. The extension contains a list of supported
+   //    versions in preference order, with the most preferred version first.
+   const auto supvers = m_data->extensions.get<Supported_Versions>();
+   BOTAN_ASSERT_NONNULL(supvers);
+
+   for(const auto& v : supvers->versions())
+      {
+      // RFC 8446 4.2.1
+      //    Servers MUST [...] ignore any unknown versions that are present in
+      //    that extension.
+      if(!v.known_version())
+         { continue; }
+
+      // RFC 8446 4.2.1
+      //    Servers MUST only select a version of TLS present in that extension
+      if(policy.acceptable_protocol_version(v))
+         { return v; }
+      }
+
+   return std::nullopt;
+   }
+
 #endif // BOTAN_HAS_TLS_13
 
 }
