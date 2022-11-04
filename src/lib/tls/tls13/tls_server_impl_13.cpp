@@ -191,7 +191,7 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello)
 
    if(is_initial_client_hello)
       {
-      const auto preferred_version = client_hello.preferred_version(policy());
+      const auto preferred_version = client_hello.highest_supported_version(policy());
       if(!preferred_version)
          {
          throw TLS_Exception(Alert::PROTOCOL_VERSION, "No shared TLS version");

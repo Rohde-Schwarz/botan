@@ -255,12 +255,47 @@ class Key_Share_ClientHello
    public:
       Key_Share_ClientHello(TLS_Data_Reader& reader, uint16_t /* extension_size */)
          {
+         // This construction is a crutch to make working with the incoming
+         // TLS_Data_Reader bearable. Currently, this reader spans the entire
+         // Client_Hello message. Hence, if offset or length fields are skewed
+         // or maliciously fabricated, it is possible to read further than the
+         // bounds of the current extension.
+         // Note that this aplies to many locations in the code base.
+         //
+         // TODO: Overhaul the TLS_Data_Reader to allow for cheap "sub-readers"
+         //       that enforce read bounds of sub-structures while parsing.
          const auto client_key_share_length = reader.get_uint16_t();
          const auto read_bytes_so_far_begin = reader.read_so_far();
-
-         while(reader.has_remaining() && ((reader.read_so_far() - read_bytes_so_far_begin) < client_key_share_length))
+         auto remaining = [&]
             {
-            m_client_shares.emplace_back(reader);
+            const auto read_so_far = reader.read_so_far() - read_bytes_so_far_begin;
+            BOTAN_STATE_CHECK(read_so_far <= client_key_share_length);
+            return client_key_share_length - read_so_far;
+            };
+
+         while(reader.has_remaining() && remaining() > 0)
+            {
+            if(remaining() < 4)
+               {
+               throw TLS_Exception(Alert::DECODE_ERROR, "Not enough data to read another KeyShareEntry");
+               }
+
+            Key_Share_Entry new_entry(reader);
+
+            // RFC 8446 4.2.8
+            //    Clients MUST NOT offer multiple KeyShareEntry values for the same
+            //    group. [...]
+            //    Servers MAY check for violations of these rules and abort the
+            //    handshake with an "illegal_parameter" alert if one is violated.
+            if(std::find_if(m_client_shares.begin(), m_client_shares.end(),
+                            [&](const auto& entry) { return entry.group() == new_entry.group(); } )
+               != m_client_shares.end())
+               {
+               throw TLS_Exception(Alert::ILLEGAL_PARAMETER,
+                                   "Received multiple key share entries for the same group");
+               }
+
+            m_client_shares.emplace_back(std::move(new_entry));
             }
 
          if((reader.read_so_far() - read_bytes_so_far_begin) != client_key_share_length)

@@ -30,6 +30,7 @@
 #endif
 
 #include <chrono>
+#include <iterator>
 
 namespace Botan::TLS {
 
@@ -569,7 +570,7 @@ Client_Hello_13::Client_Hello_13(std::unique_ptr<Client_Hello_Internal> data)
    // RFC 8446 4.2.1
    //    Servers MAY abort the handshake upon receiving a ClientHello with
    //    legacy_version 0x0304 or later.
-   if(m_data->legacy_version != Protocol_Version::TLS_V12)
+   if(m_data->legacy_version.is_tls_13_or_later())
       {
       throw TLS_Exception(Alert::DECODE_ERROR,
                           "TLS 1.3 Client Hello has invalid legacy_version");
@@ -637,6 +638,50 @@ Client_Hello_13::Client_Hello_13(std::unique_ptr<Client_Hello_Internal> data)
    // RFC 8446 4.2.8
    //    Servers MAY check for violations of these rules and abort the
    //    handshake with an "illegal_parameter" alert if one is violated.
+   if(exts.has<Key_Share>())
+      {
+      const auto supported_ext = exts.get<Supported_Groups>();
+      BOTAN_ASSERT_NONNULL(supported_ext);
+      const auto supports = supported_ext->groups();
+      const auto offers = exts.get<Key_Share>()->offered_groups();
+
+      // RFC 8446 4.2.8
+      //    Each KeyShareEntry value MUST correspond to a group offered in the
+      //    "supported_groups" extension and MUST appear in the same order.
+      //    [...]
+      //    Clients MUST NOT offer any KeyShareEntry values for groups not
+      //    listed in the client's "supported_groups" extension.
+      //
+      // Note: We can assume that both `offers` and `supports` are unique lists
+      //       as this is ensured in the parsing code of the extensions.
+      auto found_in_supported_groups = [&supports,support_offset = -1](auto group) mutable
+         {
+         const auto i = std::find(supports.begin(), supports.end(), group);
+         if(i == supports.end())
+            {
+            return false;
+            }
+
+         const auto found_at = std::distance(supports.begin(), i);
+         if(found_at <= support_offset)
+            {
+            return false;  // The order that groups appear in "key_share" and
+                           // "supported_groups" must be the same
+            }
+
+         support_offset = static_cast<decltype(support_offset)>(found_at);
+         return true;
+         };
+
+      for(const auto offered : offers)
+         {
+         if(!found_in_supported_groups(offered))
+            {
+            throw TLS_Exception(Alert::ILLEGAL_PARAMETER,
+                                "Offered key exchange groups do not align with claimed supported groups");
+            }
+         }
+      }
 
    // TODO: Reject oid_filters extension if found (which is the only known extension that
    //       must not occur in the TLS 1.3 client hello.
@@ -852,11 +897,26 @@ std::vector<X509_Certificate> Client_Hello_13::find_certificate_chain(Credential
 
    const std::string hostname = sni_hostname();
 
+   std::vector<Signature_Scheme> compatible_signature_schemes;
+   std::copy_if(sig_algo_preference.begin(), sig_algo_preference.end(),
+                std::back_inserter(compatible_signature_schemes),
+                [](const auto& scheme)
+                   {
+                   return scheme.is_available() &&
+                          scheme.is_compatible_with(Protocol_Version::TLS_V13);
+                   });
+
+   if(compatible_signature_schemes.empty())
+      {
+      throw TLS_Exception(Alert::HANDSHAKE_FAILURE,
+                          "Failed to agree on a signature algorithm");
+      }
+
    // RFC 8446 4.2.3
    //    Each SignatureScheme value lists a single signature algorithm that
    //    the client is willing to verify.  The values are indicated in
    //    descending order of preference.
-   for (const auto& scheme : sig_algo_preference)
+   for (const auto& scheme : compatible_signature_schemes)
       {
       // TODO: To fully support "signature_algorithm_cert", this would need to
       //       receive two algorithm names. One for the signature algorithm used
@@ -886,7 +946,7 @@ std::vector<X509_Certificate> Client_Hello_13::find_certificate_chain(Credential
    }
 
 
-std::optional<Protocol_Version> Client_Hello_13::preferred_version(const Policy& policy) const
+std::optional<Protocol_Version> Client_Hello_13::highest_supported_version(const Policy& policy) const
    {
    // RFC 8446 4.2.1
    //    The "supported_versions" extension is used by the client to indicate
@@ -896,21 +956,23 @@ std::optional<Protocol_Version> Client_Hello_13::preferred_version(const Policy&
    const auto supvers = m_data->extensions.get<Supported_Versions>();
    BOTAN_ASSERT_NONNULL(supvers);
 
+   std::optional<Protocol_Version> result;
+
    for(const auto& v : supvers->versions())
       {
       // RFC 8446 4.2.1
-      //    Servers MUST [...] ignore any unknown versions that are present in
-      //    that extension.
-      if(!v.known_version())
+      //    Servers MUST only select a version of TLS present in that extension
+      //    and MUST ignore any unknown versions that are present in that
+      //    extension.
+      if(!v.known_version() || !policy.acceptable_protocol_version(v))
          { continue; }
 
-      // RFC 8446 4.2.1
-      //    Servers MUST only select a version of TLS present in that extension
-      if(policy.acceptable_protocol_version(v))
-         { return v; }
+      result = (result.has_value())
+         ? std::optional(std::max(result.value(), v))
+         : std::optional(v);
       }
 
-   return std::nullopt;
+   return result;
    }
 
 #endif // BOTAN_HAS_TLS_13

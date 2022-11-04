@@ -107,15 +107,6 @@ size_t Channel_Impl_13::received_data(const uint8_t input[], size_t input_size)
                {
                while(auto handshake_msg = m_handshake_layer.next_message(policy(), m_transcript_hash))
                   {
-                  // After the initial handshake message is received, the record
-                  // layer must be more restrictive.
-                  // See RFC 8446 5.1 regarding "legacy_record_version"
-                  if(m_first_message_received)
-                     {
-                     m_record_layer.disable_receiving_compat_mode();
-                     m_first_message_received = true;
-                     }
-
                   // RFC 8446 5.1
                   //    Handshake messages MUST NOT span key changes.  Implementations
                   //    MUST verify that all messages immediately preceding a key change
