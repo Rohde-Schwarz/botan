@@ -231,6 +231,16 @@ class Key_Share_ServerHello
       secure_vector<uint8_t> exchange(const Key_Share_ClientHello& client_shares, const Policy& policy, Callbacks& cb,
                                       RandomNumberGenerator& rng) const;
 
+      std::vector<Named_Group> offered_groups() const
+         {
+         return {selected_group()};
+         }
+
+      Named_Group selected_group() const
+         {
+         return m_server_share.group();
+         }
+
       void erase()
          {
          m_server_share.erase();
@@ -308,18 +318,18 @@ class Key_Share_ClientHello
          m_client_shares.emplace_back(to_offer, cb, rng);
          }
 
-      std::optional<Named_Group> select_group(const Policy& policy) const
+      std::vector<Named_Group> offered_groups() const
          {
          std::vector<Named_Group> offered_groups;
          std::transform(m_client_shares.cbegin(), m_client_shares.cend(),
                         std::back_inserter(offered_groups),
                         [](const auto& share) { return share.group(); });
+         return offered_groups;
+         }
 
-         auto selected_group = policy.choose_key_exchange_group(offered_groups);
-         if(selected_group == Named_Group::NONE)
-            return std::nullopt;
-
-         return selected_group;
+      Named_Group selected_group() const
+         {
+         throw Invalid_Argument("Client Hello Key Share does not select a group");
          }
 
       std::optional<std::reference_wrapper<const Key_Share_Entry>>
@@ -423,6 +433,8 @@ class Key_Share_HelloRetryRequest
 
          m_selected_group = static_cast<Named_Group>(reader.get_uint16_t());
          }
+      Key_Share_HelloRetryRequest(Named_Group selected_group) :
+         m_selected_group(selected_group) {}
 
       ~Key_Share_HelloRetryRequest() = default;
 
@@ -438,9 +450,14 @@ class Key_Share_HelloRetryRequest
                   get_byte<1>(static_cast<uint16_t>(m_selected_group)) };
          }
 
-      Named_Group get_selected_group() const
+      Named_Group selected_group() const
          {
          return m_selected_group;
+         }
+
+      std::vector<Named_Group> offered_groups() const
+         {
+         throw Invalid_Argument("Hello Retry Request never offers any key exchange groups");
          }
 
       bool empty() const
@@ -497,6 +514,10 @@ Key_Share::Key_Share(const Policy& policy, Callbacks& cb, RandomNumberGenerator&
 Key_Share::Key_Share(Named_Group group, Callbacks& cb, RandomNumberGenerator& rng) :
    m_impl(std::make_unique<Key_Share_Impl>(Key_Share_ServerHello(group, cb, rng))) {}
 
+// HelloRetryRequest
+Key_Share::Key_Share(Named_Group selected_group) :
+   m_impl(std::make_unique<Key_Share_Impl>(Key_Share_HelloRetryRequest(selected_group))) {}
+
 Key_Share::~Key_Share() = default;
 
 std::vector<uint8_t> Key_Share::serialize(Connection_Side /*whoami*/) const
@@ -531,20 +552,19 @@ secure_vector<uint8_t> Key_Share::exchange(const Key_Share& peer_keyshare,
       }, m_impl->key_share, peer_keyshare.m_impl->key_share);
    }
 
-std::optional<Named_Group> Key_Share::select_group(const Policy& policy) const
+std::vector<Named_Group> Key_Share::offered_groups() const
    {
-   return std::visit(overloaded
-      {
-      [&](const Key_Share_ClientHello& ch)
-         {
-         return ch.select_group(policy);
-         },
-      [](const auto&) -> std::optional<Named_Group>
-         {
-         throw Botan::Invalid_Argument("can only select a group from a ClientHello Key_Share");
-         }
-      }
-   , m_impl->key_share);
+   return std::visit([](const auto& keyshare)
+         { return keyshare.offered_groups(); },
+         m_impl->key_share);
+   }
+
+
+Named_Group Key_Share::selected_group() const
+   {
+   return std::visit([](const auto& keyshare)
+         { return keyshare.selected_group(); },
+         m_impl->key_share);
    }
 
 void Key_Share::retry_offer(const Key_Share& retry_request_keyshare,
@@ -556,7 +576,7 @@ void Key_Share::retry_offer(const Key_Share& retry_request_keyshare,
       {
       [&](Key_Share_ClientHello& ch, const Key_Share_HelloRetryRequest& hrr)
          {
-         auto selected = hrr.get_selected_group();
+         auto selected = hrr.selected_group();
          // RFC 8446 4.2.8
          //    [T]he selected_group field [MUST correspond] to a group which was provided in
          //    the "supported_groups" extension in the original ClientHello

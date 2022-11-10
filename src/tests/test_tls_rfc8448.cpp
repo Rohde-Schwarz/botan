@@ -468,6 +468,26 @@ class RFC8448_Text_Policy : public Botan::TLS::Text_Policy
             Botan::TLS::Signature_Scheme::DSA_SHA1          // not actually supported
             };
          }
+
+      // Overriding the key exchange group selection to favour the server's key
+      // exchange group preference. This is required to enforce a Hello Retry Request
+      // when testing RFC 8448 5. from the server side.
+      Named_Group choose_key_exchange_group(const std::vector<Group_Params>& supported_by_peer,
+                                            const std::vector<Group_Params>& offered_by_peer) const override
+         {
+         BOTAN_UNUSED(offered_by_peer);
+
+         const auto supported_by_us = key_exchange_groups();
+         const auto selected_group = std::find_if(supported_by_us.begin(), supported_by_us.end(),
+                                                  [&](const auto group)
+                                                     {
+                                                     return value_exists(supported_by_peer, group);
+                                                     });
+
+         return selected_group != supported_by_us.end()
+            ? *selected_group
+            : Named_Group::NONE;
+         }
    };
 
 /**
@@ -749,6 +769,7 @@ void sort_server_extensions(Botan::TLS::Extensions& exts, Botan::TLS::Connection
          {
          Botan::TLS::Handshake_Extension_Type::TLSEXT_SUPPORTED_GROUPS,
          Botan::TLS::Handshake_Extension_Type::TLSEXT_KEY_SHARE,
+         Botan::TLS::Handshake_Extension_Type::TLSEXT_COOKIE,
          Botan::TLS::Handshake_Extension_Type::TLSEXT_SUPPORTED_VERSIONS,
          Botan::TLS::Handshake_Extension_Type::TLSEXT_SIGNATURE_ALGORITHMS,
          Botan::TLS::Handshake_Extension_Type::TLSEXT_RECORD_SIZE_LIMIT,
@@ -872,7 +893,8 @@ class Test_TLS_RFC8448 : public Text_Based_Test
                            "Server_MessageToSign,"
                            "Server_MessageSignature,"
                            "Client_MessageToSign,"
-                           "Client_MessageSignature") {}
+                           "Client_MessageSignature,"
+                           "HelloRetryRequest_Cookie") {}
 
       Test::Result run_one_test(const std::string& header,
                                 const VarMap& vars) override
@@ -1106,7 +1128,7 @@ class Test_TLS_RFC8448_Client : public Test_TLS_RFC8448
          return {
             Botan_Tests::CHECK("Client Hello", [&](Test::Result& result)
                {
-               ctx = std::make_unique<Client_Context>(std::move(rng), read_tls_policy("rfc8448_hrr"), vars.get_req_u64("CurrentTimestamp"), add_extensions_and_sort);
+               ctx = std::make_unique<Client_Context>(std::move(rng), read_tls_policy("rfc8448_hrr_client"), vars.get_req_u64("CurrentTimestamp"), add_extensions_and_sort);
                result.confirm("client not closed", !ctx->client.is_closed());
 
                ctx->check_callback_invocations(result, "client hello prepared", { "tls_emit_data", "tls_inspect_handshake_msg_client_hello", "tls_modify_extensions" });
@@ -1388,8 +1410,131 @@ class Test_TLS_RFC8448_Server : public Test_TLS_RFC8448
             };
          }
 
+      // TODO: once session resumption is implemented this test trace should be added
       std::vector<Test::Result> resumed_handshake_with_0_rtt(const VarMap& /*vars*/) override { return {}; }
-      std::vector<Test::Result> hello_retry_request(const VarMap& /*vars*/) override { return {}; }
+
+      std::vector<Test::Result> hello_retry_request(const VarMap& vars) override
+         {
+         // Fallback RNG is required to for blinding in ECDH with P-256
+         auto& fallback_rng = Test::rng();
+         auto rng = std::make_unique<Botan_Tests::Fixed_Output_RNG>(fallback_rng);
+
+         // 32 - for server hello random
+         // 32 - for KeyShare (eph. P-256 key pair)
+         add_entropy(*rng, vars.get_req_bin("Server_RNG_Pool"));
+
+         std::unique_ptr<Server_Context> ctx;
+
+         return
+            {
+            Botan_Tests::CHECK("Receive Client Hello", [&](Test::Result& result)
+               {
+               auto add_cookie_and_sort = [&, flight = 0](Botan::TLS::Extensions& exts, Botan::TLS::Connection_Side side) mutable
+                  {
+                  ++flight;
+                  if(flight == 1)
+                     {
+                     // This cookie needs to mocked into the HRR since RFC 8448 contains it.
+                     // Later messages must not gain the cookie extension.
+                     //
+                     // TODO: Make this more expressive, once TLS::Callbacks::modify_extensions
+                     //       got a new overloads that allows to tell apart the handshake messages
+                     //       these extensions are situated in.
+                     //       See: https://github.com/randombit/botan/pull/2988
+                     exts.add(new Cookie(vars.get_opt_bin("HelloRetryRequest_Cookie")));
+                     }
+                  sort_server_extensions(exts, side);
+                  };
+
+               ctx = std::make_unique<Server_Context>(std::move(rng), read_tls_policy("rfc8448_hrr_server"), vars.get_req_u64("CurrentTimestamp"), add_cookie_and_sort, make_mock_signatures(vars));
+               result.confirm("server not closed", !ctx->server.is_closed());
+
+               ctx->server.received_data(vars.get_req_bin("Record_ClientHello_1"));
+
+               ctx->check_callback_invocations(result, "client hello received", {
+                  "tls_emit_data",
+                  "tls_examine_extensions",
+                  "tls_modify_extensions",
+                  "tls_inspect_handshake_msg_client_hello",
+                  "tls_inspect_handshake_msg_hello_retry_request"
+                  });
+               }),
+
+            Botan_Tests::CHECK("Verify generated Hello Retry Request message", [&](Test::Result& result)
+               {
+               result.test_eq("Server's Hello Retry Request record", ctx->pull_send_buffer(), vars.get_req_bin("Record_HelloRetryRequest"));
+               result.confirm("TLS handshake not yet finished", !ctx->server.is_active());
+               }),
+
+            Botan_Tests::CHECK("Receive updated Client Hello message", [&](Test::Result& result)
+               {
+               ctx->server.received_data(vars.get_req_bin("Record_ClientHello_2"));
+
+               ctx->check_callback_invocations(result, "updated client hello received", {
+                  "tls_emit_data",
+                  "tls_examine_extensions",
+                  "tls_modify_extensions",
+                  "tls_sign_message",
+                  "tls_decode_group_param",
+                  "tls_inspect_handshake_msg_client_hello",
+                  "tls_inspect_handshake_msg_server_hello",
+                  "tls_inspect_handshake_msg_encrypted_extensions",
+                  "tls_inspect_handshake_msg_certificate",
+                  "tls_inspect_handshake_msg_certificate_verify",
+                  "tls_inspect_handshake_msg_finished"
+                  });
+               }),
+
+            Botan_Tests::CHECK("Verify generated messages in server's second flight", [&](Test::Result& result)
+               {
+               const auto& msgs = ctx->observed_handshake_messages();
+
+               result.test_eq("Server Hello", msgs.at("server_hello")[0], strip_message_header(vars.get_opt_bin("Message_ServerHello")));
+               result.test_eq("Encrypted Extensions", msgs.at("encrypted_extensions")[0], strip_message_header(vars.get_opt_bin("Message_EncryptedExtensions")));
+               result.test_eq("Certificate", msgs.at("certificate")[0], strip_message_header(vars.get_opt_bin("Message_Server_Certificate")));
+               result.test_eq("CertificateVerify", msgs.at("certificate_verify")[0], strip_message_header(vars.get_opt_bin("Message_Server_CertificateVerify")));
+               result.test_eq("Finished", msgs.at("finished")[0], strip_message_header(vars.get_opt_bin("Message_Server_Finished")));
+
+               result.test_eq("Server's entire second flight", ctx->pull_send_buffer(), concat(vars.get_req_bin("Record_ServerHello"),
+                                                                                               vars.get_req_bin("Record_ServerHandshakeMessages")));
+
+               result.confirm("TLS handshake not yet finished", !ctx->server.is_active());
+               }),
+
+            Botan_Tests::CHECK("Receive Client Finished", [&](Test::Result& result)
+               {
+               ctx->server.received_data(vars.get_req_bin("Record_ClientFinished"));
+
+               ctx->check_callback_invocations(result, "client finished received", {
+                  "tls_inspect_handshake_msg_finished",
+                  "tls_session_activated"
+                  });
+
+               result.confirm("TLS handshake finished", ctx->server.is_active());
+               }),
+
+            Botan_Tests::CHECK("Receive Client close_notify", [&](Test::Result& result)
+               {
+               ctx->server.received_data(vars.get_req_bin("Record_Client_CloseNotify"));
+
+               ctx->check_callback_invocations(result, "client finished received", {
+                  "tls_alert"
+                  });
+
+               result.confirm("connection is closed", ctx->server.is_closed());
+               result.confirm("connection is still active", ctx->server.is_active());
+               }),
+
+            Botan_Tests::CHECK("Expect Server close_notify", [&](Test::Result& result)
+               {
+               ctx->server.close();
+
+               result.confirm("connection is now inactive", !ctx->server.is_active());
+               result.test_eq("Server's close notify", ctx->pull_send_buffer(), vars.get_req_bin("Record_Server_CloseNotify"));
+               }),
+
+            };
+         }
       std::vector<Test::Result> client_authentication(const VarMap& /*vars*/) override { return {}; }
       std::vector<Test::Result> middlebox_compatibility(const VarMap& /*vars*/) override { return {}; }
    };

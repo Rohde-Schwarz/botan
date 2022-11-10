@@ -31,7 +31,7 @@ const uint64_t DOWNGRADE_TLS11 = 0x444F574E47524400;
 const uint64_t DOWNGRADE_TLS12 = 0x444F574E47524401;
 
 // SHA-256("HelloRetryRequest")
-const std::array<uint8_t, 32> HELLO_RETRY_REQUEST_MARKER =
+const std::vector<uint8_t> HELLO_RETRY_REQUEST_MARKER =
    {
    0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02,
    0x1E, 0x65, 0xB8, 0x91, 0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E,
@@ -124,10 +124,12 @@ class Server_Hello_Internal
                             std::vector<uint8_t> sid,
                             std::vector<uint8_t> r,
                             const uint16_t cs,
-                            const uint8_t cm)
+                            const uint8_t cm,
+                            bool is_hrr = false)
          : legacy_version(lv)
          , session_id(std::move(sid))
          , random(std::move(r))
+         , is_hello_retry_request(is_hrr)
          , ciphersuite(cs)
          , comp_method(cm) {}
 
@@ -494,6 +496,42 @@ std::vector<uint8_t> Server_Hello_Done::serialize() const
 
 Server_Hello_13::Server_Hello_Tag Server_Hello_13::as_server_hello;
 Server_Hello_13::Hello_Retry_Request_Tag Server_Hello_13::as_hello_retry_request;
+Server_Hello_13::Hello_Retry_Request_Creation_Tag Server_Hello_13::as_new_hello_retry_request;
+
+std::variant<Hello_Retry_Request, Server_Hello_13> Server_Hello_13::create(const Client_Hello_13& ch,
+      bool hello_retry_request_allowed,
+      RandomNumberGenerator& rng, const Policy& policy, Callbacks& cb)
+   {
+   const auto& exts = ch.extensions();
+
+   const auto& supported_by_client = exts.get<Supported_Groups>()->groups();
+   const auto& offered_by_client = exts.get<Key_Share>()->offered_groups();
+   const auto selected_group = policy.choose_key_exchange_group(supported_by_client, offered_by_client);
+
+   // RFC 8446 4.1.1
+   //    If there is no overlap between the received "supported_groups" and the
+   //    groups supported by the server, then the server MUST abort the
+   //    handshake with a "handshake_failure" or an "insufficient_security" alert.
+   if(selected_group == Named_Group::NONE)
+      {
+      throw TLS_Exception(Alert::HANDSHAKE_FAILURE, "Client did not offer any acceptable group");
+      }
+
+   if(!value_exists(offered_by_client, selected_group))
+      {
+      // RFC 8446 4.1.4
+      //    If a client receives a second HelloRetryRequest in the same
+      //    connection (i.e., where the ClientHello was itself in response to a
+      //    HelloRetryRequest), it MUST abort the handshake with an
+      //    "unexpected_message" alert.
+      BOTAN_STATE_CHECK(hello_retry_request_allowed);
+      return Hello_Retry_Request(ch, selected_group, policy, cb);
+      }
+   else
+      {
+      return Server_Hello_13(ch, selected_group, rng, cb, policy);
+      }
+   }
 
 std::variant<Hello_Retry_Request, Server_Hello_13, Server_Hello_12>
 Server_Hello_13::parse(const std::vector<uint8_t>& buf)
@@ -655,6 +693,9 @@ Server_Hello_13::Server_Hello_13(std::unique_ptr<Server_Hello_Internal> data, Se
       }
    }
 
+Server_Hello_13::Server_Hello_13(std::unique_ptr<Server_Hello_Internal> data, Hello_Retry_Request_Creation_Tag)
+   : Server_Hello(std::move(data)) {}
+
 namespace {
 
 uint16_t choose_ciphersuite(const Client_Hello_13& ch, const Policy& policy)
@@ -707,7 +748,7 @@ Server_Hello_13::Server_Hello_13(const Client_Hello_13& ch,
    m_data->extensions.add(new Supported_Versions(Protocol_Version::TLS_V13));
 
    if(key_exchange_group.has_value())
-      m_data->extensions.add(new Key_Share(key_exchange_group.value(), cb, rng));
+      { m_data->extensions.add(new Key_Share(key_exchange_group.value(), cb, rng)); }
 
    cb.tls_modify_extensions(m_data->extensions, SERVER);
    }
@@ -734,6 +775,44 @@ Protocol_Version Server_Hello_13::selected_version() const
 
 Hello_Retry_Request::Hello_Retry_Request(std::unique_ptr<Server_Hello_Internal> data)
    : Server_Hello_13(std::move(data), Server_Hello_13::as_hello_retry_request) {}
+
+Hello_Retry_Request::Hello_Retry_Request(const Client_Hello_13& ch, Named_Group selected_group, const Policy& policy, Callbacks& cb)
+   : Server_Hello_13(std::make_unique<Server_Hello_Internal>(
+                        Protocol_Version::TLS_V12 /* legacy_version */,
+                        ch.session_id(),
+                        HELLO_RETRY_REQUEST_MARKER,
+                        choose_ciphersuite(ch, policy),
+                        uint8_t(0) /* compression method */,
+                        true /* is Hello Retry Request */
+                     ), as_new_hello_retry_request)
+   {
+   // RFC 8446 4.1.4
+   //     As with the ServerHello, a HelloRetryRequest MUST NOT contain any
+   //     extensions that were not first offered by the client in its
+   //     ClientHello, with the exception of optionally the "cookie" [...]
+   //     extension.
+   BOTAN_STATE_CHECK(ch.extensions().has<Supported_Groups>());
+   BOTAN_STATE_CHECK(ch.extensions().has<Key_Share>());
+
+   BOTAN_STATE_CHECK(!value_exists(ch.extensions().get<Key_Share>()->offered_groups(), selected_group));
+
+   // RFC 8446 4.1.4
+   //    The server's extensions MUST contain "supported_versions".
+   //
+   // RFC 8446 4.2.1
+   //    A server which negotiates TLS 1.3 MUST respond by sending a
+   //    "supported_versions" extension containing the selected version
+   //    value (0x0304). It MUST set the ServerHello.legacy_version field to
+   //    0x0303 (TLS 1.2).
+   //
+   // Note that the legacy version (TLS 1.2) is set in this constructor's
+   // initializer list, accordingly.
+   m_data->extensions.add(new Supported_Versions(Protocol_Version::TLS_V13));
+
+   m_data->extensions.add(new Key_Share(selected_group));
+
+   cb.tls_modify_extensions(m_data->extensions, SERVER);
+   }
 
 #endif // BOTAN_HAS_TLS_13
 

@@ -404,16 +404,28 @@ class BOTAN_UNSTABLE_API Server_Hello_13 : public Server_Hello
    protected:
       static struct Server_Hello_Tag {} as_server_hello;
       static struct Hello_Retry_Request_Tag {} as_hello_retry_request;
+      static struct Hello_Retry_Request_Creation_Tag {} as_new_hello_retry_request;
 
+      // These constructors are meant for instantiating Server Hellos
+      // after parsing a peer's message. They perform basic validation
+      // and are therefore not suitable for constructing a message to
+      // be sent to a client.
       explicit Server_Hello_13(std::unique_ptr<Server_Hello_Internal> data, Server_Hello_Tag tag = as_server_hello);
       explicit Server_Hello_13(std::unique_ptr<Server_Hello_Internal> data, Hello_Retry_Request_Tag tag);
       void basic_validation() const;
 
+      // Instantiate a Server Hello as response to a client's Client Hello
+      // (called from Server_Hello_13::create())
+      Server_Hello_13(const Client_Hello_13& ch, std::optional<Named_Group> key_exchange_group, RandomNumberGenerator& rng, Callbacks& cb, const Policy& policy);
+
+      explicit Server_Hello_13(std::unique_ptr<Server_Hello_Internal> data, Hello_Retry_Request_Creation_Tag tag);
+
    public:
+      static std::variant<Hello_Retry_Request, Server_Hello_13>
+      create(const Client_Hello_13& ch, bool hello_retry_request_allowed, RandomNumberGenerator& rng, const Policy& policy, Callbacks& cb);
+
       static std::variant<Hello_Retry_Request, Server_Hello_13, Server_Hello_12>
       parse(const std::vector<uint8_t>& buf);
-
-      Server_Hello_13(const Client_Hello_13& ch, std::optional<Named_Group> key_exchange_group, RandomNumberGenerator& rng, Callbacks& cb, const Policy& policy);
 
       /**
        * Return desired downgrade version indicated by hello random, if any.
@@ -429,8 +441,9 @@ class BOTAN_UNSTABLE_API Server_Hello_13 : public Server_Hello
 class BOTAN_UNSTABLE_API Hello_Retry_Request final : public Server_Hello_13
    {
    protected:
-      friend class Server_Hello_13;  // to allow construction by Server_Hello_13::parse()
+      friend class Server_Hello_13;  // to allow construction by Server_Hello_13::parse() and ::create()
       explicit Hello_Retry_Request(std::unique_ptr<Server_Hello_Internal> data);
+      Hello_Retry_Request(const Client_Hello_13& ch, Named_Group selected_group, const Policy& policy, Callbacks& cb);
 
    public:
       Handshake_Type type() const override { return HELLO_RETRY_REQUEST; }

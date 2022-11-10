@@ -61,6 +61,9 @@ class Server_Impl_13 : public Channel_Impl_13
       void handle(const Certificate_Verify_13& certificate_verify_msg);
       void handle(const Finished_13& finished_msg);
 
+      void handle_reply_to_client_hello(const Server_Hello_13& server_hello);
+      void handle_reply_to_client_hello(const Hello_Retry_Request& hello_retry_request);
+
       bool handshake_finished() const override;
       // TODO: might need 'prepend_ccs' to implement middlebox compatibility
 

@@ -9,6 +9,7 @@
 #include <botan/internal/tls_server_impl_13.h>
 #include <botan/internal/tls_cipher_state.h>
 #include <botan/internal/loadstor.h>
+#include <botan/internal/stl_util.h>
 #include <botan/credentials_manager.h>
 #include <botan/rng.h>
 
@@ -110,6 +111,63 @@ void Server_Impl_13::downgrade()
    m_transitions.set_expected_next({});
    }
 
+void Server_Impl_13::handle_reply_to_client_hello(const Server_Hello_13& server_hello)
+   {
+   const auto& client_hello = m_handshake_state.client_hello();
+   const auto& exts = client_hello.extensions();
+
+   const auto cipher = Ciphersuite::by_id(server_hello.ciphersuite());
+   m_transcript_hash.set_algorithm(cipher->prf_algo());
+
+   const auto my_keyshare = server_hello.extensions().get<Key_Share>();
+   auto shared_secret = my_keyshare->exchange(*exts.get<Key_Share>(), policy(), callbacks(), rng());
+   my_keyshare->erase();
+
+   m_cipher_state = Cipher_State::init_with_server_hello(m_side, std::move(shared_secret), cipher.value(),
+                    m_transcript_hash.current());
+
+   // TODO: OCSP stapling: Invoke Callbacks::tls_provide_cert_status() to obtain an OCSP response
+   auto server_cert_chain = client_hello.find_certificate_chain(credentials_manager());
+   BOTAN_ASSERT_NOMSG(!server_cert_chain.empty());
+
+   auto private_key = credentials_manager().private_key_for(server_cert_chain.front(), "tls-server",
+                      client_hello.sni_hostname());
+   BOTAN_ASSERT_NONNULL(private_key);
+
+   // TODO: ALPN - Invoke Callbacks::tls_server_choose_app_protocol() with
+   //       suggestions sent by the client. This might happen in the Encrypted
+   //       Extensions constructor. Also implement Channel::application_protocol().
+
+   aggregate_handshake_messages()
+   .add(m_handshake_state.sending(Encrypted_Extensions(client_hello, policy(), callbacks())))
+   .add(m_handshake_state.sending(Certificate_13(server_cert_chain, Connection_Side::SERVER)))
+   .add(m_handshake_state.sending(Certificate_Verify_13(client_hello.signature_schemes(), Connection_Side::SERVER,
+                                  *private_key, policy(), m_transcript_hash.current(), callbacks(), rng())))
+   .add(m_handshake_state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash.current())))
+   .send();
+
+   // TODO: At this point the server could derive the Application Traffic secret
+   //       and start sending data. This is currently not implemented.
+   // Note: When we would want to add this, the Cipher_State must hold back on
+   //       advancing the "receiving" traffic secrets (keep handshake keys),
+   //       otherwise we would not be able to decrypt the yet-to-come client's
+   //       Finished message.
+
+   // TODO: For Client Authentication this should expect appropriate client handshake messages
+   //       once we support/implement it.
+   m_transitions.set_expected_next(FINISHED);
+   }
+
+void Server_Impl_13::handle_reply_to_client_hello(const Hello_Retry_Request& hello_retry_request)
+   {
+   auto cipher = Ciphersuite::by_id(hello_retry_request.ciphersuite());
+   BOTAN_ASSERT_NOMSG(cipher.has_value());  // should work, since we chose that suite
+
+   m_transcript_hash = Transcript_Hash_State::recreate_after_hello_retry_request(cipher->prf_algo(), m_transcript_hash);
+
+   m_transitions.set_expected_next(CLIENT_HELLO);
+   }
+
 void Server_Impl_13::handle(const Client_Hello_12& ch)
    {
    // The detailed handling of the TLS 1.2 compliant Client Hello is left to
@@ -134,25 +192,39 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello)
    {
    const auto& exts = client_hello.extensions();
 
-   const auto preferred_version = client_hello.preferred_version(policy());
-   if(!preferred_version)
-      {
-      throw TLS_Exception(Alert::PROTOCOL_VERSION, "No shared TLS version");
-      }
+   const bool is_initial_client_hello = !m_handshake_state.has_hello_retry_request();
 
-   // RFC 8446 4.2.1
-   //    Servers MUST be prepared to receive ClientHellos that include [the
-   //    supported_versions] extension but do not include 0x0304 in the list
-   //    of versions.
-   //
-   // Also, the client's preferred version may not be TLS 1.3 which results in
-   // a regular protocol downgrade despite the compliant TLS 1.3 Client Hello.
-   if(preferred_version->is_pre_tls_13())
+   if(is_initial_client_hello)
       {
-      downgrade();
+      const auto preferred_version = client_hello.preferred_version(policy());
+      if(!preferred_version)
+         {
+         throw TLS_Exception(Alert::PROTOCOL_VERSION, "No shared TLS version");
+         }
 
-      // Simply await being replaced by a TLS 1.2 implementation...
-      return;
+      // RFC 8446 4.2.1
+      //    Servers MUST be prepared to receive ClientHellos that include [the
+      //    supported_versions] extension but do not include 0x0304 in the list
+      //    of versions.
+      //
+      // Also, the client's preferred version may not be TLS 1.3 which results in
+      // a regular protocol downgrade despite the compliant TLS 1.3 Client Hello.
+      if(preferred_version->is_pre_tls_13())
+         {
+         downgrade();
+
+         // Simply await being replaced by a TLS 1.2 implementation...
+         return;
+         }
+
+      // RFC 8446 4.2.2
+      //   Clients MUST NOT use cookies in their initial ClientHello in subsequent
+      //   connections.
+      if(exts.has<Cookie>())
+         {
+         throw TLS_Exception(Alert::ILLEGAL_PARAMETER,
+                           "Received a Cookie in the initial client hello");
+         }
       }
 
    // TODO: Implement support for PSK. For now, we ignore any such extensions
@@ -169,25 +241,23 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello)
    // This was previously checked in the Client_Hello_13 constructor.
    BOTAN_ASSERT_NOMSG(exts.has<Key_Share>());
 
-   // TODO: We might (or might not) want to move this group selection into the
-   //       Server_Hello_13 constructor (or factory method). Let's defer this
-   //       decision until the implementation of Hello Retry Request where we
-   //       might want to have a factory method returning either HRR or SH
-   //       depending on the outcome. Potentially, the handshake state will
-   //       be the decisive factor?
-   // TODO: Currently this prefers "available client key share groups" over
-   //       the server's group preference. We might want to leave this policy
-   //       decision to the application by providing appropriate callbacks or
-   //       TLS::Policy configuration.
-   const auto selected_group = exts.get<Key_Share>()->select_group(policy());
-   if(!selected_group.has_value())
+   if(!is_initial_client_hello)
       {
-      throw Not_Implemented("No matching Key Share found; Hello Retry Request not yet implemented");
+      const auto& hrr_exts = m_handshake_state.hello_retry_request().extensions();
+      const auto offered_groups = exts.get<Key_Share>()->offered_groups();
+      const auto selected_group = hrr_exts.get<Key_Share>()->selected_group();
+      if(offered_groups.size() != 1 || offered_groups.at(0) != selected_group)
+         {
+         throw TLS_Exception(Alert::ILLEGAL_PARAMETER,
+                             "Client did not comply with the requested key exchange group");
+         }
       }
 
    callbacks().tls_examine_extensions(exts, CLIENT);
-   send_handshake_message(m_handshake_state.sending(Server_Hello_13(client_hello, selected_group, rng(), callbacks(),
-                          policy())));
+
+   const auto sh_or_hrr = m_handshake_state.sending(Server_Hello_13::create(
+      client_hello, is_initial_client_hello, rng(), policy(), callbacks()));
+   send_handshake_message(sh_or_hrr);
 
    // RFC 8446 Appendix D.4  (Middlebox Compatibility Mode)
    //    The server sends a dummy change_cipher_spec record immediately after
@@ -196,48 +266,13 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello)
    //
    //    [...] if the client sends a non-empty session ID, the server MUST send
    //    the change_cipher_spec as described in this appendix.
-   if(policy().tls_13_middlebox_compatibility_mode() || !client_hello.session_id().empty())
+   const bool needs_compat_mode = policy().tls_13_middlebox_compatibility_mode() || !client_hello.session_id().empty();
+   if(needs_compat_mode && is_initial_client_hello)
       {
       send_dummy_change_cipher_spec();
       }
 
-   const auto& server_hello = m_handshake_state.server_hello();
-   const auto cipher = Ciphersuite::by_id(server_hello.ciphersuite());
-   m_transcript_hash.set_algorithm(cipher->prf_algo());
-
-   const auto my_keyshare = server_hello.extensions().get<Key_Share>();
-   auto shared_secret = my_keyshare->exchange(*exts.get<Key_Share>(), policy(), callbacks(), rng());
-   my_keyshare->erase();
-
-   m_cipher_state = Cipher_State::init_with_server_hello(m_side, std::move(shared_secret), cipher.value(),
-                    m_transcript_hash.current());
-
-   // TODO: OCSP stapling: Invoke Callbacks::tls_provide_cert_status() to obtain an OCSP response
-   auto server_cert_chain = client_hello.find_certificate_chain(credentials_manager());
-   BOTAN_ASSERT_NOMSG(!server_cert_chain.empty());
-
-   auto private_key = credentials_manager().private_key_for(server_cert_chain.front(), "tls-server", client_hello.sni_hostname());
-   BOTAN_ASSERT_NONNULL(private_key);
-
-   // TODO: ALPN - Invoke Callbacks::tls_server_choose_app_protocol() with
-   //       suggestions sent by the client. This might happen in the Encrypted
-   //       Extensions constructor. Also implement Channel::application_protocol().
-
-   aggregate_handshake_messages()
-      .add(m_handshake_state.sending(Encrypted_Extensions(client_hello, policy(), callbacks())))
-      .add(m_handshake_state.sending(Certificate_13(server_cert_chain, Connection_Side::SERVER)))
-      .add(m_handshake_state.sending(Certificate_Verify_13(client_hello.signature_schemes(), Connection_Side::SERVER, *private_key, policy(), m_transcript_hash.current(), callbacks(), rng())))
-      .add(m_handshake_state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash.current())))
-      .send();
-
-   // TODO: At this point the server could derive the Application Traffic secret
-   //       and start sending data. This is currently not implemented.
-   // Note: When we would want to add this, the Cipher_State must hold back on
-   //       advancing the "receiving" traffic secrets (keep handshake keys),
-   //       otherwise we would not be able to decrypt the yet-to-come client's
-   //       Finished message.
-
-   m_transitions.set_expected_next(FINISHED);
+   std::visit([this](auto msg) { handle_reply_to_client_hello(msg); }, sh_or_hrr);
    }
 
 void Server_Impl_13::handle(const Certificate_13& certificate_msg)
