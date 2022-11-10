@@ -146,12 +146,7 @@ void Server_Impl_13::handle_reply_to_client_hello(const Server_Hello_13& server_
    .add(m_handshake_state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash.current())))
    .send();
 
-   // TODO: At this point the server could derive the Application Traffic secret
-   //       and start sending data. This is currently not implemented.
-   // Note: When we would want to add this, the Cipher_State must hold back on
-   //       advancing the "receiving" traffic secrets (keep handshake keys),
-   //       otherwise we would not be able to decrypt the yet-to-come client's
-   //       Finished message.
+   m_cipher_state->advance_with_server_finished(m_transcript_hash.current());
 
    // TODO: For Client Authentication this should expect appropriate client handshake messages
    //       once we support/implement it.
@@ -301,7 +296,6 @@ void Server_Impl_13::handle(const Finished_13& finished_msg)
    //       the client's Finished, `advance_with_server_finished` should be
    //       called in the Client Hello handler already. See TODO there, for
    //       further information.
-   m_cipher_state->advance_with_server_finished(m_transcript_hash.previous());
    m_cipher_state->advance_with_client_finished(m_transcript_hash.current());
 
    // no more handshake messages expected

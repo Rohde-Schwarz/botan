@@ -1388,7 +1388,7 @@ class Test_TLS_RFC8448_Server : public Test_TLS_RFC8448
                result.test_eq("Server's entire first flight", ctx->pull_send_buffer(), concat(vars.get_req_bin("Record_ServerHello"),
                                                                                               vars.get_req_bin("Record_ServerHandshakeMessages")));
 
-               result.confirm("TLS handshake not yet finished", !ctx->server.is_active());
+               result.confirm("Server can now send application data", ctx->server.is_active());
                }),
 
             Botan_Tests::CHECK("Send Client Finished", [&](Test::Result& result)
@@ -1399,8 +1399,6 @@ class Test_TLS_RFC8448_Server : public Test_TLS_RFC8448
                   "tls_inspect_handshake_msg_finished",
                   "tls_session_activated"
                   });
-
-               result.confirm("TLS handshake finished", ctx->server.is_active());
                }),
 
             Botan_Tests::CHECK("Send Session Ticket", [&](Test::Result&)
@@ -1497,8 +1495,7 @@ class Test_TLS_RFC8448_Server : public Test_TLS_RFC8448
 
                result.test_eq("Server's entire second flight", ctx->pull_send_buffer(), concat(vars.get_req_bin("Record_ServerHello"),
                                                                                                vars.get_req_bin("Record_ServerHandshakeMessages")));
-
-               result.confirm("TLS handshake not yet finished", !ctx->server.is_active());
+               result.confirm("Server could now send application data", ctx->server.is_active());
                }),
 
             Botan_Tests::CHECK("Receive Client Finished", [&](Test::Result& result)
