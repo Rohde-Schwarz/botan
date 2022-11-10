@@ -630,14 +630,6 @@ Client_Hello_13::Client_Hello_13(std::unique_ptr<Client_Hello_Internal> data)
                           "Client Hello must either contain both key_share and supported_groups extensions or neither");
       }
 
-   // TODO: Check invariants between Key_Share and Supported_Groups extensions
-   //       outlined in RFC 8446 4.2.8. TL;DR: Clients must not offer key shares
-   //       of groups they don't advertise as supported and key shares must be
-   //       in the same order as they appear in the supported groups list.
-   //
-   // RFC 8446 4.2.8
-   //    Servers MAY check for violations of these rules and abort the
-   //    handshake with an "illegal_parameter" alert if one is violated.
    if(exts.has<Key_Share>())
       {
       const auto supported_ext = exts.get<Supported_Groups>();
@@ -675,6 +667,9 @@ Client_Hello_13::Client_Hello_13(std::unique_ptr<Client_Hello_Internal> data)
 
       for(const auto offered : offers)
          {
+         // RFC 8446 4.2.8
+         //    Servers MAY check for violations of these rules and abort the
+         //    handshake with an "illegal_parameter" alert if one is violated.
          if(!found_in_supported_groups(offered))
             {
             throw TLS_Exception(Alert::ILLEGAL_PARAMETER,

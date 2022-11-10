@@ -13,9 +13,6 @@
 #include <botan/credentials_manager.h>
 #include <botan/rng.h>
 
-// TODO: remove me
-#include <botan/internal/tls_handshake_io.h>
-
 namespace Botan::TLS {
 
 Server_Impl_13::Server_Impl_13(Callbacks& callbacks,
@@ -292,10 +289,6 @@ void Server_Impl_13::handle(const Finished_13& finished_msg)
                            m_transcript_hash.previous()))
       { throw TLS_Exception(Alert::DECRYPT_ERROR, "Finished message didn't verify"); }
 
-   // TODO: If the application traffic secret must be derived before receiving
-   //       the client's Finished, `advance_with_server_finished` should be
-   //       called in the Client Hello handler already. See TODO there, for
-   //       further information.
    m_cipher_state->advance_with_client_finished(m_transcript_hash.current());
 
    // no more handshake messages expected

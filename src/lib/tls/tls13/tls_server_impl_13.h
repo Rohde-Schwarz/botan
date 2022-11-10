@@ -15,16 +15,6 @@
 
 namespace Botan::TLS {
 
-// Note: Those are spill-overs from the TLS 1.2 world and should probably be
-//       eliminated at some point. They are currently needed to fulfill the
-//       Server_Impl interface.
-//
-// TODO: Factor out the TLS 1.2 specifics from Server_Impl. Potentially, the
-//       entire Server_Impl class can be obsoleted -- the client implementation
-//       didn't need eventually.
-class Handshake_State;
-class Handshake_IO;
-
 /**
 * SSL/TLS Server 1.3 implementation
 */
