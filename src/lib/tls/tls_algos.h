@@ -99,7 +99,7 @@ enum class Group_Params : uint16_t {
    FFDHE_8192 = 260,
 };
 
-std::string group_param_to_string(Group_Params group);
+std::string BOTAN_UNSTABLE_API group_param_to_string(Group_Params group);
 Group_Params group_param_from_string(const std::string& group_name);
 bool group_param_is_dh(Group_Params group);
 

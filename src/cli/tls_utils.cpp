@@ -74,6 +74,8 @@ class TLS_Ciphersuites final : public Command
 
 BOTAN_REGISTER_COMMAND("tls_ciphers", TLS_Ciphersuites);
 
+#if defined(BOTAN_HAS_TLS_13)
+
 class TLS_Client_Hello_Reader final : public Command
    {
    public:
@@ -140,10 +142,9 @@ class TLS_Client_Hello_Reader final : public Command
 
          try
             {
-            // TODO: deal with Client_Hello_13
-            Botan::TLS::Client_Hello_12 hello(input);
+            auto hello = Botan::TLS::Client_Hello_13::parse(input);
 
-            output() << format_hello(hello);
+            std::visit([=](const auto& client_hello) { output() << format_hello(client_hello); }, hello);
             }
          catch(std::exception& e)
             {
@@ -152,10 +153,9 @@ class TLS_Client_Hello_Reader final : public Command
          }
 
    private:
-      static std::string format_hello(const Botan::TLS::Client_Hello_12& hello)
+      static void format_generic_hello(std::ostringstream& oss, const Botan::TLS::Client_Hello& hello, const Botan::TLS::Protocol_Version& version)
          {
-         std::ostringstream oss;
-         oss << "Version: " << hello.legacy_version().to_string() << "\n"
+         oss << "Version: " << version.to_string() << "\n"
              << "Random: " << Botan::hex_encode(hello.random()) << "\n";
 
          if(!hello.session_id().empty())
@@ -173,7 +173,7 @@ class TLS_Client_Hello_Reader final : public Command
 
          oss << "Supported signature schemes: ";
 
-         if(hello.signature_schemes().empty())
+         if(!hello.sent_signature_algorithms())
             {
             oss << "Did not send signature_algorithms extension\n";
             }
@@ -196,6 +196,18 @@ class TLS_Client_Hello_Reader final : public Command
 
          std::map<std::string, bool> hello_flags;
          hello_flags["ALPN"] = hello.supports_alpn();
+
+         for(auto&& i : hello_flags)
+            oss << "Supports " << i.first << "? " << (i.second ? "yes" : "no") << "\n";
+         }
+
+      static std::string format_hello(const Botan::TLS::Client_Hello_12& hello)
+         {
+         std::ostringstream oss;
+
+         format_generic_hello(oss, hello, hello.legacy_version());
+
+         std::map<std::string, bool> hello_flags;
          hello_flags["Encrypt Then Mac"] = hello.supports_encrypt_then_mac();
          hello_flags["Extended Master Secret"] = hello.supports_extended_master_secret();
          hello_flags["Session Ticket"] = hello.supports_session_ticket();
@@ -205,9 +217,83 @@ class TLS_Client_Hello_Reader final : public Command
 
          return oss.str();
          }
+
+      static std::string format_hello(const Botan::TLS::Client_Hello_13& hello)
+         {
+         std::ostringstream oss;
+
+         format_generic_hello(oss, hello, Botan::TLS::Protocol_Version::TLS_V13);
+
+         std::map<std::string, bool> hello_flags;
+         hello_flags["Middlebox Compatibility Mode"] = !hello.session_id().empty();
+
+         for(auto&& i : hello_flags)
+            oss << "Supports " << i.first << "? " << (i.second ? "yes" : "no") << "\n";
+
+         const auto& exts = hello.extensions();
+
+         oss << "Supported TLS versions: ";
+         for(auto version : exts.get<Botan::TLS::Supported_Versions>()->versions())
+            {
+            oss << version.to_string() << " ";
+            }
+         oss << "\n";
+
+         oss << "Supported Key Exchange Groups:\n";
+         if(exts.has<Botan::TLS::Supported_Groups>())
+            {
+            for(auto group : exts.get<Botan::TLS::Supported_Groups>()->groups())
+               {
+               oss << "Group: " << group_to_string(group) << "\n";
+               }
+            }
+         else
+            {
+            oss << "no such extension sent\n";
+            }
+
+         oss << "Pre-offered Key Exchange Groups:\n";
+         if(exts.has<Botan::TLS::Key_Share>())
+            {
+            for(auto group : exts.get<Botan::TLS::Key_Share>()->offered_groups())
+               {
+               oss << "Offered Group: " << group_to_string(group) << "\n";
+               }
+            }
+         else
+            {
+            oss << "no such extension sent\n";
+            }
+
+         if(exts.has<Botan::TLS::Record_Size_Limit>())
+            {
+            oss << "Record Size Limit: " << exts.get<Botan::TLS::Record_Size_Limit>()->limit() << "\n";
+            }
+
+         return oss.str();
+         }
+
+      static std::string group_to_string(const Botan::TLS::Group_Params& group)
+         {
+         std::ostringstream oss;
+
+         const auto group_name = Botan::TLS::group_param_to_string(group);
+         if(group_name.empty())
+            {
+            oss << "unknown group (" << static_cast<uint16_t>(group) << ")";
+            }
+         else
+            {
+            oss << group_name;
+            }
+
+         return oss.str();
+         }
    };
 
 BOTAN_REGISTER_COMMAND("tls_client_hello", TLS_Client_Hello_Reader);
+
+#endif
 
 }
 
