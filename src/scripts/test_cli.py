@@ -921,10 +921,7 @@ def cli_tls_http_server_tests(tmp_dir):
     try:
         from http.client import HTTPSConnection
     except ImportError:
-        try:
-            from httplib import HTTPSConnection
-        except ImportError:
-            return
+        return
     import ssl
 
     server_port = random_port_number()
@@ -984,18 +981,12 @@ def cli_tls_proxy_tests(tmp_dir):
     try:
         from http.client import HTTPSConnection
     except ImportError:
-        try:
-            from httplib import HTTPSConnection
-        except ImportError:
-            return
+        return
 
     try:
         from http.server import HTTPServer, BaseHTTPRequestHandler
     except ImportError:
-        try:
-            from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
-        except ImportError:
-            return
+        return
 
     import ssl
     import threading
@@ -1023,7 +1014,7 @@ def cli_tls_proxy_tests(tmp_dir):
     test_cli("sign_cert", "%s %s %s --output=%s" % (ca_cert, priv_key, crt_req, server_cert))
 
     tls_proxy = subprocess.Popen([CLI_PATH, 'tls_proxy', str(proxy_port), '127.0.0.1', str(server_port),
-                                  server_cert, priv_key, '--output=/tmp/proxy.err', '--max-clients=2'],
+                                  server_cert, priv_key, '--output=/tmp/proxy.err', '--max-clients=4'],
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     wait_time = 1.0
@@ -1050,8 +1041,15 @@ def cli_tls_proxy_tests(tmp_dir):
     time.sleep(wait_time)
 
     context = ssl.create_default_context(cafile=ca_cert)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.maximum_version = ssl.TLSVersion.TLSv1_3
 
-    for _i in range(2):
+    for i in range(4):
+        # Make sure that TLS protocol version downgrade works
+        if i > 2:
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.maximum_version = ssl.TLSVersion.TLSv1_2
+
         conn = HTTPSConnection('localhost', port=proxy_port, context=context)
         conn.request("GET", "/")
         resp = conn.getresponse()
