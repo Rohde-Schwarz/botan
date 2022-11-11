@@ -55,7 +55,6 @@ class Server_Impl_13 : public Channel_Impl_13
       void handle_reply_to_client_hello(const Hello_Retry_Request& hello_retry_request);
 
       bool handshake_finished() const override;
-      // TODO: might need 'prepend_ccs' to implement middlebox compatibility
 
       void downgrade();
 

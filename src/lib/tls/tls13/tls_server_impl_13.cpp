@@ -256,10 +256,20 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello)
    //    its first handshake message. This may either be after a ServerHello or
    //    a HelloRetryRequest.
    //
-   //    [...] if the client sends a non-empty session ID, the server MUST send
-   //    the change_cipher_spec as described in this appendix.
-   const bool needs_compat_mode = policy().tls_13_middlebox_compatibility_mode() || !client_hello.session_id().empty();
-   if(needs_compat_mode && is_initial_client_hello)
+   //    This "compatibility mode" is partially negotiated: the client can opt
+   //    to provide a session ID or not, and the server has to echo it. Either
+   //    side can send change_cipher_spec at any time during the handshake, as
+   //    they must be ignored by the peer, but if the client sends a non-empty
+   //    session ID, the server MUST send the change_cipher_spec as described
+   //    [above].
+   //
+   // Technically, the usage of compatibility mode is fully up to the client
+   // sending a non-empty session ID. Nevertheless, when the policy requests
+   // it we send a CCS regardless. Note that this is perfectly legal and also
+   // satisfies some BoGo tests that expect this behaviour.
+   if(is_initial_client_hello &&
+         (policy().tls_13_middlebox_compatibility_mode() ||
+          !client_hello.session_id().empty()))
       {
       send_dummy_change_cipher_spec();
       }
