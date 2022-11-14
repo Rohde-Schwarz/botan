@@ -915,6 +915,7 @@ def cli_tls_socket_tests(tmp_dir):
         logging.error("server said (stderr): %s", srv_stderr)
 
 def cli_tls_http_server_tests(tmp_dir):
+    # pylint: disable=too-many-locals
     if not run_socket_tests() or not check_for_command("tls_http_server"):
         return
 
@@ -942,31 +943,36 @@ def cli_tls_http_server_tests(tmp_dir):
 
     test_cli("sign_cert", "%s %s %s --output=%s" % (ca_cert, priv_key, crt_req, server_cert))
 
-    tls_server = subprocess.Popen([CLI_PATH, 'tls_http_server', '--max-clients=2',
+    tls_server = subprocess.Popen([CLI_PATH, 'tls_http_server', '--max-clients=4',
                                    '--port=%d' % (server_port), server_cert, priv_key],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
 
     wait_time = 1.0
     time.sleep(wait_time)
 
-    context = ssl.create_default_context(cafile=ca_cert)
-    conn = HTTPSConnection('localhost', port=server_port, context=context)
-    conn.request("GET", "/")
-    resp = conn.getresponse()
+    for tls_version in [ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3]:
+        context = ssl.create_default_context(cafile=ca_cert)
+        context.minimum_version = tls_version
+        context.maximum_version = tls_version
 
-    if resp.status != 200:
-        logging.error('Unexpected response status %d', resp.status)
+        conn = HTTPSConnection('localhost', port=server_port, context=context)
+        conn.request("GET", "/")
+        resp = conn.getresponse()
 
-    body = str(resp.read())
+        if resp.status != 200:
+            logging.error('Unexpected response status %d', resp.status)
 
-    if body.find('TLS negotiation with Botan 3.') < 0:
-        logging.error('Unexpected response body')
+        body = str(resp.read())
 
-    conn.request("POST", "/logout")
-    resp = conn.getresponse()
+        if body.find('TLS negotiation with Botan 3.') < 0:
+            logging.error('Unexpected response body %s', body)
 
-    if resp.status != 405:
-        logging.error('Unexpected response status %d', resp.status)
+        conn.request("POST", "/logout")
+        resp = conn.getresponse()
+
+        if resp.status != 405:
+            logging.error('Unexpected response status %d', resp.status)
 
     rc = tls_server.wait(5)
 
