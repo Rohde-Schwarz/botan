@@ -1518,7 +1518,7 @@ class Test_TLS_RFC8448_Server : public Test_TLS_RFC8448
                   "tls_alert"
                   });
 
-               result.confirm("connection is closed", ctx->server.is_closed());
+               result.confirm("connection is not yet closed", !ctx->server.is_closed());
                result.confirm("connection is still active", ctx->server.is_active());
                }),
 
@@ -1527,6 +1527,7 @@ class Test_TLS_RFC8448_Server : public Test_TLS_RFC8448
                ctx->server.close();
 
                result.confirm("connection is now inactive", !ctx->server.is_active());
+               result.confirm("connection is now closed", ctx->server.is_closed());
                result.test_eq("Server's close notify", ctx->pull_send_buffer(), vars.get_req_bin("Record_Server_CloseNotify"));
                }),
 
@@ -1606,7 +1607,7 @@ class Test_TLS_RFC8448_Server : public Test_TLS_RFC8448
                   "tls_alert"
                   });
 
-               result.confirm("connection is closed", ctx->server.is_closed());
+               result.confirm("connection is not yet closed", !ctx->server.is_closed());
                result.confirm("connection is still active", ctx->server.is_active());
                }),
 
@@ -1615,6 +1616,7 @@ class Test_TLS_RFC8448_Server : public Test_TLS_RFC8448
                ctx->server.close();
 
                result.confirm("connection is now inactive", !ctx->server.is_active());
+               result.confirm("connection is now closed", ctx->server.is_closed());
                result.test_eq("Server's close notify", ctx->pull_send_buffer(), vars.get_req_bin("Record_Server_CloseNotify"));
                }),
 
