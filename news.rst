@@ -143,6 +143,9 @@ Version 3.0.0, Not Yet Released
 
 * Generate a ``compile_commands.json`` for use with Clang tooling.
 
+* Rework the validation of OCSP responses to fix CVE-2022-43705 and detect
+  tampered OCSP delegate responder certificates.
+
 Version 2.19.0, 2022-01-19
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
