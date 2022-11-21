@@ -2104,6 +2104,7 @@ def create_template_vars(source_paths, build_paths, options, modules, cc, arch, 
                                               suffix=options.library_suffix),
 
         'command_line': configure_command_line(),
+        'command_line_escaped': configure_command_line().replace("\\", "\\\\").replace("\"", "\\\""),
         'local_config': read_textfile(options.local_config),
 
         'program_suffix': program_suffix,
@@ -3273,6 +3274,7 @@ def do_io_for_build(cc, arch, osinfo, using_mods, info_modules, build_paths, sou
         return os.path.join(build_paths.doc_module_info, p)
 
     write_template(in_build_dir('build.h'), in_build_data('buildh.in'))
+    write_template(in_build_dir('build_info.h'), in_build_data('buildinfoh.in'))
     write_template(in_build_dir('botan.doxy'), in_build_data('botan.doxy.in'))
 
     if 'botan_pkgconfig' in template_vars:
@@ -3489,6 +3491,7 @@ def main(argv):
 
     build_paths = BuildPaths(source_paths, options, using_mods)
     build_paths.public_headers.append(os.path.join(build_paths.build_dir, 'build.h'))
+    build_paths.internal_headers.append(os.path.join(build_paths.build_dir, 'build_info.h'))
 
     template_vars = create_template_vars(source_paths, build_paths, options, using_mods, cc, arch, osinfo)
 

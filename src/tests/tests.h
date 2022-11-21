@@ -61,7 +61,8 @@ class Test_Options
    public:
       Test_Options() = default;
 
-      Test_Options(const std::vector<std::string>& requested_tests,
+      Test_Options(const std::vector<std::string>& command,
+                   const std::vector<std::string>& requested_tests,
                    const std::vector<std::string>& skip_tests,
                    const std::string& data_dir,
                    const std::string& pkcs11_lib,
@@ -77,6 +78,7 @@ class Test_Options
                    bool run_long_tests,
                    bool run_memory_intensive_tests,
                    bool abort_on_first_fail) :
+         m_command(command),
          m_requested_tests(requested_tests),
          m_skip_tests(skip_tests.begin(), skip_tests.end()),
          m_data_dir(data_dir),
@@ -95,6 +97,8 @@ class Test_Options
          m_abort_on_first_fail(abort_on_first_fail)
          {
          }
+
+      const std::vector<std::string>& invoked_command() const { return m_command; }
 
       const std::vector<std::string>& requested_tests() const
          { return m_requested_tests; }
@@ -131,6 +135,7 @@ class Test_Options
       bool verbose() const { return m_verbose; }
 
    private:
+      std::vector<std::string> m_command;
       std::vector<std::string> m_requested_tests;
       std::set<std::string> m_skip_tests;
       std::string m_data_dir;

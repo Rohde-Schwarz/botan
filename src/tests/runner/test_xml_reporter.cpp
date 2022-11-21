@@ -11,14 +11,58 @@
 
 #include <botan/internal/loadstor.h>
 #include <botan/version.h>
+#include <botan/build.h>
+#include <botan/internal/build_info.h>
 
 #include <iomanip>
+#include <sstream>
 #include <numeric>
 #include <time.h>
 
 namespace Botan_Tests {
 
 namespace {
+
+std::string full_compiler_version_string()
+   {
+#if defined(BOTAN_BUILD_COMPILER_IS_CLANG) || defined(BOTAN_BUILD_COMPILER_IS_GCC)
+   return __VERSION__;
+#elif defined(BOTAN_BUILD_COMPILER_IS_MSVC)
+    // See https://learn.microsoft.com/en-us/cpp/preprocessor/predefined-macros
+    //    If the version number of the Microsoft C/C++ compiler is 15.00.20706.01,
+    //    the _MSC_FULL_VER macro evaluates to 150020706.
+    constexpr int major = _MSC_FULL_VER / 10000000;
+    constexpr int minor = (_MSC_FULL_VER % 10000000) / 100000;
+    constexpr int patch = _MSC_FULL_VER % 100000;
+    constexpr int build = _MSC_BUILD;
+
+   std::ostringstream oss;
+
+   oss << std::setfill('0')
+       << std::setw(2) << major << "."
+       << std::setw(2) << minor << "."
+       << std::setw(5) << patch << "."
+       << std::setw(2) << build
+       << std::endl;
+
+   return oss.str();
+#else
+   return "unknown";
+#endif
+   }
+
+std::string full_compiler_name_string()
+   {
+#if defined(BOTAN_BUILD_COMPILER_IS_CLANG)
+   return "clang";
+#elif defined(BOTAN_BUILD_COMPILER_IS_GCC)
+   return "gcc";
+#elif defined(BOTAN_BUILD_COMPILER_IS_MSVC)
+   return "Microsoft Visual C++";
+#else
+   return "unknown";
+#endif
+   }
 
 std::tm* localtime(const time_t* timer, std::tm *buffer)
    {
@@ -60,7 +104,21 @@ XmlReporter::XmlReporter(const Test_Options& opts, std::string output_dir)
    : Reporter(opts)
    , m_output_dir(std::move(output_dir))
    {
+   std::string command;
+   for(const auto& token : opts.invoked_command())
+      {
+      command += token + " ";
+      }
+   if(!command.empty())
+      command.pop_back(); // get rid of trailing whitespace
+
+   set_property("command", command);
+   set_property("build_configuration", BOTAN_CONFIGURE_COMMAND);
+   set_property("compiler", full_compiler_name_string());
+   set_property("compiler_version", full_compiler_version_string());
+   set_property("architecture", BOTAN_BUILD_ARCHITECTURE);
    set_property("timestamp", format(std::chrono::system_clock::now()));
+
    auto custom_props = opts.report_properties();
    for(const auto& prop : custom_props)
       {

@@ -93,6 +93,7 @@ int main(int argc, char* argv[])
 #endif
 
       const Botan_Tests::Test_Options opts(
+         std::vector<std::string>(argv, argv + argc),
          parser.get_arg_list("suites"),
          parser.get_arg_list("skip-tests"),
          parser.get_arg_or("data-dir", "src/tests/data"),

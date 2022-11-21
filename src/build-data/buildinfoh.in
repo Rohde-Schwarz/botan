@@ -1,0 +1,20 @@
+#ifndef BOTAN_BUILD_INFO_H_
+#define BOTAN_BUILD_INFO_H_
+
+/**
+* @file  build_info.h
+* @brief Build information for Botan %{version}
+*
+* Automatically generated from
+* '%{command_line}'
+*
+* Target
+*  - Compiler: %{cxx} %{cxx_abi_flags} %{cc_lang_flags} %{cc_compile_flags}
+*  - Arch: %{arch}
+*  - OS: %{os}
+*/
+
+#define BOTAN_CONFIGURE_COMMAND "%{command_line_escaped}"
+#define BOTAN_BUILD_ARCHITECTURE "%{arch}"
+
+#endif
