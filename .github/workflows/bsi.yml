@@ -89,4 +89,11 @@ jobs:
           cache-key: bsi-${{ matrix.platform.host_os }}-${{ matrix.platform.compiler }}-${{ matrix.target }}
 
       - name: Build and Test Botan
-        run: python3 ./src/scripts/ci_build.py --with-bsi-policy --cc='${{ matrix.platform.compiler }}' --make-tool='${{ matrix.platform.make_tool }}' ${{ matrix.target }}
+        run: python3 ./src/scripts/ci_build.py --with-bsi-policy --cc='${{ matrix.platform.compiler }}' --make-tool='${{ matrix.platform.make_tool }}' --test-results-dir=junit_reports ${{ matrix.target }}
+
+      - name: Archive Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: junit
+          path: junit_reports/*.xml
+          if-no-files-found: error

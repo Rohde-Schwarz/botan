@@ -28,6 +28,35 @@ def get_concurrency():
     except ImportError:
         return def_concurrency
 
+def human_readable_os_identifier():
+    sysname = platform.system()
+    if sysname == 'Linux':
+        if sys.version_info >= (3, 10):
+            try:
+                return platform.freedesktop_os_release()['PRETTY_NAME'] # pylint: disable=no-member
+            except OSError:
+                pass
+        return sysname
+    elif sysname == 'Windows':
+        winver = platform.win32_ver()
+        # In November 2022 the GitHub Actions image 'windows-2019' was using
+        # Python 3.7 forcing us to fall back in this case.
+        winedition = platform.win32_edition() if sys.version_info >= (3, 8) else ''
+        return "Windows %s %s %s" % (winver[0], winedition, winver[2])
+    elif sysname == 'Darwin':
+        return 'macOS %s' % platform.mac_ver()[0]
+    else:
+        return platform.platform()
+
+def human_readable_os_version():
+    sysname = platform.system()
+    if sysname == 'Windows':
+        return platform.win32_ver()[1]
+    elif sysname == 'Darwin':
+        return 'Darwin %s' % platform.release()
+    else:
+        return platform.release()
+
 def known_targets():
     return [
         'amalgamation',
@@ -125,7 +154,10 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
         def sanitize_kv(some_string):
             return some_string.replace(':', '').replace(',', '')
 
-        report_props = {"ci_target": target, "os": target_os}
+        report_props = {"ci_target":   target,
+                        "os":          target_os,
+                        "os_name":     human_readable_os_identifier(),
+                        "os_version:": human_readable_os_version()}
 
         test_cmd += ['--test-results-dir=%s' % test_results_dir]
         test_cmd += ['--report-properties=%s' %
