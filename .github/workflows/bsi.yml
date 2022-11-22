@@ -61,6 +61,25 @@ jobs:
           path: ${{ matrix.artifacts }}
         if: ${{ matrix.artifacts != '' }}
 
+  tarball:
+    name: "Source Tarball"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Shorten the Git SHA
+        id: vars
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Generate Tarball
+        run: tar -czf botan-${{ steps.vars.outputs.short_sha }}.tar.gz .github doc src configure.py license.txt news.rst readme.rst
+
+      - name: Archive Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: "Botan Source Tarball"
+          path: botan-*.tar.gz
+
   bsi_tests:
     name: "BSI Build Policy Tests"
     strategy:
