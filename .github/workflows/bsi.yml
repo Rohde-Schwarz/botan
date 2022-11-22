@@ -91,9 +91,46 @@ jobs:
       - name: Build and Test Botan
         run: python3 ./src/scripts/ci_build.py --with-bsi-policy --cc='${{ matrix.platform.compiler }}' --make-tool='${{ matrix.platform.make_tool }}' --test-results-dir=junit_reports ${{ matrix.target }}
 
-      - name: Archive Artifacts
+      - name: Store JUnit Report
         uses: actions/upload-artifact@v3
+        if: always()
         with:
           name: junit
           path: junit_reports/*.xml
+          if-no-files-found: error
+
+  test_report:
+    name: "Generate Test Report"
+    needs: bsi_tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Shorten the Git SHA
+        id: vars
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Setup Build Agent
+        uses: ./.github/actions/setup-build-agent
+        with:
+          target: test-report
+
+      - name: Fetch JUnit Reports
+        uses: actions/download-artifact@v3
+        with:
+          name: junit
+          path: junit_reports
+
+      - name: Generate Test Report
+        run: |
+             python3 ./src/scripts/bsi_test_report.py --preamble doc/report_assets/testreport_preamble.rst --format=rst junit_reports test-report-${{ steps.vars.outputs.short_sha }}.rst
+             python3 ./src/scripts/bsi_test_report.py --preamble doc/report_assets/testreport_preamble.rst --format=pdf junit_reports test-report-${{ steps.vars.outputs.short_sha }}.pdf
+
+      - name: Store Test Report
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: Test Report
+          path: test-report-*.*
           if-no-files-found: error

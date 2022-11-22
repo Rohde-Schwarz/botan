@@ -92,6 +92,10 @@ if type -p "apt-get"; then
         if [ "$TARGET" = "pdf_docs" ]; then
             sudo apt-get -qq install latexmk texlive-latex-extra
         fi
+
+    elif [ "$TARGET" = "test-report" ]; then
+        sudo apt-get -qq install pandoc python3-pypandoc texlive-latex-extra python3-junitparser
+
     fi
 else
     export HOMEBREW_NO_AUTO_UPDATE=1
