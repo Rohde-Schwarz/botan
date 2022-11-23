@@ -130,7 +130,7 @@ jobs:
         include:
           - target: coverage
             compiler: gcc
-            host_os: ubuntu-latest
+            host_os: ubuntu-20.04
           - target: valgrind
             compiler: gcc
             host_os: ubuntu-latest
@@ -155,7 +155,7 @@ jobs:
             make_tool: jom
           - target: lint
             compiler: gcc
-            host_os: ubuntu-latest
+            host_os: ubuntu-20.04
           - target: static
             compiler: gcc
             host_os: windows-latest
@@ -190,7 +190,7 @@ jobs:
             host_os: ubuntu-latest
           - target: cross-ppc64
             compiler: gcc
-            host_os: ubuntu-latest
+            host_os: ubuntu-20.04
           - target: cross-android-arm32
             compiler: clang
             host_os: ubuntu-latest

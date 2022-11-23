@@ -35,11 +35,11 @@ jobs:
             artifacts: |
               build/docs/handbook/botan.pdf
               build/docs/doxygen/
-            host_os: ubuntu-latest
+            host_os: ubuntu-20.04
           - jobname: Coverage Report
             target: coverage
             artifacts: lcov-out/
-            host_os: ubuntu-latest
+            host_os: ubuntu-20.04
 
     runs-on: ${{ matrix.host_os }}
     steps:
