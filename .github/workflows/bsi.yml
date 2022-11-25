@@ -143,8 +143,8 @@ jobs:
 
       - name: Generate Test Report
         run: |
-             python3 ./src/scripts/bsi_test_report.py --preamble doc/report_assets/testreport_preamble.rst --format=rst junit_reports test-report-${{ steps.vars.outputs.short_sha }}.rst
-             python3 ./src/scripts/bsi_test_report.py --preamble doc/report_assets/testreport_preamble.rst --format=pdf junit_reports test-report-${{ steps.vars.outputs.short_sha }}.pdf
+             python3 ./src/scripts/bsi_test_report.py --preamble doc/report_assets/testreport_preamble.rst --git-refname ${{ github.ref_name }} --git-refsha ${{ github.sha }} --format=rst junit_reports test-report-${{ steps.vars.outputs.short_sha }}.rst
+             python3 ./src/scripts/bsi_test_report.py --preamble doc/report_assets/testreport_preamble.rst --git-refname ${{ github.ref_name }} --git-refsha ${{ github.sha }} --format=pdf junit_reports test-report-${{ steps.vars.outputs.short_sha }}.pdf
 
       - name: Store Test Report
         uses: actions/upload-artifact@v3

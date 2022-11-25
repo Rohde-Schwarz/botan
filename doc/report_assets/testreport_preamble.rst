@@ -2,6 +2,22 @@
 Botan Test Report
 =================
 
+.. list-table::
+   :header-rows: 0
+
+   * - Botan Version
+     - %{botan_version}
+   * - Git Revision
+     - %{botan_git_sha}
+   * - Git Reference
+     - %{botan_git_ref}
+   * - Generation Date
+     - %{date_today}
+
+.. raw:: latex
+
+   \pagebreak
+
 Preface
 =======
 

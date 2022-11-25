@@ -4,11 +4,54 @@ import sys
 import os
 import glob
 import argparse
+import re
 from itertools import chain
 from functools import reduce
-from datetime import datetime
+from datetime import datetime, date
 
 import junitparser
+
+
+def parse_version_file(version_path):
+    key_and_val = re.compile(r"^([a-z_]*) = (?:'([^']*)'|([a-zA-Z0-9:\-]+))$")
+
+    results = {}
+    with open(version_path, encoding='utf-8') as version_file:
+        for line in version_file.readlines():
+            match = key_and_val.match(line)
+            if not match:
+                continue
+
+            key = match.group(1)
+            strval = match.group(2)
+            intval = match.group(3)
+            assert (strval == None) ^ (intval == None)
+
+            if strval is not None:
+                results[key] = strval
+            elif intval == 'None':
+                results[key] = None
+            else:
+                results[key] = int(intval)
+
+    return results
+
+
+def get_botan_version_string():
+    kv = parse_version_file(os.path.join(
+        os.path.dirname(__file__), '../build-data/version.txt'))
+    return '%d.%d.%d%s' % (kv['release_major'], kv['release_minor'], kv['release_patch'], kv['release_suffix'])
+
+
+def apply_template_variables(template, vars):
+    value_pattern = re.compile(r'%{([a-z][a-z_0-9]+)}')
+
+    def insert_value(match):
+        v = match.group(1)
+        if v in vars:
+            return str(vars[v])
+        raise KeyError(v)
+    return value_pattern.sub(insert_value, template)
 
 
 class Testsuites(junitparser.JUnitXml):
@@ -31,7 +74,8 @@ class Testsuites(junitparser.JUnitXml):
 
     @property
     def platform(self):
-        known_platforms = {'linux': 'Linux', 'osx': 'macOS', 'windows': 'Windows', 'freebsd': 'FreeBSD'}
+        known_platforms = {'linux': 'Linux', 'osx': 'macOS',
+                           'windows': 'Windows', 'freebsd': 'FreeBSD'}
         osstr = self.get_property("os")
         return known_platforms[osstr] if osstr in known_platforms else 'Unknown System'
 
@@ -113,7 +157,8 @@ class Testsuites(junitparser.JUnitXml):
 
     def render(self):
         rst = '\n'.join([
-            '.. list-table:: %s %s %s' % (self.os, self.compiler, self.build_target),
+            '.. list-table:: %s %s %s' % (self.os,
+                                          self.compiler, self.build_target),
             '  :widths: 20 80',
             '  :header-rows: 0'])
         rst += '\n\n'
@@ -139,13 +184,8 @@ class Testsuites(junitparser.JUnitXml):
 
 
 class Report:
-    def __init__(self, report_files, preamble_file=None):
-        if preamble_file:
-            with open(preamble_file) as f:
-                self.preamble = f.read()
-        else:
-            self.preamble = self._headline("Botan Test Report")
-
+    def __init__(self, report_files, args):
+        self._prepare_preamble(args)
         self.reports = [Testsuites.fromfile(report) for report in report_files]
         self.reports.sort(key=lambda x: x.platform +
                           x.os_version, reverse=True)
@@ -169,6 +209,20 @@ class Report:
                           '',
                           '   \pagebreak',
                           ''])
+
+    def _prepare_preamble(self, args):
+        if args.preamble:
+            with open(args.preamble) as f:
+                self.preamble = f.read()
+        else:
+            self.preamble = self._headline("Botan Test Report")
+
+        self.preamble = apply_template_variables(self.preamble, {
+            'botan_version': get_botan_version_string(),
+            'botan_git_sha': args.git_refsha or 'Unknown',
+            'botan_git_ref': args.git_refname or 'Unknown',
+            'date_today':    date.today()
+        })
 
     def _render_rst(self):
         current_chapter = ""
@@ -206,6 +260,10 @@ def main():
                         help='Output format of the report file')
     parser.add_argument('--preamble', default=None,
                         help='Input file containing reStructuredText that should be added before the generated report')
+    parser.add_argument('--git-refname', default=None,
+                        help='Reference string to identify the respective source revision (e.g. tag or branch name)')
+    parser.add_argument('--git-refsha', default=None,
+                        help='Reference commit SHA to identify the respective source revision')
 
     args = parser.parse_args()
 
@@ -216,7 +274,7 @@ def main():
     if not report_files:
         raise Exception("Did not find any junit reports")
 
-    report = Report(report_files, args.preamble)
+    report = Report(report_files, args)
     report.render(args.reportfile, format=args.format)
 
     return 0
