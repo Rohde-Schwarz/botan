@@ -4,11 +4,11 @@ Botan: Crypto and TLS for C++11
 The `German Federal Office for Information Security (BSI) <https://www.bsi.bund.de/EN/>`_
 carried out a project "Secure Implementation of a Universal Crypto Library"
 in which it analyzed open source cryptographic libraries and developed a secure
-cryptographic library based on the `Botan <https://botan.randombit.org>`_ cryptographic library.
+cryptographic library based on the `Botan <https://botan.randombit.net>`_ cryptographic library.
 Botan 2.0 satisfies the basic requirements of the BSI and
 its use is recommended in security products. The library includes all algorithms 
-recommended by BSI technical guidelines `02102-1 <https://www.bsi.bund.de/DE/Publikationen/TechnischeRichtlinien/tr02102/index_htm.html>`_,
-`02102-2 <https://www.bsi.bund.de/DE/Publikationen/TechnischeRichtlinien/tr02102/index_htm.html>`_ and `03111 <https://www.bsi.bund.de/DE/Publikationen/TechnischeRichtlinien/tr03111/index_htm.html>`_.
+recommended by BSI technical guidelines `02102-1 <https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr02102/tr02102_node.html>`_,
+`02102-2 <https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr02102/tr02102_node.html>`_ and `03111 <https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03111/TR-03111_node.html>`_.
 Botan is licensed under the Simplified BSD license and can therefore be freely 
 used in open source as well as commercial software.
 
@@ -31,9 +31,6 @@ New Botan releases will be audited on a regular basis and cryptographically rele
 changes will be checked and documented. These releases will eventually be
 released here when approved by the BSI.
 
-New releases are also announced on the botan-bsi-announce@rohde-schwarz.com mailing list.
-Subscribe by sending an email to botan-bsi-announce-register@rohde-schwarz.com.
-
 Release Downloads
 ----------------------------------------
 
@@ -41,8 +38,10 @@ The latest version is `2.4.0-RSCS1 <https://cdn.rohde-schwarz.com/pws/dl_downloa
 
 `SHA-256 <https://cdn.rohde-schwarz.com/pws/dl_downloads/dl_software/sha256/Cybersecurity-software-Botan-2.4.0-RSCS1.zip.sha256>`_: EADC9A20FBE6AF4725CBA26B0636C1244083BAF4F936A129AF498D056EACBF75
 
-All approved releases are signed with the following `key <https://cybersecurity.rohde-schwarz.com/sites/default/files/sha_downloads/Botan-Signing-Key.pem>`_ (`cert <https://cybersecurity.rohde-schwarz.com/sites/default/files/sha_downloads/Botan-Signing-Cert.pem>`_)::
+All approved releases are signed with the following key::
 
+  Botan-Signing-Key.pem
+  
   -----BEGIN PUBLIC KEY-----
   MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyGKrzmfZhGuIaMXGZ56x
   yKtzTuvDrK50edCd1/EccVtS1V/52bmM/mfWaTCvUKUd+BlKw544L+hEaMdoGMvj
@@ -120,7 +119,7 @@ TLS
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Botan contains a TLS Policy class `BSI_TR_02102_2 <src/lib/tls/tls_policy.h>`_ that only allows the algorithms recommended in
-BSI technical guideline `02102-2 <https://www.bsi.bund.de/DE/Publikationen/TechnischeRichtlinien/tr02102/index_htm.html>`_.
+BSI technical guideline `02102-2 <https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr02102/tr02102_node.html>`_.
 This policy can be passed whereever a ``TLS_Policy`` reference is accepted by the API.
 For more information, see the `handbook <https://botan.randombit.net/handbook/api_ref/tls.html>`_.
 
@@ -128,7 +127,7 @@ For more information, see the `handbook <https://botan.randombit.net/handbook/ap
 Random Number Generation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Botan contains an implementation of `NIST SP 800-90A <https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-90Ar1.pdf>`_'s `HMAC_DRBG <src/lib/rng/hmac_drbg.h>`_.
+Botan contains an implementation of `NIST SP 800-90A <https://csrc.nist.gov/publications/detail/sp/800-90a/rev-1/final>`_'s `HMAC_DRBG <src/lib/rng/hmac_drbg/hmac_drbg.h>`_.
 The parameters reseed interval, maximum number of bytes per request and the entropy source(s) for
 seeding and reseeding can be configured per ``HMAC_DRBG`` instance. For example,
 a ``PKCS11_RNG`` can be used as an entropy source::
