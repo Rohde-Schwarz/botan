@@ -39,8 +39,6 @@ The latest version is `2.4.0-RSCS1 <https://cdn.rohde-schwarz.com/pws/dl_downloa
 `SHA-256 <https://cdn.rohde-schwarz.com/pws/dl_downloads/dl_software/sha256/Cybersecurity-software-Botan-2.4.0-RSCS1.zip.sha256>`_: EADC9A20FBE6AF4725CBA26B0636C1244083BAF4F936A129AF498D056EACBF75
 
 All approved releases are signed with the following key::
-
-  Botan-Signing-Key.pem
   
   -----BEGIN PUBLIC KEY-----
   MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyGKrzmfZhGuIaMXGZ56x
@@ -59,7 +57,7 @@ All approved releases are signed with the following key::
 
 The SHA-256 public key fingerprint is B1B688ED5FD24ACD53E73BE74A5279916471B2A9C80BC33AA9A7EDC58A715CF0.
 
-Verify the release signature using Botan::
+Verify the release signature using Botan (where the public key listed above is referred to as *Botan-Signing-Key.pem*)::
 
   $ botan verify --hash=SHA-512 --emsa=EMSA4 Botan-Signing-Key.pem Cybersecurity-software-Botan-2.4.0-RSCS1.zip Cybersecurity-software-Botan-2.4.0-RSCS1.zip.sig
   Signature is valid
