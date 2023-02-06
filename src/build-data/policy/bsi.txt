@@ -25,6 +25,7 @@ gmac
 kdf1_iso18033
 sp800_108
 sp800_56c
+hkdf
 
 # pk_pad
 eme_oaep
@@ -130,7 +131,6 @@ salsa20
 shake_cipher
 
 # kdf
-hkdf
 kdf1
 kdf2
 prf_x942
