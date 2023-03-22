@@ -35,7 +35,7 @@ namespace {
 #if defined(BOTAN_TARGET_OS_HAS_STL_FILESYSTEM_MSVC) && defined(BOTAN_BUILD_COMPILER_IS_MSVC)
 std::vector<std::string> impl_stl_filesystem(const std::string& dir)
    {
-   using namespace std::tr2::sys;
+   using namespace std::filesystem;
 
    std::vector<std::string> out;
 
