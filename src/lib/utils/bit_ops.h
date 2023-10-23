@@ -119,6 +119,14 @@ inline constexpr size_t ctz(T n)
 }
 
 template <typename T>
+inline constexpr T floor_log2(T n)
+   requires(std::is_unsigned<T>::value)
+{
+   BOTAN_ARG_CHECK(n != 0, "log2(0) is not defined");
+   return high_bit(n) - 1;
+}
+
+template <typename T>
 constexpr uint8_t ceil_log2(T x)
    requires(std::is_integral<T>::value && sizeof(T) < 32)
 {

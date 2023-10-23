@@ -74,7 +74,8 @@ class Test_Options {
                    bool run_online_tests,
                    bool run_long_tests,
                    bool run_memory_intensive_tests,
-                   bool abort_on_first_fail) :
+                   bool abort_on_first_fail,
+                   bool no_stdout) :
             m_requested_tests(requested_tests),
             m_skip_tests(skip_tests.begin(), skip_tests.end()),
             m_data_dir(data_dir),
@@ -90,7 +91,8 @@ class Test_Options {
             m_run_online_tests(run_online_tests),
             m_run_long_tests(run_long_tests),
             m_run_memory_intensive_tests(run_memory_intensive_tests),
-            m_abort_on_first_fail(abort_on_first_fail) {}
+            m_abort_on_first_fail(abort_on_first_fail),
+            m_no_stdout(no_stdout) {}
 
       const std::vector<std::string>& requested_tests() const { return m_requested_tests; }
 
@@ -122,6 +124,8 @@ class Test_Options {
 
       bool abort_on_first_fail() const { return m_abort_on_first_fail; }
 
+      bool no_stdout() const { return m_no_stdout; }
+
       bool verbose() const { return m_verbose; }
 
    private:
@@ -141,6 +145,7 @@ class Test_Options {
       bool m_run_long_tests;
       bool m_run_memory_intensive_tests;
       bool m_abort_on_first_fail;
+      bool m_no_stdout;
 };
 
 namespace detail {
