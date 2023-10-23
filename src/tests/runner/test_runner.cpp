@@ -73,7 +73,9 @@ class Testsuite_RNG final : public Botan::RandomNumberGenerator {
 }  // namespace
 
 bool Test_Runner::run(const Test_Options& opts) {
-   m_reporters.emplace_back(std::make_unique<StdoutReporter>(opts, output()));
+   if(!opts.no_stdout()) {
+      m_reporters.emplace_back(std::make_unique<StdoutReporter>(opts, output()));
+   }
    if(!opts.xml_results_dir().empty()) {
 #if defined(BOTAN_TARGET_OS_HAS_FILESYSTEM)
       m_reporters.emplace_back(std::make_unique<XmlReporter>(opts, opts.xml_results_dir()));
