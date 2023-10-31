@@ -69,17 +69,20 @@ def get_openssl_version(openssl):
 def get_botan_version(botan):
     return run_command([botan, 'version']).strip()
 
-EVP_MAP = {
-    'AES-128/GCM': 'aes-128-gcm',
-    'AES-256/GCM': 'aes-256-gcm',
-    'ChaCha20': 'chacha20',
-    'MD5': 'md5',
-    'SHA-1': 'sha1',
-    'RIPEMD-160': 'ripemd160',
-    'SHA-256': 'sha256',
-    'SHA-384': 'sha384',
-    'SHA-512': 'sha512'
+HASH_EVP_MAP = {
+    # 'AES-128/GCM': 'aes-128-gcm',
+    # 'AES-256/GCM': 'aes-256-gcm',
+    # 'ChaCha20': 'chacha20',
+    # 'SHA-1': 'sha1',
+    # 'SHA-256': 'sha256',
+    # 'SHA-384': 'sha384',
+    # 'SHA-512': 'sha512',
+    # 'SHA-3(256)': 'sha3-256',
     }
+
+SIGNATURE_EVP_MAP = {
+    'RSA': 'rsa',
+}
 
 def run_openssl_bench(openssl, algo):
 
@@ -87,39 +90,72 @@ def run_openssl_bench(openssl, algo):
 
     cmd = [openssl, 'speed', '-seconds', '1', '-mr']
 
-    if algo in EVP_MAP:
-        cmd += ['-evp', EVP_MAP[algo]]
+    if algo in HASH_EVP_MAP:
+        cmd += ['-evp', HASH_EVP_MAP[algo]]
+    elif algo in SIGNATURE_EVP_MAP:
+        cmd += [SIGNATURE_EVP_MAP[algo]]
     else:
         cmd += [algo]
 
     output = run_command(cmd)
-
-    buf_header = re.compile(r'\+DT:([a-zA-Z0-9-]+):([0-9]+):([0-9]+)$')
-    res_header = re.compile(r'\+R:([0-9]+):[a-zA-Z0-9-]+:([0-9]+\.[0-9]+)$')
-    ignored = re.compile(r'\+(H|F):.*')
-
     results = []
 
-    result = {}
+    if algo in HASH_EVP_MAP:
+        buf_header = re.compile(r'\+DT:([a-zA-Z0-9-]+):([0-9]+):([0-9]+)$')
+        res_header = re.compile(r'\+R:([0-9]+):[a-zA-Z0-9-]+:([0-9]+\.[0-9]+)$')
+        ignored = re.compile(r'\+(H|F):.*')
 
-    for l in output.splitlines():
-        if ignored.match(l):
-            continue
+        result = {}
 
-        if not result:
-            match = buf_header.match(l)
-            if match is None:
-                logging.error("Unexpected output from OpenSSL %s", l)
+        for l in output.splitlines():
+            if ignored.match(l):
+                continue
 
-            result = {'algo': algo, 'buf_size': int(match.group(3))}
-        else:
-            match = res_header.match(l)
+            if not result:
+                match = buf_header.match(l)
+                if match is None:
+                    logging.error("Unexpected output from OpenSSL %s", l)
 
-            result['bytes'] = int(match.group(1)) * result['buf_size']
-            result['runtime'] = float(match.group(2))
-            result['bps'] = int(result['bytes'] / result['runtime'])
-            results.append(result)
-            result = {}
+                result = {'algo': algo, 'buf_size': int(match.group(3))}
+            else:
+                match = res_header.match(l)
+
+                result['bytes'] = int(match.group(1)) * result['buf_size']
+                result['runtime'] = float(match.group(2))
+                result['bps'] = int(result['bytes'] / result['runtime'])
+                results.append(result)
+                result = {}
+    elif algo in SIGNATURE_EVP_MAP:
+        # +R1:35086:512:1.02
+        # +R2:562312:512:1.02
+        signature_ops = re.compile(r'\+R1:([0-9]+):([0-9]+):([0-9]+\.[0-9]+)$')
+        verify_ops = re.compile(r'\+R2:([0-9]+):([0-9]+):([0-9]+\.[0-9]+)$')
+        ignored = re.compile(r'\+(DTP|F2):.*')
+
+        result = {}
+
+        for l in output.splitlines():
+            if ignored.match(l):
+                continue
+
+            if not result:
+                match = signature_ops.match(l)
+                if match is None:
+                    logging.error("Unexpected output from OpenSSL %s", l)
+
+                result = {'algo': algo,
+                          'key_size': int(match.group(2)),
+                          'sig_ops': int(match.group(1)),
+                          'sig_runtime': float(match.group(3))}
+            else:
+                match = verify_ops.match(l)
+                if match is None:
+                    logging.error("Unexpected output from OpenSSL %s", l)
+
+                result['verify_ops'] = int(match.group(1))
+                result['verify_runtime'] = float(match.group(3))
+                results.append(result)
+                result = {}
 
     return results
 
@@ -131,8 +167,28 @@ def run_botan_bench(botan, runtime, buf_sizes, algo):
 
     return output
 
+def run_botan_signature_bench(botan, runtime, algo):
+    cmd = [botan, 'speed', '--format=json', '--msec=%d' % int(runtime * 1000), algo]
+    output = run_command(cmd)
+    output = json.loads(output)
+
+    results = []
+    for verify in output:
+        for sign in output:
+            if sign['op'] == 'sign' and verify['op'] == 'verify' and verify['algo'] == sign['algo']:
+                results.append({
+                    'algo': algo,
+                    'sig_ops': sign['events'],
+                    'sig_runtime': sign['nanos'] / 1000 / 1000 / 1000,
+                    'verify_ops': verify['events'],
+                    'verify_runtime': verify['nanos'] / 1000 / 1000 / 1000,
+                    'key_size': int(re.search(r'RSA-([0-9]+) .*', sign['algo']).group(1)),
+                })
+
+    return results
+
 class BenchmarkResult:
-    def __init__(self, algo, buf_sizes, openssl_results, botan_results):
+    def __init__(self, algo, sizes, openssl_results, botan_results):
         self.algo = algo
         self.results = {}
 
@@ -140,12 +196,14 @@ class BenchmarkResult:
             for r in results:
                 if 'buf_size' in r and r['buf_size'] == sz:
                     return r['bps']
+                if 'key_size' in r and r['key_size'] == sz:
+                    return (r['sig_ops'], r['verify_ops'])
             raise Exception("Could not find expected result in data")
 
-        for buf_size in buf_sizes:
-            self.results[buf_size] = {
-                'openssl': find_result(openssl_results, buf_size),
-                'botan': find_result(botan_results, buf_size)
+        for size in sizes:
+            self.results[size] = {
+                'openssl': find_result(openssl_results, size),
+                'botan': find_result(botan_results, size)
             }
 
     def result_string(self):
@@ -173,6 +231,17 @@ def bench_algo(openssl, botan, algo):
     botan_results = run_botan_bench(botan, runtime, buf_sizes, algo)
 
     return BenchmarkResult(algo, buf_sizes, openssl_results, botan_results)
+
+def bench_signature_algo(openssl, botan, algo):
+    openssl_results = run_openssl_bench(openssl, algo)
+
+    runtime = sum(x['verify_runtime'] + x['sig_runtime'] for x in openssl_results) / (len(openssl_results) * 2)
+    botan_results = run_botan_signature_bench(botan, runtime, algo)
+
+    kszs_ossl = {x['key_size'] for x in openssl_results}
+    kszs_botan = {x['key_size'] for x in botan_results}
+
+    return BenchmarkResult(algo, kszs_ossl.intersection(kszs_botan), openssl_results, botan_results)
 
 def main(args=None):
     if args is None:
@@ -209,9 +278,11 @@ def main(args=None):
 
     logging.info("Comparing Botan %s with OpenSSL %s", botan_version, openssl_version)
 
-    for algo in sorted(EVP_MAP.keys()):
-        result = bench_algo(openssl, botan, algo)
-        print(result.result_string())
+    # for algo in sorted(HASH_EVP_MAP.keys()):
+    #     result = bench_algo(openssl, botan, algo)
+    #     print(result.result_string())
+
+    print(bench_signature_algo(openssl, botan, "RSA").result_string())
 
 
     return 0
