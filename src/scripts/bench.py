@@ -138,24 +138,23 @@ def run_openssl_bench(openssl, algo):
             if ignored.match(l):
                 continue
 
-            if not result:
-                match = signature_ops.match(l)
-                if match is None:
-                    logging.error("Unexpected output from OpenSSL %s", l)
-
-                result = {'algo': algo,
-                          'key_size': int(match.group(2)),
-                          'sig_ops': int(match.group(1)),
-                          'sig_runtime': float(match.group(3))}
+            if match := signature_ops.match(l):
+                results.append({
+                    'algo': algo,
+                    'key_size': int(match.group(2)),
+                    'op': 'sign',
+                    'ops': int(match.group(1)),
+                    'runtime': float(match.group(3))})
+            elif match := verify_ops.match(l):
+                results.append({
+                    'algo': algo,
+                    'key_size': int(match.group(2)),
+                    'op': 'verify',
+                    'ops': int(match.group(1)),
+                    'runtime': float(match.group(3))
+                })
             else:
-                match = verify_ops.match(l)
-                if match is None:
-                    logging.error("Unexpected output from OpenSSL %s", l)
-
-                result['verify_ops'] = int(match.group(1))
-                result['verify_runtime'] = float(match.group(3))
-                results.append(result)
-                result = {}
+                logging.error("Unexpected output from OpenSSL %s", l)
 
     return results
 
@@ -235,7 +234,7 @@ def bench_algo(openssl, botan, algo):
 def bench_signature_algo(openssl, botan, algo):
     openssl_results = run_openssl_bench(openssl, algo)
 
-    runtime = sum(x['verify_runtime'] + x['sig_runtime'] for x in openssl_results) / (len(openssl_results) * 2)
+    runtime = sum(x['runtime'] for x in openssl_results) / len(openssl_results)
     botan_results = run_botan_signature_bench(botan, runtime, algo)
 
     kszs_ossl = {x['key_size'] for x in openssl_results}
