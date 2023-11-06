@@ -256,8 +256,12 @@ class AsyncHandshakeOperation : public AsyncBase<Handler, typename Stream::execu
                ec = std::exchange(m_stashed_ec, {});
             }
 
-            if(ec == boost::asio::error::eof) {
+            if(ec == boost::asio::error::eof && !m_stream.native_handle()->is_closed_for_reading()) {
                ec = StreamError::StreamTruncated;
+            }
+
+            if(!ec && m_stream.native_handle()->is_closed_for_reading()) {
+               ec = boost::asio::error::eof;
             }
 
             if(!ec && bytesTransferred > 0) {

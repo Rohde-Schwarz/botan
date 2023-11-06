@@ -344,7 +344,7 @@ class Stream {
             send_pending_encrypted_data(ec);
          }
 
-         while(!native_handle()->is_handshake_complete() && !ec) {
+         while(!ec && !native_handle()->is_handshake_complete() && !native_handle()->is_closed_for_reading()) {
             boost::asio::const_buffer read_buffer{input_buffer().data(), m_nextLayer.read_some(input_buffer(), ec)};
             if(ec) {
                return;
@@ -361,6 +361,12 @@ class Stream {
                send_pending_encrypted_data(send_ec);
                ec = (send_ec) ? send_ec : ec;
             }
+         }
+
+         // If the peer decided to abort the handshake with a close_notify, we
+         // let the application know by reporting EOF on the stream.
+         if(!ec && !native_handle()->is_active()) {
+            ec = boost::asio::error::eof;
          }
       }
 

@@ -57,6 +57,8 @@ class MockChannel {
 
       bool is_handshake_complete() const { return m_active; }
 
+      bool is_closed_for_reading() const { return !m_active; }
+
    private:
       std::shared_ptr<Botan::TLS::Callbacks> m_callbacks;
       std::size_t m_bytes_till_complete_record;  // number of bytes still to read before tls record is completed
