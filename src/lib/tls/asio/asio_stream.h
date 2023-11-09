@@ -59,7 +59,7 @@ class StreamCallbacks : public Callbacks {
    public:
       StreamCallbacks() {}
 
-      void tls_emit_data(std::span<const uint8_t> data) final {
+      void tls_emit_data(std::span<const uint8_t> data) override {
          m_send_buffer.commit(boost::asio::buffer_copy(m_send_buffer.prepare(data.size()),
                                                        boost::asio::buffer(data.data(), data.size())));
       }
@@ -344,7 +344,7 @@ class Stream {
             send_pending_encrypted_data(ec);
          }
 
-         while(!ec && !native_handle()->is_handshake_complete() && !native_handle()->is_closed_for_reading()) {
+         while(!ec && !native_handle()->is_handshake_complete()) {
             boost::asio::const_buffer read_buffer{input_buffer().data(), m_nextLayer.read_some(input_buffer(), ec)};
             if(ec) {
                return;

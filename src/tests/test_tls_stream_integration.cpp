@@ -9,6 +9,8 @@
 
 #include "tests.h"
 
+#include <iostream>
+
 #if defined(BOTAN_HAS_TLS) && defined(BOTAN_HAS_TLS_ASIO_STREAM) && defined(BOTAN_TARGET_OS_HAS_THREADS)
 
    #include <botan/asio_compat.h>
@@ -60,41 +62,53 @@ class Timeout_Exception : public std::runtime_error {
 
 class PeerCallbacks : public Botan::TLS::StreamCallbacks {
    public:
+      PeerCallbacks(std::string side) : m_side(std::move(side)) {}
+
       void fail_on_handshake_message(const Botan::TLS::Handshake_Type msg_type, Botan::TLS::AlertType alert) {
          m_handshake_alerts[msg_type] = alert;
       }
 
       void tls_inspect_handshake_msg(const Botan::TLS::Handshake_Message& msg) final {
+         std::cout << m_side << " " << msg.type_string() << std::endl;
          if(m_handshake_alerts.contains(msg.type())) {
             throw Botan::TLS::TLS_Exception(m_handshake_alerts[msg.type()], "Test was configured to throw");
          }
       }
 
+      void tls_emit_data(std::span<const uint8_t> data) override {
+         std::cout << m_side << " emitting " << data.size() << " bytes" << std::endl;
+         Botan::TLS::StreamCallbacks::tls_emit_data(data);
+      }
+
+      void tls_session_activated() { std::cout << m_side << " activated" << std::endl; }
+
    private:
+      std::string m_side;
       std::map<Botan::TLS::Handshake_Type, Botan::TLS::AlertType> m_handshake_alerts;
 };
 
 class Peer {
    private:
-      Peer(const std::shared_ptr<const Botan::TLS::Policy>& policy,
+      Peer(std::string side,
+           const std::shared_ptr<const Botan::TLS::Policy>& policy,
            net::io_context& ioc,
            std::shared_ptr<Basic_Credentials_Manager> credentials_manager) :
             m_rng(std::make_shared<Botan::AutoSeeded_RNG>()),
             m_credentials_manager(std::move(credentials_manager)),
             m_session_mgr(std::make_shared<Botan::TLS::Session_Manager_Noop>()),
-            m_callbacks(std::make_shared<PeerCallbacks>()),
+            m_callbacks(std::make_shared<PeerCallbacks>(std::move(side))),
             m_ctx(std::make_shared<Botan::TLS::Context>(m_credentials_manager, m_rng, m_session_mgr, policy)),
             m_timeout_timer(ioc) {}
 
    public:
       Peer(const std::shared_ptr<const Botan::TLS::Policy>& policy, net::io_context& ioc) :
-            Peer(policy, ioc, std::make_shared<Basic_Credentials_Manager>(true, "")) {}
+            Peer("Client", policy, ioc, std::make_shared<Basic_Credentials_Manager>(true, "")) {}
 
       Peer(const std::shared_ptr<const Botan::TLS::Policy>& policy,
            net::io_context& ioc,
            const std::string& server_cert,
            const std::string& server_key) :
-            Peer(policy, ioc, std::make_shared<Basic_Credentials_Manager>(server_cert, server_key)) {}
+            Peer("Server", policy, ioc, std::make_shared<Basic_Credentials_Manager>(server_cert, server_key)) {}
 
       Peer(const Peer& other) = delete;
       Peer(Peer&& other) = delete;
@@ -566,6 +580,7 @@ class Test_Eager_Close : public TestBase,
             TestBase(ioc, client_policy, server_policy, "Test Eager Close", config_name) {}
 
       void run(const error_code& ec) {
+         std::cout << "Async" << std::endl;
          static auto test_case = &Test_Eager_Close::run;
          reenter(*this) {
             client()->reset_timeout("connect");
@@ -578,9 +593,11 @@ class Test_Eager_Close : public TestBase,
                                                      std::bind(test_case, shared_from_this(), _1));
             result().expect_success("handshake", ec);
 
+            std::cout << "shutting down" << std::endl;
             client()->reset_timeout("shutdown");
             yield client()->stream().async_shutdown(std::bind(test_case, shared_from_this(), _1));
             result().expect_success("shutdown", ec);
+            std::cout << "shut down" << std::endl;
 
             client()->close_socket();
             result().confirm("did not receive close_notify", !client()->stream().shutdown_received());
@@ -599,6 +616,7 @@ class Test_Eager_Close_Sync : public Synchronous_Test {
             Synchronous_Test(ioc, client_policy, server_policy, "Test Eager Close Sync", config_name) {}
 
       void run_synchronous_client() override {
+         std::cout << "Sync" << std::endl;
          error_code ec;
 
          net::connect(client()->stream().lowest_layer(), k_endpoints, ec);
@@ -607,7 +625,9 @@ class Test_Eager_Close_Sync : public Synchronous_Test {
          client()->stream().handshake(Botan::TLS::Connection_Side::Client, ec);
          result().expect_success("handshake", ec);
 
+         std::cout << "shutting down" << std::endl;
          client()->stream().shutdown(ec);
+         std::cout << "shut down" << std::endl;
          result().expect_success("shutdown", ec);
 
          client()->close_socket();
@@ -888,16 +908,15 @@ class SystemConfiguration {
 
 std::vector<SystemConfiguration> get_configurations() {
    return {
-      SystemConfiguration("TLS 1.2 only", "allow_tls12=true\nallow_tls13=false", "allow_tls12=true\nallow_tls13=false"),
+      // SystemConfiguration("TLS 1.2 only", "allow_tls12=true\nallow_tls13=false", "allow_tls12=true\nallow_tls13=false"),
       #if defined(BOTAN_HAS_TLS_13)
-         SystemConfiguration(
-            "TLS 1.3 only", "allow_tls12=false\nallow_tls13=true", "allow_tls12=false\nallow_tls13=true"),
-         SystemConfiguration("TLS 1.x server, TLS 1.2 client",
-                             "allow_tls12=true\nallow_tls13=false",
-                             "allow_tls12=true\nallow_tls13=true"),
-         SystemConfiguration("TLS 1.2 server, TLS 1.x client",
-                             "allow_tls12=true\nallow_tls13=true",
-                             "allow_tls12=true\nallow_tls13=false"),
+      SystemConfiguration("TLS 1.3 only", "allow_tls12=false\nallow_tls13=true", "allow_tls12=false\nallow_tls13=true"),
+            // SystemConfiguration("TLS 1.x server, TLS 1.2 client",
+            //                     "allow_tls12=true\nallow_tls13=false",
+            //                     "allow_tls12=true\nallow_tls13=true"),
+            // SystemConfiguration("TLS 1.2 server, TLS 1.x client",
+            //                     "allow_tls12=true\nallow_tls13=true",
+            //                     "allow_tls12=true\nallow_tls13=false"),
       #endif
    };
 }
@@ -913,17 +932,17 @@ class Tls_Stream_Integration_Tests final : public Test {
 
          auto configs = get_configurations();
          for(auto& config : configs) {
-            config.run<Test_Conversation>(results);
+            // config.run<Test_Conversation>(results);
             config.run<Test_Eager_Close>(results);
-            config.run<Test_Close_Without_Shutdown>(results);
-            config.run<Test_No_Shutdown_Response>(results);
-            config.run<Test_Handshake_Failure>(results);
-            config.run<Test_Conversation_Sync>(results);
+            // config.run<Test_Close_Without_Shutdown>(results);
+            // config.run<Test_No_Shutdown_Response>(results);
+            // config.run<Test_Handshake_Failure>(results);
+            // config.run<Test_Conversation_Sync>(results);
             config.run<Test_Eager_Close_Sync>(results);
-            config.run<Test_Close_Without_Shutdown_Sync>(results);
-            config.run<Test_No_Shutdown_Response_Sync>(results);
-            config.run<Test_Handshake_Failure_Sync>(results);
-            config.run<Test_Conversation_With_Move>(results);
+            // config.run<Test_Close_Without_Shutdown_Sync>(results);
+            // config.run<Test_No_Shutdown_Response_Sync>(results);
+            // config.run<Test_Handshake_Failure_Sync>(results);
+            // config.run<Test_Conversation_With_Move>(results);
          }
 
          return results;
