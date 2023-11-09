@@ -515,31 +515,47 @@ class Stream {
        */
       template <typename MutableBufferSequence>
       std::size_t read_some(const MutableBufferSequence& buffers, boost::system::error_code& ec) {
-         if(has_received_data()) {
-            return copy_received_data(buffers);
+         // We read from the socket until either some error occured or we have
+         // decrypted at least one byte of application data.
+         while(!ec) {
+            // Some previous invocation of process_encrypted_data() generated
+            // application data in the output buffer that can now be returned.
+            if(has_received_data()) {
+               return copy_received_data(buffers);
+            }
+
+            // If we have no more application data to be pushed to the caller,
+            // and a TLS alert occured in a previous process_encrypted_data(),
+            // we report it as an error code to the caller.
+            if(auto alert = m_core->alert_from_peer()) {
+               const auto alert_type = alert->type();
+               if(alert_type == AlertType::CloseNotify) {
+                  ec = boost::asio::error::eof;
+               } else {
+                  ec = alert_type;
+               }
+               break;
+            }
+
+            // If neither application data nor a TLS alert is available, we try
+            // to fetch more (encrypted) data from the peer.
+            boost::asio::const_buffer read_buffer{input_buffer().data(), m_nextLayer.read_some(input_buffer(), ec)};
+            if(ec) {
+               if(ec == boost::asio::error::eof) {
+                  // we did not expect this disconnection from the peer
+                  ec = StreamError::StreamTruncated;
+               }
+               break;
+            }
+
+            // If we create an alert (except close_notify) while reading the
+            // data, we report it as an error. Note, that this might swallow
+            // application data if multiple TLS records are processed at once.
+            process_encrypted_data(read_buffer, ec);
          }
 
-         boost::asio::const_buffer read_buffer{input_buffer().data(), m_nextLayer.read_some(input_buffer(), ec)};
-         if(ec) {
-            return 0;
-         }
-
-         process_encrypted_data(read_buffer, ec);
-
-         if(ec)  // something went wrong in process_encrypted_data()
-         {
-            return 0;
-         }
-
-         if(shutdown_received()) {
-            // we just received a 'close_notify' from the peer and don't expect any more data
-            ec = boost::asio::error::eof;
-         } else if(ec == boost::asio::error::eof) {
-            // we did not expect this disconnection from the peer
-            ec = StreamError::StreamTruncated;
-         }
-
-         return !ec ? copy_received_data(buffers) : 0;
+         BOTAN_ASSERT_NOMSG(ec.failed());
+         return 0;
       }
 
       /**
