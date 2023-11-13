@@ -337,35 +337,61 @@ class Stream {
       void handshake(Connection_Side side, boost::system::error_code& ec) {
          setup_native_handle(side, ec);
 
-         if(side == Connection_Side::Client) {
-            // send client hello, which was written to the send buffer on client instantiation
-            send_pending_encrypted_data(ec);
-         }
-
-         while(!ec && !native_handle()->is_handshake_complete()) {
-            boost::asio::const_buffer read_buffer{input_buffer().data(), m_nextLayer.read_some(input_buffer(), ec)};
-            if(ec) {
+         // We write to the socket if we have data to send and read from it
+         // otherwise until either some error occured or we have successfully
+         // performed the handshake.
+         while(!ec) {
+            // Once the underlying TLS implementation reports a complete and
+            // successful handshake we're done.
+            if(native_handle()->is_handshake_complete()) {
                return;
             }
 
-            process_encrypted_data(read_buffer, ec);
-
-            // process_encrypted_data() might set an error code based on the
-            // data received from the peer but also generate data that must be
-            // sent to the peer (ie. an alert like 'handshake_failure'). In that
-            // case, we ignore the error code and send the data regardless.
+            // Send pending data to the peer and abort the handshake if that
+            // fails with a network error. Explicitly note that we have to
+            // attempt sending _before_ checking `error_from_us()`. This ensures
+            // that we send a corresponding TLS alert to the peer before
+            // aborting the handshake.
             if(has_data_to_send()) {
-               boost::system::error_code send_ec;
-               send_pending_encrypted_data(send_ec);
-               ec = (send_ec) ? send_ec : ec;
+               send_pending_encrypted_data(ec);
+            }
+
+            // If we detected an error while processing the TLS records received
+            // from the peer during the handshake, we have to abort. This is
+            // checked only after we sent the send buffer to ensure that the
+            // peer received the corresponding TLS alert.
+            else if(auto error = error_from_us()) {
+               ec = error;
+            }
+
+            // If we received a TLS alert from the peer before the handshake is
+            // complete, we abort. A close_notify during the handshake typically
+            // means that the peer wanted to cancel the handshake for some
+            // reason not related to the TLS protocol.
+            else if(auto alert = alert_from_peer()) {
+               if(alert->type() == AlertType::CloseNotify) {
+                  ec = boost::asio::error::eof;
+               } else {
+                  ec = alert->type();
+               }
+            }
+
+            // Otherwise read and process data from the peer and abort the handshake
+            // if that fails with any sort of network (!) error. TLS related errors
+            // do not immediately cause an abort, they are checked in the next loop
+            // iteration via `error_from_us()`.
+            else {
+               boost::asio::const_buffer read_buffer{input_buffer().data(), m_nextLayer.read_some(input_buffer(), ec)};
+               if(!ec) {
+                  boost::system::error_code ignored_ec;
+                  process_encrypted_data(read_buffer, ignored_ec);
+               } else if(ec == boost::asio::error::eof) {
+                  ec = StreamError::StreamTruncated;
+               }
             }
          }
 
-         // If the peer decided to abort the handshake with a close_notify, we
-         // let the application know by reporting EOF on the stream.
-         if(!ec && !native_handle()->is_active()) {
-            ec = boost::asio::error::eof;
-         }
+         BOTAN_ASSERT_NOMSG(ec.failed());
       }
 
       /**
@@ -525,31 +551,31 @@ class Stream {
             // If we have no more application data to be pushed to the caller,
             // and a TLS alert occured in a previous process_encrypted_data(),
             // we report it as an error code to the caller.
-            if(auto alert = m_core->alert_from_peer()) {
-               const auto alert_type = alert->type();
-               if(alert_type == AlertType::CloseNotify) {
+            if(auto alert = alert_from_peer()) {
+               if(alert->type() == AlertType::CloseNotify) {
                   ec = boost::asio::error::eof;
                } else {
-                  ec = alert_type;
+                  ec = alert->type();
                }
-               break;
             }
 
-            // If neither application data nor a TLS alert is available, we try
-            // to fetch more (encrypted) data from the peer.
-            boost::asio::const_buffer read_buffer{input_buffer().data(), m_nextLayer.read_some(input_buffer(), ec)};
-            if(ec) {
-               if(ec == boost::asio::error::eof) {
-                  // we did not expect this disconnection from the peer
+            // If we detected an error while processing TLS records previously
+            // received from the peer, we report this error to the caller.
+            else if(auto error = error_from_us()) {
+               ec = error;
+            }
+
+            // If neither application data nor a TLS alert is ready to be
+            // returned, we try to fetch more (encrypted) data from the peer.
+            else {
+               boost::asio::const_buffer read_buffer{input_buffer().data(), m_nextLayer.read_some(input_buffer(), ec)};
+               if(!ec) {
+                  boost::system::error_code ignored_ec;
+                  process_encrypted_data(read_buffer, ignored_ec);
+               } else if(ec == boost::asio::error::eof) {
                   ec = StreamError::StreamTruncated;
                }
-               break;
             }
-
-            // If we create an alert (except close_notify) while reading the
-            // data, we report it as an error. Note, that this might swallow
-            // application data if multiple TLS records are processed at once.
-            process_encrypted_data(read_buffer, ec);
          }
 
          BOTAN_ASSERT_NOMSG(ec.failed());
@@ -799,10 +825,14 @@ class Stream {
        * If an exception occurs while processing the data, an error code will be set.
        *
        * @param read_buffer Input buffer containing the encrypted data.
-       * @param ec Set to indicate what error occurred, if any.
+       * @param ec_tls_abort_from_us Set to indicate that a TLS error occured. Note that
+       *                             this always indicates that we (i.e. the local stream)
+       *                             decided that we cannot continue the connection.
        */
-      void process_encrypted_data(const boost::asio::const_buffer& read_buffer, boost::system::error_code& ec) {
-         BOTAN_ASSERT(!m_core->alert_from_peer(), "peer didn't send an alert before (no data allowed after that)");
+      void process_encrypted_data(const boost::asio::const_buffer& read_buffer,
+                                  boost::system::error_code& /* TODO: remove me */) {
+         BOTAN_ASSERT(!alert_from_peer() && !error_from_us(),
+                      "no one sent an alert before (no data allowed after that)");
 
          // If the local TLS implementation generates an alert, we are notified
          // with an exception that is caught in try_with_error_code().
@@ -810,17 +840,7 @@ class Stream {
             [&] {
                native_handle()->received_data({static_cast<const uint8_t*>(read_buffer.data()), read_buffer.size()});
             },
-            ec);
-
-         if(!ec) {
-            // When the peer sends an alert, _no exception_ is called in the
-            // local TLS implementation but a callback (on m_core) is invoked to
-            // notify about the peer's alert.
-            const auto alert = m_core->alert_from_peer();
-            if(alert && alert->type() != AlertType::CloseNotify) {
-               ec = alert->type();
-            }
-         }
+            m_ec_from_last_read);
       }
 
       //! @brief Catch exceptions and set an error_code
@@ -837,11 +857,29 @@ class Stream {
          }
       }
 
+   private:
+      /**
+       * Returns any alert previously received from the peer. This may include
+       * close_notify. Once the peer has sent any alert, no more data must be
+       * read from the stream.
+       */
+      std::optional<Alert> alert_from_peer() const { return m_core->alert_from_peer(); }
+
+      /**
+       * Returns any error code produced by the local TLS implementation. This
+       * will _not_ include close_notify. Once our TLS stack has reported an
+       * error, no more data must be written to the stream. The peer will receive
+       * the error as a TLS alert.
+       */
+      boost::system::error_code error_from_us() const { return m_ec_from_last_read; }
+
+   protected:
       std::shared_ptr<Context> m_context;
       StreamLayer m_nextLayer;
 
       std::shared_ptr<StreamCallbacks> m_core;
       std::unique_ptr<ChannelT> m_native_handle;
+      boost::system::error_code m_ec_from_last_read;
 
       // Buffer space used to read input intended for the core
       std::vector<uint8_t> m_input_buffer_space;

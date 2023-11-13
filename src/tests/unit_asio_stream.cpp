@@ -64,6 +64,7 @@ class MockChannel {
 
       void received_close_notify() {
          m_close_notify_received = true;
+         m_callbacks->tls_alert(Botan::TLS::AlertType::CloseNotify);
          const auto close_notify_record = Botan::hex_decode("15030300020100");
          send(close_notify_record);
       }
