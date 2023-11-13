@@ -242,9 +242,7 @@ class Stream {
       using native_handle_type = typename std::add_pointer<ChannelT>::type;
 
       native_handle_type native_handle() {
-         if(m_native_handle == nullptr) {
-            throw Invalid_State("Invalid handshake state");
-         }
+         BOTAN_STATE_CHECK(m_native_handle != nullptr);
          return m_native_handle.get();
       }
 
@@ -721,11 +719,10 @@ class Stream {
        * @param ec Set to indicate what error occurred, if any.
        */
       void setup_native_handle(Connection_Side side, boost::system::error_code& ec) {
-         BOTAN_UNUSED(side);  // workaround: GCC 9 produces a warning claiming side is unused
-
          // Do not attempt to instantiate the native_handle when a custom (mocked) channel type template parameter has
          // been specified. This allows mocking the native_handle in test code.
          if constexpr(std::is_same<ChannelT, Channel>::value) {
+            BOTAN_STATE_CHECK(m_native_handle == nullptr);
             try_with_error_code(
                [&] {
                   if(side == Connection_Side::Client) {
