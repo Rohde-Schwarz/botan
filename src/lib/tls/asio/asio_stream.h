@@ -32,7 +32,6 @@
    #include <boost/beast/core.hpp>
 
    #include <algorithm>
-   #include <iostream>
    #include <memory>
    #include <type_traits>
 
@@ -348,8 +347,6 @@ class Stream {
             if(has_data_to_send()) {
                send_pending_encrypted_data(ec);
             }
-
-            std::cout << this << " after sending: " << ec.to_string() << std::endl;
 
             // Once the underlying TLS implementation reports a complete and
             // successful handshake we're done.
@@ -714,8 +711,6 @@ class Stream {
          if constexpr(std::is_same<ChannelT, Channel>::value) {
             BOTAN_STATE_CHECK(m_native_handle == nullptr);
 
-            std::cout << this << " " << (side == Connection_Side::Client ? "Client" : "Server") << std::endl;
-
             try_with_error_code(
                [&] {
                   if(side == Connection_Side::Client) {
@@ -741,8 +736,6 @@ class Stream {
       }
 
       void handle_tls_protocol_errors(boost::system::error_code& ec) {
-         std::cout << this << " ec: " << ec.to_string() << std::endl;
-
          if(ec) {
             return;
          }
@@ -750,7 +743,6 @@ class Stream {
          // If we detected an error while processing previous TLS records
          // received from the peer, we abort and don't try to read more data.
          else if(auto error = error_from_us()) {
-            std::cout << this << " from us: " << error.to_string() << std::endl;
             ec = error;
          }
 
@@ -760,8 +752,6 @@ class Stream {
          // handshake it typically means that the peer wanted to cancel the
          // handshake for some reason not related to the TLS protocol.
          else if(auto alert = alert_from_peer()) {
-            std::cout << this << " from them: " << alert->type_string() << std::endl;
-
             if(alert->type() == AlertType::CloseNotify) {
                ec = boost::asio::error::eof;
             } else {

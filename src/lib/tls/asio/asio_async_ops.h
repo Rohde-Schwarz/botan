@@ -122,7 +122,7 @@ class AsyncReadOperation : public AsyncBase<Handler, typename Stream::executor_t
 
       void operator()(boost::system::error_code ec, std::size_t bytes_transferred, bool isContinuation = true) {
          reenter(this) {
-            if(ec == boost::asio::error::eof && !m_stream.native_handle()->is_closed_for_reading()) {
+            if(ec == boost::asio::error::eof && !m_stream.shutdown_received()) {
                // we did not expect this disconnection from the peer
                ec = StreamError::StreamTruncated;
             }
@@ -198,7 +198,7 @@ class AsyncWriteOperation : public AsyncBase<Handler, typename Stream::executor_
 
       void operator()(boost::system::error_code ec, std::size_t bytes_transferred, bool isContinuation = true) {
          reenter(this) {
-            if(ec == boost::asio::error::eof && !m_stream.native_handle()->is_closed_for_writing()) {
+            if(ec == boost::asio::error::eof && !m_stream.shutdown_received()) {
                // transport layer was closed by peer without receiving 'close_notify'
                ec = StreamError::StreamTruncated;
             }
@@ -258,7 +258,7 @@ class AsyncHandshakeOperation : public AsyncBase<Handler, typename Stream::execu
             // Check whether we received a premature EOF from the next layer.
             // Note that the AsyncWriteOperation handles this internally; here
             // we only have to handle reading.
-            if(ec == boost::asio::error::eof && !m_stream.native_handle()->is_closed_for_reading()) {
+            if(ec == boost::asio::error::eof && !m_stream.shutdown_received()) {
                ec = StreamError::StreamTruncated;
             }
 
