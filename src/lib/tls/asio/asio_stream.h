@@ -84,8 +84,8 @@ class StreamCallbacks : public Callbacks {
             // returns.
             //
             // For other alerts it will shutdown the native_handle and
-            // Stream::process_encrypted_data() will hand out the received alert
-            // as an error code.
+            // Stream::handle_tls_protocol_errors() will hand out the received
+            // alert as an error code.
             m_alert_from_peer = alert;
          }
       }
@@ -777,8 +777,7 @@ class Stream {
          // via `error_from_us()`.
          boost::asio::const_buffer read_buffer{input_buffer().data(), m_nextLayer.read_some(input_buffer(), ec)};
          if(!ec) {
-            boost::system::error_code ignored_ec;
-            process_encrypted_data(read_buffer, ignored_ec);
+            process_encrypted_data(read_buffer);
          } else if(ec == boost::asio::error::eof) {
             ec = StreamError::StreamTruncated;
          }
@@ -840,8 +839,7 @@ class Stream {
        *                             this always indicates that we (i.e. the local stream)
        *                             decided that we cannot continue the connection.
        */
-      void process_encrypted_data(const boost::asio::const_buffer& read_buffer,
-                                  boost::system::error_code& /* TODO: remove me */) {
+      void process_encrypted_data(const boost::asio::const_buffer& read_buffer) {
          BOTAN_ASSERT(!alert_from_peer() && !error_from_us(),
                       "no one sent an alert before (no data allowed after that)");
 

@@ -130,8 +130,7 @@ class AsyncReadOperation : public AsyncBase<Handler, typename Stream::executor_t
             if(!ec && bytes_transferred > 0) {
                // We have received encrypted data from the network, now hand it to TLS::Channel for decryption.
                boost::asio::const_buffer read_buffer{m_stream.input_buffer().data(), bytes_transferred};
-               boost::system::error_code ignored_ec;
-               m_stream.process_encrypted_data(read_buffer, ignored_ec);
+               m_stream.process_encrypted_data(read_buffer);
             }
 
             if(!ec && !m_stream.has_received_data()) {
@@ -265,8 +264,7 @@ class AsyncHandshakeOperation : public AsyncBase<Handler, typename Stream::execu
             if(!ec && bytesTransferred > 0) {
                // Provide encrypted TLS data received from the network to TLS::Channel for decryption
                boost::asio::const_buffer read_buffer{m_stream.input_buffer().data(), bytesTransferred};
-               boost::system::error_code ignored_ec;
-               m_stream.process_encrypted_data(read_buffer, ignored_ec);
+               m_stream.process_encrypted_data(read_buffer);
             }
 
             if(!ec && m_stream.has_data_to_send()) {
