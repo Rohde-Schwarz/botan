@@ -932,17 +932,17 @@ class Tls_Stream_Integration_Tests final : public Test {
 
          auto configs = get_configurations();
          for(auto& config : configs) {
-            // config.run<Test_Conversation>(results);
-            // config.run<Test_Eager_Close>(results);
-            // config.run<Test_Close_Without_Shutdown>(results);
-            // config.run<Test_No_Shutdown_Response>(results);
-            // config.run<Test_Handshake_Failure>(results);
-            // config.run<Test_Conversation_Sync>(results);
-            // config.run<Test_Eager_Close_Sync>(results);
-            // config.run<Test_Close_Without_Shutdown_Sync>(results);
-            // config.run<Test_No_Shutdown_Response_Sync>(results);
+            config.run<Test_Conversation>(results);
+            config.run<Test_Eager_Close>(results);
+            config.run<Test_Close_Without_Shutdown>(results);
+            config.run<Test_No_Shutdown_Response>(results);
+            config.run<Test_Handshake_Failure>(results);
+            config.run<Test_Conversation_Sync>(results);
+            config.run<Test_Eager_Close_Sync>(results);
+            config.run<Test_Close_Without_Shutdown_Sync>(results);
+            config.run<Test_No_Shutdown_Response_Sync>(results);
             config.run<Test_Handshake_Failure_Sync>(results);
-            // config.run<Test_Conversation_With_Move>(results);
+            config.run<Test_Conversation_With_Move>(results);
          }
 
          return results;

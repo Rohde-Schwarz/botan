@@ -122,7 +122,7 @@ class AsyncReadOperation : public AsyncBase<Handler, typename Stream::executor_t
 
       void operator()(boost::system::error_code ec, std::size_t bytes_transferred, bool isContinuation = true) {
          reenter(this) {
-            if(ec == boost::asio::error::eof && m_stream.native_handle()->is_closed_for_reading()) {
+            if(ec == boost::asio::error::eof && !m_stream.native_handle()->is_closed_for_reading()) {
                // we did not expect this disconnection from the peer
                ec = StreamError::StreamTruncated;
             }
