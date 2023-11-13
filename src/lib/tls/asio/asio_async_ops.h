@@ -122,24 +122,26 @@ class AsyncReadOperation : public AsyncBase<Handler, typename Stream::executor_t
 
       void operator()(boost::system::error_code ec, std::size_t bytes_transferred, bool isContinuation = true) {
          reenter(this) {
-            if(!ec && bytes_transferred > 0) {
-               // We have received encrypted data from the network, now hand it to TLS::Channel for decryption.
-               boost::asio::const_buffer read_buffer{m_stream.input_buffer().data(), bytes_transferred};
-               m_stream.process_encrypted_data(read_buffer, ec);
-            }
-
-            if(m_stream.shutdown_received()) {
-               // we just received a 'close_notify' from the peer and don't expect any more data
-               ec = boost::asio::error::eof;
-            } else if(ec == boost::asio::error::eof) {
+            if(ec == boost::asio::error::eof && m_stream.native_handle()->is_closed_for_reading()) {
                // we did not expect this disconnection from the peer
                ec = StreamError::StreamTruncated;
             }
 
-            if(!ec && !m_stream.has_received_data() && boost::asio::buffer_size(m_buffers) > 0) {
-               // The channel did not decrypt a complete record yet, we need more data from the socket.
-               m_stream.next_layer().async_read_some(m_stream.input_buffer(), std::move(*this));
-               return;
+            if(!ec && bytes_transferred > 0) {
+               // We have received encrypted data from the network, now hand it to TLS::Channel for decryption.
+               boost::asio::const_buffer read_buffer{m_stream.input_buffer().data(), bytes_transferred};
+               boost::system::error_code ignored_ec;
+               m_stream.process_encrypted_data(read_buffer, ignored_ec);
+            }
+
+            if(!ec && !m_stream.has_received_data()) {
+               m_stream.handle_tls_protocol_errors(ec);
+
+               if(!ec && boost::asio::buffer_size(m_buffers) > 0) {
+                  // The channel did not decrypt a complete record yet, we need more data from the socket.
+                  m_stream.next_layer().async_read_some(m_stream.input_buffer(), std::move(*this));
+                  return;
+               }
             }
 
             if(!ec && m_stream.has_received_data()) {
@@ -196,18 +198,19 @@ class AsyncWriteOperation : public AsyncBase<Handler, typename Stream::executor_
 
       void operator()(boost::system::error_code ec, std::size_t bytes_transferred, bool isContinuation = true) {
          reenter(this) {
-            // mark the number of encrypted bytes sent to the network as "consumed"
-            // Note: bytes_transferred will be zero on first call
-            m_stream.consume_send_buffer(bytes_transferred);
+            if(ec == boost::asio::error::eof && !m_stream.native_handle()->is_closed_for_writing()) {
+               // transport layer was closed by peer without receiving 'close_notify'
+               ec = StreamError::StreamTruncated;
+            }
+
+            if(!ec && bytes_transferred > 0) {
+               // mark the number of encrypted bytes sent to the network as "consumed"
+               m_stream.consume_send_buffer(bytes_transferred);
+            }
 
             if(!ec && m_stream.has_data_to_send()) {
                m_stream.next_layer().async_write_some(m_stream.send_buffer(), std::move(*this));
                return;
-            }
-
-            if(ec == boost::asio::error::eof && !m_stream.shutdown_received()) {
-               // transport layer was closed by peer without receiving 'close_notify'
-               ec = StreamError::StreamTruncated;
             }
 
             if(!isContinuation) {
@@ -252,32 +255,18 @@ class AsyncHandshakeOperation : public AsyncBase<Handler, typename Stream::execu
 
       void operator()(boost::system::error_code ec, std::size_t bytesTransferred, bool isContinuation = true) {
          reenter(this) {
-            if(!ec && m_stashed_ec) {
-               ec = std::exchange(m_stashed_ec, {});
-            }
-
+            // Check whether we received a premature EOF from the next layer.
+            // Note that the AsyncWriteOperation handles this internally; here
+            // we only have to handle reading.
             if(ec == boost::asio::error::eof && !m_stream.native_handle()->is_closed_for_reading()) {
                ec = StreamError::StreamTruncated;
-            }
-
-            if(!ec && m_stream.native_handle()->is_closed_for_reading()) {
-               ec = boost::asio::error::eof;
             }
 
             if(!ec && bytesTransferred > 0) {
                // Provide encrypted TLS data received from the network to TLS::Channel for decryption
                boost::asio::const_buffer read_buffer{m_stream.input_buffer().data(), bytesTransferred};
-               m_stream.process_encrypted_data(read_buffer, ec);
-
-               // m_stream.process_encrypted_data() might set an error code based
-               // on the data received from the peer but also generate data that
-               // must be sent to the peer (ie. an alert like 'handshake_failure').
-               // In that case, we stash the error code and continue. This will let
-               // the next block write the alert message and the stashed error code
-               // will be re-produced in the next iteration.
-               if(ec && m_stream.has_data_to_send()) {
-                  m_stashed_ec = std::exchange(ec, {});
-               }
+               boost::system::error_code ignored_ec;
+               m_stream.process_encrypted_data(read_buffer, ignored_ec);
             }
 
             if(!ec && m_stream.has_data_to_send()) {
@@ -295,9 +284,13 @@ class AsyncHandshakeOperation : public AsyncBase<Handler, typename Stream::execu
             }
 
             if(!ec && !m_stream.native_handle()->is_handshake_complete()) {
-               // Read more encrypted TLS data from the network
-               m_stream.next_layer().async_read_some(m_stream.input_buffer(), std::move(*this));
-               return;
+               m_stream.handle_tls_protocol_errors(ec);
+
+               if(!ec) {
+                  // Read more encrypted TLS data from the network
+                  m_stream.next_layer().async_read_some(m_stream.input_buffer(), std::move(*this));
+                  return;
+               }
             }
 
             if(!isContinuation) {

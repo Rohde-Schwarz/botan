@@ -80,7 +80,7 @@ class PeerCallbacks : public Botan::TLS::StreamCallbacks {
          Botan::TLS::StreamCallbacks::tls_emit_data(data);
       }
 
-      void tls_session_activated() { std::cout << m_side << " activated" << std::endl; }
+      void tls_session_activated() override { std::cout << m_side << " activated" << std::endl; }
 
    private:
       std::string m_side;
@@ -861,7 +861,7 @@ class Test_Handshake_Failure_Sync : public Synchronous_Test {
          result().expect_success("connect", ec);
 
          client()->stream().handshake(Botan::TLS::Connection_Side::Client, ec);
-         result().expect_ec("handshake", Botan::TLS ::Alert::HandshakeFailure, ec);
+         result().expect_ec("handshake", Botan::TLS::Alert::HandshakeFailure, ec);
 
          client()->close_socket();
          teardown();
@@ -933,15 +933,15 @@ class Tls_Stream_Integration_Tests final : public Test {
          auto configs = get_configurations();
          for(auto& config : configs) {
             // config.run<Test_Conversation>(results);
-            config.run<Test_Eager_Close>(results);
+            // config.run<Test_Eager_Close>(results);
             // config.run<Test_Close_Without_Shutdown>(results);
             // config.run<Test_No_Shutdown_Response>(results);
             // config.run<Test_Handshake_Failure>(results);
             // config.run<Test_Conversation_Sync>(results);
-            config.run<Test_Eager_Close_Sync>(results);
+            // config.run<Test_Eager_Close_Sync>(results);
             // config.run<Test_Close_Without_Shutdown_Sync>(results);
             // config.run<Test_No_Shutdown_Response_Sync>(results);
-            // config.run<Test_Handshake_Failure_Sync>(results);
+            config.run<Test_Handshake_Failure_Sync>(results);
             // config.run<Test_Conversation_With_Move>(results);
          }
 

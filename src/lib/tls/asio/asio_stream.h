@@ -32,6 +32,7 @@
    #include <boost/beast/core.hpp>
 
    #include <algorithm>
+   #include <iostream>
    #include <memory>
    #include <type_traits>
 
@@ -341,54 +342,32 @@ class Stream {
          // otherwise until either some error occured or we have successfully
          // performed the handshake.
          while(!ec) {
+            // Send pending data to the peer and abort the handshake if that
+            // fails with a network error. We do that first, to allow sending
+            // any final message before reporting the handshake as "finished".
+            if(has_data_to_send()) {
+               send_pending_encrypted_data(ec);
+            }
+
+            std::cout << this << " after sending: " << ec.to_string() << std::endl;
+
             // Once the underlying TLS implementation reports a complete and
             // successful handshake we're done.
             if(native_handle()->is_handshake_complete()) {
                return;
             }
 
-            // Send pending data to the peer and abort the handshake if that
-            // fails with a network error. Explicitly note that we have to
-            // attempt sending _before_ checking `error_from_us()`. This ensures
-            // that we send a corresponding TLS alert to the peer before
+            // Handle and report any TLS protocol errors that might have
+            // surfaced in a previous iteration. By postponing their handling we
+            // allow the stream to send a respective TLS alert to the peer before
             // aborting the handshake.
-            if(has_data_to_send()) {
-               send_pending_encrypted_data(ec);
-            }
+            handle_tls_protocol_errors(ec);
 
-            // If we detected an error while processing the TLS records received
-            // from the peer during the handshake, we have to abort. This is
-            // checked only after we sent the send buffer to ensure that the
-            // peer received the corresponding TLS alert.
-            else if(auto error = error_from_us()) {
-               ec = error;
-            }
-
-            // If we received a TLS alert from the peer before the handshake is
-            // complete, we abort. A close_notify during the handshake typically
-            // means that the peer wanted to cancel the handshake for some
-            // reason not related to the TLS protocol.
-            else if(auto alert = alert_from_peer()) {
-               if(alert->type() == AlertType::CloseNotify) {
-                  ec = boost::asio::error::eof;
-               } else {
-                  ec = alert->type();
-               }
-            }
-
-            // Otherwise read and process data from the peer and abort the handshake
-            // if that fails with any sort of network (!) error. TLS related errors
-            // do not immediately cause an abort, they are checked in the next loop
-            // iteration via `error_from_us()`.
-            else {
-               boost::asio::const_buffer read_buffer{input_buffer().data(), m_nextLayer.read_some(input_buffer(), ec)};
-               if(!ec) {
-                  boost::system::error_code ignored_ec;
-                  process_encrypted_data(read_buffer, ignored_ec);
-               } else if(ec == boost::asio::error::eof) {
-                  ec = StreamError::StreamTruncated;
-               }
-            }
+            // If we don't have any encrypted data to send we attempt to read
+            // more data from the peer. This reports network errors immediately.
+            // TLS protocol errors result in an internal state change which is
+            // handled by `handle_tls_protocol_errors()` in the next iteration.
+            read_encrypted_data_from_peer(ec);
          }
 
          BOTAN_ASSERT_NOMSG(ec.failed());
@@ -548,34 +527,19 @@ class Stream {
                return copy_received_data(buffers);
             }
 
-            // If we have no more application data to be pushed to the caller,
-            // and a TLS alert occured in a previous process_encrypted_data(),
-            // we report it as an error code to the caller.
-            if(auto alert = alert_from_peer()) {
-               if(alert->type() == AlertType::CloseNotify) {
-                  ec = boost::asio::error::eof;
-               } else {
-                  ec = alert->type();
-               }
-            }
+            // Handle and report any TLS protocol errors (including a
+            // close_notify) that might have surfaced in a previous iteration
+            // (in `read_encrypted_data_from_peer()`). This makes sure that all
+            // received application data was handed out to the caller before
+            // reporting an error (e.g. EOF at the end of the stream).
+            handle_tls_protocol_errors(ec);
 
-            // If we detected an error while processing TLS records previously
-            // received from the peer, we report this error to the caller.
-            else if(auto error = error_from_us()) {
-               ec = error;
-            }
-
-            // If neither application data nor a TLS alert is ready to be
-            // returned, we try to fetch more (encrypted) data from the peer.
-            else {
-               boost::asio::const_buffer read_buffer{input_buffer().data(), m_nextLayer.read_some(input_buffer(), ec)};
-               if(!ec) {
-                  boost::system::error_code ignored_ec;
-                  process_encrypted_data(read_buffer, ignored_ec);
-               } else if(ec == boost::asio::error::eof) {
-                  ec = StreamError::StreamTruncated;
-               }
-            }
+            // If we don't have any plaintext application data, yet, we attempt
+            // to read more data from the peer. This reports network errors
+            // immediately. TLS protocol errors result in an internal state
+            // change which is handled by `handle_tls_protocol_errors()` in the
+            // next iteration.
+            read_encrypted_data_from_peer(ec);
          }
 
          BOTAN_ASSERT_NOMSG(ec.failed());
@@ -749,6 +713,9 @@ class Stream {
          // been specified. This allows mocking the native_handle in test code.
          if constexpr(std::is_same<ChannelT, Channel>::value) {
             BOTAN_STATE_CHECK(m_native_handle == nullptr);
+
+            std::cout << this << " " << (side == Connection_Side::Client ? "Client" : "Server") << std::endl;
+
             try_with_error_code(
                [&] {
                   if(side == Connection_Side::Client) {
@@ -770,6 +737,60 @@ class Stream {
                   }
                },
                ec);
+         }
+      }
+
+      void handle_tls_protocol_errors(boost::system::error_code& ec) {
+         std::cout << this << " ec: " << ec.to_string() << std::endl;
+
+         if(ec) {
+            return;
+         }
+
+         // If we detected an error while processing previous TLS records
+         // received from the peer, we abort and don't try to read more data.
+         else if(auto error = error_from_us()) {
+            std::cout << this << " from us: " << error.to_string() << std::endl;
+            ec = error;
+         }
+
+         // If we received a TLS alert from the peer in a previous invocation,
+         // we do not try to read more data. A close_notify is always a legal
+         // way for the peer to end a TLS session. When received during the
+         // handshake it typically means that the peer wanted to cancel the
+         // handshake for some reason not related to the TLS protocol.
+         else if(auto alert = alert_from_peer()) {
+            std::cout << this << " from them: " << alert->type_string() << std::endl;
+
+            if(alert->type() == AlertType::CloseNotify) {
+               ec = boost::asio::error::eof;
+            } else {
+               ec = alert->type();
+            }
+         }
+      }
+
+      void read_encrypted_data_from_peer(boost::system::error_code& ec) {
+         if(ec) {
+            return;
+         }
+
+         // If we have received application data in a previous invocation, this
+         // data needs to be passed to the application first. Otherwise, it
+         // might get overwritten.
+         BOTAN_ASSERT(!has_received_data(), "receive buffer is empty");
+         BOTAN_ASSERT(!error_from_us() && !alert_from_peer(), "TLS session is healthy");
+
+         // If there's no existing error condition, read and process data from
+         // the peer and report any sort of network error. TLS related errors do
+         // not immediately cause an abort, they are checked in the invocation
+         // via `error_from_us()`.
+         boost::asio::const_buffer read_buffer{input_buffer().data(), m_nextLayer.read_some(input_buffer(), ec)};
+         if(!ec) {
+            boost::system::error_code ignored_ec;
+            process_encrypted_data(read_buffer, ignored_ec);
+         } else if(ec == boost::asio::error::eof) {
+            ec = StreamError::StreamTruncated;
          }
       }
 
