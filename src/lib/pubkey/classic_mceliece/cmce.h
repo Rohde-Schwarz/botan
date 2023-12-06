@@ -116,6 +116,9 @@ std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_M
                                                         const Classic_McEliece_Field_Ordering& ordering,
                                                         std::span<const uint8_t> word_to_decaps);
 
+std::vector<Classic_McEliece_GF> berlekamp_massey(const Classic_McEliece_Parameters& params,
+                                                  const std::vector<Classic_McEliece_GF>& syndrome);
+
 //------------------------------------------------------
 
 /**

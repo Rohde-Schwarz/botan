@@ -308,7 +308,7 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
    public:
       CMCE_Decaps_Unit_Test() :
             Text_Based_Test("pubkey/cmce_decaps_unit.vec",
-                            "seed,field_ord,locator,images,hashed_pk,hashed_sk,ciphertext,shared_secret") {}
+                            "seed,field_ord,syndrome,locator,images,hashed_pk,hashed_sk,ciphertext,shared_secret") {}
 
       Test::Result run_one_test(const std::string& params_str, const VarMap& vars) override {
          Test::Result result("CMCE KeyGen");
@@ -320,17 +320,43 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
          const auto kat_seed = Botan::lock(vars.get_req_bin("seed"));
          const auto ref_hashed_sk = Botan::lock(vars.get_req_bin("hashed_sk"));
          const auto ref_hashed_pk = vars.get_req_bin("hashed_pk");
+         const auto ct = vars.get_req_bin("ciphertext");
+         const auto ref_syndrome = gf_vector_from_bytes(params, vars.get_req_bin("syndrome"));
+         const auto ref_locator = gf_vector_from_bytes(params, vars.get_req_bin("locator"));
+         const auto ref_images = gf_vector_from_bytes(params, vars.get_req_bin("images"));
          const auto ref_field_ord = gf_vector_from_bytes(params, vars.get_req_bin("field_ord"));
 
          auto test_rng = std::make_unique<CTR_DRBG_AES256>(kat_seed);
 
          auto [sk, pk] = Botan::cmce_key_gen(params, test_rng->random_vec(32));
 
-         auto all_sk_alphas = sk.alpha().alphas();
-         auto sk_alphas_n =
-            std::vector<Botan::Classic_McEliece_GF>(all_sk_alphas.begin(), all_sk_alphas.begin() + params.n());
+         sk.g().to_bytes();
 
-         result.test_is_eq("Field Ordering", sk_alphas_n, ref_field_ord);
+         auto control_bits = sk.alpha().alphas_control_bits();
+
+         // Test field ordering from control bits
+         auto alphas_from_control_bits =
+            Botan::Classic_McEliece_Field_Ordering::create_from_control_bits(params, control_bits).alphas();
+
+         auto n_alphas_from_control_bits = std::vector<Botan::Classic_McEliece_GF>(
+            alphas_from_control_bits.begin(), alphas_from_control_bits.begin() + params.n());
+
+         result.test_is_eq("Read Field Ordering from Control Bits", n_alphas_from_control_bits, ref_field_ord);
+
+         // Test Classic_McEliece_Minimal_Polynomial::from_bytes
+         auto goppa_poly_from_bytes =
+            Botan::Classic_McEliece_Minimal_Polynomial::from_bytes(sk.g().to_bytes(), params.poly_f());
+         result.test_is_eq("Read Goppa Polynomial from Bytes", goppa_poly_from_bytes.to_bytes(), sk.g().to_bytes());
+
+         if(false) {
+            // Test syndrome computation
+            auto syndrome = compute_goppa_syndrome(sk.g(), sk.alpha(), ct);
+            result.test_is_eq("Compute Syndrome", syndrome, ref_syndrome);
+
+            // Test the Berlekamp-Massey Algorithm
+            auto locator = berlekamp_massey(params, syndrome);
+            result.test_is_eq("Berlekamp-Massey Algorithm", locator, ref_locator);
+         }
 
          return result;
       }
