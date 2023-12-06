@@ -112,9 +112,10 @@ std::pair<std::vector<uint8_t>, secure_vector<uint8_t>> cmce_encaps(const Classi
 std::optional<secure_bitvector<uint64_t>> cmce_fixed_weight_vector_gen(const Classic_McEliece_Parameters& params,
                                                                        const secure_vector<uint8_t>& rand);
 
-std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_Minimal_Polynomial& goppa_poly,
+std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_Parameters& params,
+                                                        const Classic_McEliece_Minimal_Polynomial& goppa_poly,
                                                         const Classic_McEliece_Field_Ordering& ordering,
-                                                        std::span<const uint8_t> word_to_decaps);
+                                                        const bitvector& word_to_decaps);
 
 std::vector<Classic_McEliece_GF> berlekamp_massey(const Classic_McEliece_Parameters& params,
                                                   const std::vector<Classic_McEliece_GF>& syndrome);

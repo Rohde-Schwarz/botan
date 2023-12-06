@@ -40,6 +40,8 @@ class BOTAN_TEST_API Classic_McEliece_GF {
          return *this;
       }
 
+      Classic_McEliece_GF operator/(const Classic_McEliece_GF& other) const;
+
       Classic_McEliece_GF operator+(const Classic_McEliece_GF& other) const;
 
       Classic_McEliece_GF& operator+=(const Classic_McEliece_GF& other);

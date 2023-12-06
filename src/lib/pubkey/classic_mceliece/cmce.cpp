@@ -84,17 +84,84 @@ bitvector<uint64_t> cmce_encode(const Classic_McEliece_Parameters& params,
 
 }  // namespace
 
-std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_Minimal_Polynomial& goppa_poly,
+std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_Parameters& params,
+                                                        const Classic_McEliece_Minimal_Polynomial& goppa_poly,
                                                         const Classic_McEliece_Field_Ordering& ordering,
-                                                        std::span<const uint8_t> word_to_decaps) {
-   BOTAN_UNUSED(goppa_poly, ordering, word_to_decaps);
-   throw Not_Implemented("TODO");
+                                                        const bitvector& code_word) {
+   BOTAN_ASSERT(params.n() == code_word.size(), "Correct code word size");
+   std::vector<Classic_McEliece_GF> syndrome(2 * params.t(), Classic_McEliece_GF(0, params.poly_f()));
+
+   auto all_alphas = ordering.alphas();
+   auto n_alphas = std::span(all_alphas).subspan(0, params.n());
+
+   for(size_t i = 0; i < params.n(); ++i) {
+      auto e = goppa_poly(n_alphas[i]);
+      auto e_inv = (e * e).inv();
+
+      auto c_mask = CT::Mask<uint16_t>::expand(code_word.at(i));
+
+      for(size_t j = 0; j < 2 * params.t(); ++j) {
+         syndrome.at(j) = (syndrome.at(j).elem() ^ c_mask.if_set_return(e_inv.elem()));
+         e_inv = e_inv * n_alphas[i];
+      }
+   }
+
+   return syndrome;
 }
 
 std::vector<Classic_McEliece_GF> berlekamp_massey(const Classic_McEliece_Parameters& params,
                                                   const std::vector<Classic_McEliece_GF>& syndrome) {
-   BOTAN_UNUSED(params, syndrome);
-   throw Not_Implemented("TODO");
+   std::vector<Classic_McEliece_GF> output(params.t() + 1, Classic_McEliece_GF(0, params.poly_f()));
+
+   std::vector<Classic_McEliece_GF> big_t(params.t() + 1, Classic_McEliece_GF(0, params.poly_f()));
+   std::vector<Classic_McEliece_GF> big_c(params.t() + 1, Classic_McEliece_GF(0, params.poly_f()));
+   std::vector<Classic_McEliece_GF> big_b(params.t() + 1, Classic_McEliece_GF(0, params.poly_f()));
+   auto b = Classic_McEliece_GF(1, params.poly_f());
+
+   //
+   big_b.at(1) = 1;
+   big_c.at(0) = 1;
+
+   //
+
+   for(size_t big_n = 0, big_l = 0; big_n < 2 * params.t(); ++big_n) {
+      auto d = Classic_McEliece_GF(0, params.poly_f());
+
+      for(size_t i = 0; i <= std::min(big_n, params.t()); ++i) {
+         d += big_c.at(i) * syndrome.at(big_n - i);
+      }
+
+      auto mne = CT::Mask<size_t>::expand(d.elem());
+      auto mle = CT::Mask<size_t>::is_lte(2 * big_l, big_n);
+      mle &= mne;
+
+      big_t = big_c;  // Copy
+      auto f = d / b;
+
+      for(size_t i = 0; i <= params.t(); ++i) {
+         //TODO: Integrate CT below into Classic_McEliece_GF
+         big_c.at(i) = big_c.at(i).elem() ^ CT::Mask<uint16_t>(mne).if_set_return((f * big_b.at(i)).elem());
+      }
+
+      big_l = mle.select((big_n + 1) - big_l, big_l);
+
+      for(size_t i = 0; i <= params.t(); ++i) {
+         big_b.at(i) = CT::Mask<uint16_t>(mle).select(big_t.at(i).elem(), big_b.at(i).elem());
+      }
+
+      b = CT::Mask<uint16_t>(mle).select(d.elem(), b.elem());
+
+      for(size_t i = params.t(); i >= 1; --i) {
+         big_b.at(i) = big_b.at(i - 1);
+      }
+      big_b.at(0) = 0;
+   }
+
+   for(size_t i = 0; i <= params.t(); ++i) {
+      output.at(i) = big_c.at(params.t() - i);
+   }
+
+   return output;
 }
 
 std::pair<Classic_McEliece_PrivateKeyInternal, Classic_McEliece_PublicKeyInternal> cmce_key_gen(
