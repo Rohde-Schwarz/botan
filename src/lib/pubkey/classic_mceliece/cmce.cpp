@@ -91,6 +91,12 @@ std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_M
    throw Not_Implemented("TODO");
 }
 
+std::vector<Classic_McEliece_GF> berlekamp_massey(const Classic_McEliece_Parameters& params,
+                                                  const std::vector<Classic_McEliece_GF>& syndrome) {
+   BOTAN_UNUSED(params, syndrome);
+   throw Not_Implemented("TODO");
+}
+
 std::pair<Classic_McEliece_PrivateKeyInternal, Classic_McEliece_PublicKeyInternal> cmce_key_gen(
    const Classic_McEliece_Parameters& params, const secure_vector<uint8_t>& seed) {
    BOTAN_ASSERT_EQUAL(seed.size(), 32, "Valid seed length");
