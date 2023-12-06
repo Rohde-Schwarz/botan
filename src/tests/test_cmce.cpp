@@ -311,7 +311,7 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
                             "seed,field_ord,syndrome,locator,images,hashed_pk,hashed_sk,ciphertext,shared_secret") {}
 
       Test::Result run_one_test(const std::string& params_str, const VarMap& vars) override {
-         Test::Result result("CMCE KeyGen");
+         Test::Result result("CMCE Decaps Unit Test");
 
          auto kat_hash = Botan::HashFunction::create("SHAKE-256(512)");
 
@@ -348,15 +348,16 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
             Botan::Classic_McEliece_Minimal_Polynomial::from_bytes(sk.g().to_bytes(), params.poly_f());
          result.test_is_eq("Read Goppa Polynomial from Bytes", goppa_poly_from_bytes.to_bytes(), sk.g().to_bytes());
 
-         if(false) {
-            // Test syndrome computation
-            auto syndrome = compute_goppa_syndrome(sk.g(), sk.alpha(), ct);
-            result.test_is_eq("Compute Syndrome", syndrome, ref_syndrome);
+         // Test syndrome computation
+         auto code_word = Botan::bitvector(ct, params.m() * params.t());
+         code_word.resize(params.n());
 
-            // Test the Berlekamp-Massey Algorithm
-            auto locator = berlekamp_massey(params, syndrome);
-            result.test_is_eq("Berlekamp-Massey Algorithm", locator, ref_locator);
-         }
+         auto syndrome = compute_goppa_syndrome(params, sk.g(), sk.alpha(), code_word);
+         result.test_is_eq("Compute Syndrome", syndrome, ref_syndrome);
+
+         // Test the Berlekamp-Massey Algorithm
+         auto locator = berlekamp_massey(params, syndrome);
+         result.test_is_eq("Berlekamp-Massey Algorithm", locator, ref_locator);
 
          return result;
       }
