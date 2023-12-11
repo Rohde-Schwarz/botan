@@ -219,8 +219,8 @@ Classic_McEliece_Parameters::Classic_McEliece_Parameters(
       m_set(param_set), m_m(m), m_n(n), m_t(t), m_poly_f(poly_f) {
    BOTAN_ASSERT(n % 8 == 0, "We require that n is a multiple of 8");
    auto poly_big_f_coef = determine_big_f_coef(m_t, poly_f);
-   m_q = (size_t(1) << m_m);
-   m_poly_ring = std::make_shared<Classic_McEliece_Polynomial_Ring>(poly_big_f_coef, poly_f, t);
+   // TODO: Remove from constructor
+   m_poly_ring = std::make_unique<Classic_McEliece_Polynomial_Ring>(poly_big_f_coef, poly_f, t);
 }
 
 }  // namespace Botan
