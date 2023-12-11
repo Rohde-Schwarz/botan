@@ -199,7 +199,7 @@ std::pair<Classic_McEliece_PrivateKeyInternal, Classic_McEliece_PublicKeyInterna
 
       //Irreducible algorithm 8.1
       auto beta = field->create_element_from_bytes(irreducible_seed);
-      auto g = beta.compute_minimal_polynomial();  //TODO: Check if degree is t and optional return?
+      auto g = compute_minimal_polynomial(beta);  //TODO: Check if degree is t and optional return?
 
       if(!g.has_value()) {
          delta = secure_vector<uint8_t>(delta_p.begin(), delta_p.end());

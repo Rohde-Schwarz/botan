@@ -103,14 +103,14 @@ class CMCE_Utility_Tests final : public Test {
              0x0804, 0x0290, 0x0f25, 0x04b9, 0x0875, 0x0164, 0x041e, 0x0aea, 0x0843, 0x01b3, 0x092d, 0x0dce, 0x02e1,
              0x06fd, 0x0636, 0x0059, 0x0d19, 0x0d2b, 0x0d4b, 0x0a79, 0x0118, 0x03dd, 0x00ca, 0x00dc, 0x0307});
 
-         auto exp_g = Botan::Classic_McEliece_Minimal_Polynomial::from_bytes(
+         auto exp_g = Botan::from_bytes(
             Botan::hex_decode(
                "8d00a50f520a0307b8007c06cb04b9073b0f4a0f800fb706a60f2a05910a670b460375091209fc060a09ab036c09e5085a0df90d3506b404a30fda041d09970f1206d000e00aac01c00dc80f490cd80b4108330c0208cf00d602450ec00a21079806eb093f00de015f052905560917081b09270c820af002000c34094504cd03"),
             params.poly_f());
          auto beta = field->create_element_from_bytes(random_bits);
          result.test_is_eq("Beta creation", beta, exp_beta);
 
-         auto g = beta.compute_minimal_polynomial();
+         auto g = compute_minimal_polynomial(beta);
          result.confirm("Minimize polynomial successful", g.has_value());
          result.test_is_eq("Minimize polynomial", g.value().coef(), exp_g.coef());
 
@@ -330,7 +330,7 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
 
          auto [sk, pk] = Botan::cmce_key_gen(params, test_rng->random_vec(32));
 
-         sk.g().to_bytes();
+         to_bytes(sk.g());
 
          auto control_bits = sk.alpha().alphas_control_bits();
 
@@ -344,9 +344,8 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
          result.test_is_eq("Read Field Ordering from Control Bits", n_alphas_from_control_bits, ref_field_ord);
 
          // Test Classic_McEliece_Minimal_Polynomial::from_bytes
-         auto goppa_poly_from_bytes =
-            Botan::Classic_McEliece_Minimal_Polynomial::from_bytes(sk.g().to_bytes(), params.poly_f());
-         result.test_is_eq("Read Goppa Polynomial from Bytes", goppa_poly_from_bytes.to_bytes(), sk.g().to_bytes());
+         auto goppa_poly_from_bytes = Botan::from_bytes(to_bytes(sk.g()), params.poly_f());
+         result.test_is_eq("Read Goppa Polynomial from Bytes", to_bytes(goppa_poly_from_bytes), to_bytes(sk.g()));
 
          // Test syndrome computation
          auto code_word = Botan::bitvector(ct, params.m() * params.t());

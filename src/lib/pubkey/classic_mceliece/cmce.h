@@ -79,7 +79,7 @@ class Classic_McEliece_PrivateKeyInternal {
       secure_vector<uint8_t> serialize() const {
          auto c_bytes = m_c.to_bytes();
 
-         return Botan::concat(m_delta, c_bytes, m_g.to_bytes(), m_alpha.alphas_control_bits().to_bytes(), m_s);
+         return Botan::concat(m_delta, c_bytes, to_bytes(m_g), m_alpha.alphas_control_bits().to_bytes(), m_s);
       }
 
       const secure_vector<uint8_t>& delta() const { return m_delta; }
