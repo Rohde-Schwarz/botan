@@ -15,6 +15,8 @@
 #include <botan/internal/pk_ops.h>
 #include <botan/internal/pk_ops_impl.h>
 
+#include <algorithm>
+
 namespace Botan {
 
 class Classic_McEliece_Encryptor final : public PK_Ops::KEM_Encryption {
@@ -100,6 +102,7 @@ std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_P
 
       auto c_mask = CT::Mask<uint16_t>::expand(code_word.at(i));
 
+      // TODO: Is this CT for all compiler optimizations? A smart compiler could skip the XOR if code_word[i] == 0.
       for(size_t j = 0; j < 2 * params.t(); ++j) {
          syndrome.at(j) = (syndrome.at(j).elem() ^ c_mask.if_set_return(e_inv.elem()));
          e_inv = e_inv * n_alphas[i];
@@ -157,11 +160,8 @@ std::vector<Classic_McEliece_GF> berlekamp_massey(const Classic_McEliece_Paramet
       big_b.at(0) = 0;
    }
 
-   for(size_t i = 0; i <= params.t(); ++i) {
-      output.at(i) = big_c.at(params.t() - i);
-   }
-
-   return output;
+   std::reverse(big_c.begin(), big_c.end());
+   return big_c;
 }
 
 std::pair<Classic_McEliece_PrivateKeyInternal, Classic_McEliece_PublicKeyInternal> cmce_key_gen(
