@@ -19,8 +19,7 @@ using word_t = uint64_t;
 // TODO: Refactoring potential (after semi-systematic form is implemented)
 namespace Botan {
 namespace {
-template <typename T>
-size_t count_lsb_zeros(secure_bitvector<T> n) {
+size_t count_lsb_zeros(secure_bitvector n) {
    size_t res = 0;
    Botan::CT::Mask<size_t> found_only_zeros = Botan::CT::Mask<size_t>::set();
    for(size_t bit_pos = 0; bit_pos < n.size(); ++bit_pos) {
@@ -32,9 +31,9 @@ size_t count_lsb_zeros(secure_bitvector<T> n) {
    return res;
 }
 
-std::vector<secure_bitvector<word_t>> init_matrix_with_alphas(const Classic_McEliece_Parameters& params,
-                                                              Classic_McEliece_Field_Ordering& field_ordering,
-                                                              const Classic_McEliece_Minimal_Polynomial& g) {
+std::vector<secure_bitvector> init_matrix_with_alphas(const Classic_McEliece_Parameters& params,
+                                                      Classic_McEliece_Field_Ordering& field_ordering,
+                                                      const Classic_McEliece_Minimal_Polynomial& g) {
    auto all_alphas = field_ordering.alphas();
    BOTAN_ASSERT_NOMSG(params.n() <= all_alphas.size());
    // TODO: In own function
@@ -44,7 +43,7 @@ std::vector<secure_bitvector<word_t>> init_matrix_with_alphas(const Classic_McEl
    for(auto& alpha : alphas) {
       inv_g_of_alpha.push_back(g(alpha).inv());
    }
-   std::vector<secure_bitvector<word_t>> mat(params.pk_no_rows(), secure_bitvector<word_t>(params.n()));
+   std::vector<secure_bitvector> mat(params.pk_no_rows(), secure_bitvector(params.n()));
 
    for(size_t i = 0; i < params.t(); ++i) {
       for(size_t j = 0; j < params.n(); ++j) {
@@ -62,14 +61,14 @@ std::vector<secure_bitvector<word_t>> init_matrix_with_alphas(const Classic_McEl
    return mat;
 }
 
-std::optional<secure_bitvector<uint64_t>> move_columns(std::vector<secure_bitvector<word_t>>& mat,
-                                                       Classic_McEliece_Field_Ordering& field_ordering,
-                                                       const Classic_McEliece_Parameters& params) {
+std::optional<secure_bitvector> move_columns(std::vector<secure_bitvector>& mat,
+                                             Classic_McEliece_Field_Ordering& field_ordering,
+                                             const Classic_McEliece_Parameters& params) {
    // TODO refactor w/ new bitvector
    static_assert(Classic_McEliece_Parameters::nu() == 64,
                  "nu needs to be 64");  // Since we use uint64_t to represent tows in the mu x nu sub-matrix
    // A 32x64 sub-matrix of mat containing the elements mat[m*t-32][m*t-32] at the top left
-   std::vector<secure_bitvector<word_t>> sub_mat(Classic_McEliece_Parameters::mu(), secure_bitvector<word_t>());
+   std::vector<secure_bitvector> sub_mat(Classic_McEliece_Parameters::mu(), secure_bitvector());
 
    size_t pos_offset = params.pk_no_rows() - Classic_McEliece_Parameters::mu();
 
@@ -78,7 +77,7 @@ std::optional<secure_bitvector<uint64_t>> move_columns(std::vector<secure_bitvec
       sub_mat.at(i) = mat.at(pos_offset + i).subvector(pos_offset, Classic_McEliece_Parameters::nu());
    }
 
-   secure_bitvector<uint64_t> pivots(Classic_McEliece_Parameters::nu());
+   secure_bitvector pivots(Classic_McEliece_Parameters::nu());
    std::array<size_t, Classic_McEliece_Parameters::mu()> pivot_indices = {0};  // ctz_list
 
    // Identify the pivot indices, i.e. the indices of the leading ones for all rows
@@ -149,12 +148,12 @@ std::optional<secure_bitvector<uint64_t>> move_columns(std::vector<secure_bitvec
    return pivots;
 }
 
-std::optional<secure_bitvector<uint64_t>> apply_gauss(const Classic_McEliece_Parameters& params,
-                                                      Classic_McEliece_Field_Ordering& field_ordering,
-                                                      std::vector<secure_bitvector<word_t>>& mat) {
+std::optional<secure_bitvector> apply_gauss(const Classic_McEliece_Parameters& params,
+                                            Classic_McEliece_Field_Ordering& field_ordering,
+                                            std::vector<secure_bitvector>& mat) {
    // Initialized for systematic form instances
    // Is overridden for semi systematic instances
-   auto pivots = secure_bitvector<uint64_t>(std::vector<uint8_t>({0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0}), 64);
+   auto pivots = secure_bitvector(std::vector<uint8_t>({0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0}), 64);
 
    // Gaussian Elimination
    for(size_t diag_pos = 0; diag_pos < params.pk_no_rows(); ++diag_pos) {
@@ -195,7 +194,7 @@ std::optional<secure_bitvector<uint64_t>> apply_gauss(const Classic_McEliece_Par
 }
 
 std::vector<uint8_t> extract_pk_bytes_from_matrix(const Classic_McEliece_Parameters& params,
-                                                  const std::vector<secure_bitvector<word_t>>& mat) {
+                                                  const std::vector<secure_bitvector>& mat) {
    // Store T of the matrix (I_mt|T) as a linear vector to represent the
    // public key as defined in McEliece ISO 9.2.7
    std::vector<uint8_t> big_t(params.pk_size_bytes());
@@ -215,7 +214,7 @@ std::vector<uint8_t> extract_pk_bytes_from_matrix(const Classic_McEliece_Paramet
 
 }  // namespace
 
-std::optional<std::pair<Classic_McEliece_Matrix, secure_bitvector<uint64_t>>> Classic_McEliece_Matrix::create_matrix(
+std::optional<std::pair<Classic_McEliece_Matrix, secure_bitvector>> Classic_McEliece_Matrix::create_matrix(
    const Classic_McEliece_Parameters& params,
    Classic_McEliece_Field_Ordering& field_ordering,
    const Classic_McEliece_Minimal_Polynomial& g) {
@@ -230,15 +229,14 @@ std::optional<std::pair<Classic_McEliece_Matrix, secure_bitvector<uint64_t>>> Cl
    return std::make_pair(Classic_McEliece_Matrix(std::move(pk_mat_bytes)), pivots.value());
 }
 
-bitvector<uint64_t> Classic_McEliece_Matrix::mul(const Classic_McEliece_Parameters& params,
-                                                 const secure_bitvector<uint64_t>& e) const {
+bitvector Classic_McEliece_Matrix::mul(const Classic_McEliece_Parameters& params, const secure_bitvector& e) const {
    auto s = e.subvector(0, params.pk_no_rows());
    auto e_T = e.subvector(params.pk_no_rows());
    auto pk_slicer = BufferSlicer(m_mat_bytes);
 
    for(size_t i = 0; i < params.pk_no_rows(); ++i) {
       auto pk_current_bytes = pk_slicer.take(params.pk_row_size_bytes());
-      auto row = secure_bitvector<uint64_t>(pk_current_bytes, params.n() - params.pk_no_rows());
+      auto row = secure_bitvector(pk_current_bytes, params.n() - params.pk_no_rows());
       row &= e_T;
       s.at(i) = s.at(i) ^ row.has_odd_hamming_weight();
    }

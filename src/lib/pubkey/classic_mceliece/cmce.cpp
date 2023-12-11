@@ -78,9 +78,9 @@ class Classic_McEliece_Decryptor final : public PK_Ops::KEM_Decryption {
 
 //------------------------------------------------------------------------------------------------------
 namespace {
-bitvector<uint64_t> cmce_encode(const Classic_McEliece_Parameters& params,
-                                const secure_bitvector<uint64_t>& e,
-                                const Classic_McEliece_Matrix& mat) {
+bitvector cmce_encode(const Classic_McEliece_Parameters& params,
+                      const secure_bitvector& e,
+                      const Classic_McEliece_Matrix& mat) {
    return mat.mul(params, e);
 }
 
@@ -232,8 +232,8 @@ std::pair<Classic_McEliece_PrivateKeyInternal, Classic_McEliece_PublicKeyInterna
 /**
 * Fixed-weight-vector generation algorithm according to ISO McEliece.
 */
-std::optional<secure_bitvector<uint64_t>> cmce_fixed_weight_vector_gen(const Classic_McEliece_Parameters& params,
-                                                                       const secure_vector<uint8_t>& rand) {
+std::optional<secure_bitvector> cmce_fixed_weight_vector_gen(const Classic_McEliece_Parameters& params,
+                                                             const secure_vector<uint8_t>& rand) {
    BOTAN_ASSERT_NOMSG(rand.size() == params.tau() * params.sigma1() / 8);
    uint16_t mask_m = (uint32_t(1) << params.m()) - 1;  // Only take m least significant bits
    std::vector<uint16_t> a_values;
@@ -267,7 +267,7 @@ std::optional<secure_bitvector<uint64_t>> cmce_fixed_weight_vector_gen(const Cla
       }
    }
 
-   secure_bitvector<uint64_t> e(params.n());
+   secure_bitvector e(params.n());
 
    // Step 5: Set all bits of e at the positions of a_values
    for(auto& a : a_values) {
@@ -284,7 +284,7 @@ std::pair<std::vector<uint8_t>, secure_vector<uint8_t>> cmce_encaps(const Classi
                                                                     RandomNumberGenerator& rng) {
    // Call fixed_weight until it is successful
    auto& params = pk.params();
-   secure_bitvector<uint64_t> e;
+   secure_bitvector e;
    // TODO: Remove Counter - Only for debugging
    int ctr = 10;
    while(true) {

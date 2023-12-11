@@ -204,10 +204,10 @@ std::vector<Classic_McEliece_GF> Classic_McEliece_Field_Ordering::alphas() const
    return res;
 }
 
-secure_bitvector<uint64_t> Classic_McEliece_Field_Ordering::alphas_control_bits() const {
+secure_bitvector Classic_McEliece_Field_Ordering::alphas_control_bits() const {
    // Each vector element contains one bit of the control bits
    auto control_bits_as_words = generate_control_bits_internal(m_pi);
-   auto control_bits = secure_bitvector<uint64_t>(control_bits_as_words.size());
+   auto control_bits = secure_bitvector(control_bits_as_words.size());
    for(size_t i = 0; i < control_bits.size(); ++i) {
       control_bits.at(i) = control_bits_as_words.at(i);
    }
@@ -322,7 +322,7 @@ secure_vector<uint16_t> Classic_McEliece_Field_Ordering::generate_control_bits_i
 // Based on the Python code "permutation(c)" from Bernstein
 // "Verified fast formulas for control bits for permutation networks"
 Classic_McEliece_Field_Ordering Classic_McEliece_Field_Ordering::create_from_control_bits(
-   const Classic_McEliece_Parameters& params, const secure_bitvector<uint64_t>& control_bits) {
+   const Classic_McEliece_Parameters& params, const secure_bitvector& control_bits) {
    BOTAN_ASSERT_NOMSG(control_bits.size() == (2 * params.m() - 1) << (params.m() - 1));
    uint16_t n = 1 << params.m();
    secure_vector<uint16_t> pi(n);

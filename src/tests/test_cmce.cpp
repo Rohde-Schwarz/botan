@@ -78,7 +78,7 @@ class CMCE_Utility_Tests final : public Test {
          auto ord = Botan::Classic_McEliece_Field_Ordering::create_field_ordering(params, random_bits);
          result.confirm("Field order creation successful", ord.has_value());
          auto control_bits = ord->alphas_control_bits();
-         Botan::secure_bitvector<uint64_t> control_bv(control_bits);
+         Botan::secure_bitvector control_bv(control_bits);
          auto ord_from_cb = Botan::Classic_McEliece_Field_Ordering::create_from_control_bits(params, control_bv);
          result.test_is_eq("Field order creation from control bits", ord_from_cb.pi_ref(), ord->pi_ref());
 
@@ -189,7 +189,7 @@ class CMCE_Utility_Tests final : public Test {
          auto ord = Botan::Classic_McEliece_Field_Ordering::create_field_ordering(params, random_bits);
          result.confirm("Field order creation successful", ord.has_value());
          auto control_bits = ord->alphas_control_bits();
-         auto control_bv = Botan::secure_bitvector<uint64_t>(control_bits);
+         auto control_bv = Botan::secure_bitvector(control_bits);
          auto ord_from_cb = Botan::Classic_McEliece_Field_Ordering::create_from_control_bits(params, control_bv);
          result.test_is_eq("Field order creation from control bits", ord_from_cb.pi_ref(), ord->pi_ref());
 
