@@ -46,7 +46,7 @@ class Classic_McEliece_PrivateKeyInternal {
    public:
       Classic_McEliece_PrivateKeyInternal(Classic_McEliece_Parameters params,
                                           secure_vector<uint8_t> delta,
-                                          secure_bitvector<uint64_t> c,
+                                          secure_bitvector c,
                                           Classic_McEliece_Minimal_Polynomial g,
                                           Classic_McEliece_Field_Ordering alpha,
                                           secure_vector<uint8_t> s) :
@@ -84,7 +84,7 @@ class Classic_McEliece_PrivateKeyInternal {
 
       const secure_vector<uint8_t>& delta() const { return m_delta; }
 
-      const secure_bitvector<uint64_t>& c() const { return m_c; }
+      const secure_bitvector& c() const { return m_c; }
 
       const Classic_McEliece_Minimal_Polynomial& g() const { return m_g; }
 
@@ -97,7 +97,7 @@ class Classic_McEliece_PrivateKeyInternal {
    private:
       Classic_McEliece_Parameters m_params;
       secure_vector<uint8_t> m_delta;
-      secure_bitvector<uint64_t> m_c;
+      secure_bitvector m_c;
       Classic_McEliece_Minimal_Polynomial m_g;
       Classic_McEliece_Field_Ordering m_alpha;
       secure_vector<uint8_t> m_s;
@@ -109,8 +109,8 @@ std::pair<Classic_McEliece_PrivateKeyInternal, Classic_McEliece_PublicKeyInterna
 std::pair<std::vector<uint8_t>, secure_vector<uint8_t>> cmce_encaps(const Classic_McEliece_PublicKeyInternal& pk,
                                                                     RandomNumberGenerator& rng);
 
-std::optional<secure_bitvector<uint64_t>> cmce_fixed_weight_vector_gen(const Classic_McEliece_Parameters& params,
-                                                                       const secure_vector<uint8_t>& rand);
+std::optional<secure_bitvector> cmce_fixed_weight_vector_gen(const Classic_McEliece_Parameters& params,
+                                                             const secure_vector<uint8_t>& rand);
 
 std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_Parameters& params,
                                                         const Classic_McEliece_Minimal_Polynomial& goppa_poly,

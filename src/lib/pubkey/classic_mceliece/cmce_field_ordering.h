@@ -22,10 +22,10 @@ class BOTAN_TEST_API Classic_McEliece_Field_Ordering {
          const Classic_McEliece_Parameters& params, std::span<const uint8_t> random_bits);
 
       static Classic_McEliece_Field_Ordering create_from_control_bits(const Classic_McEliece_Parameters& params,
-                                                                      const secure_bitvector<uint64_t>& control_bits);
+                                                                      const secure_bitvector& control_bits);
 
       std::vector<Classic_McEliece_GF> alphas() const;
-      secure_bitvector<uint64_t> alphas_control_bits() const;
+      secure_bitvector alphas_control_bits() const;
 
       secure_vector<uint16_t>& pi_ref() { return m_pi; }
 

@@ -21,7 +21,7 @@ namespace Botan {
 class BOTAN_TEST_API Classic_McEliece_Matrix {
    public:
       //TODO: Strong type for pivots
-      static std::optional<std::pair<Classic_McEliece_Matrix, secure_bitvector<uint64_t>>> create_matrix(
+      static std::optional<std::pair<Classic_McEliece_Matrix, secure_bitvector>> create_matrix(
          const Classic_McEliece_Parameters& params,
          Classic_McEliece_Field_Ordering& field_ordering,
          const Classic_McEliece_Minimal_Polynomial& g);
@@ -30,7 +30,7 @@ class BOTAN_TEST_API Classic_McEliece_Matrix {
 
       Classic_McEliece_Matrix(std::vector<uint8_t> mat_bytes) : m_mat_bytes(std::move(mat_bytes)) {}
 
-      bitvector<uint64_t> mul(const Classic_McEliece_Parameters& params, const secure_bitvector<uint64_t>& e) const;
+      bitvector mul(const Classic_McEliece_Parameters& params, const secure_bitvector& e) const;
 
    private:
       const std::vector<uint8_t> m_mat_bytes;
