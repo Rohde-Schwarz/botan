@@ -44,6 +44,7 @@ class BOTAN_TEST_API Classic_McEliece_Minimal_Polynomial {
 };
 
 //Implements FF_(q^t) via FF_q[y]/F(y)
+// TODO: Do we want to create any hierarchy/connection between CMCE_Polynomial and CMCE_Minimal_Polynomial?
 class BOTAN_TEST_API Classic_McEliece_Polynomial {
    public:
       Classic_McEliece_Polynomial(std::vector<Classic_McEliece_GF> coef,
@@ -51,6 +52,8 @@ class BOTAN_TEST_API Classic_McEliece_Polynomial {
             m_coef(std::move(coef)), m_ring(std::move(ring)) {}
 
       std::optional<Classic_McEliece_Minimal_Polynomial> compute_minimal_polynomial() const;
+
+      Classic_McEliece_GF operator()(const Classic_McEliece_GF& a) const;
 
       Classic_McEliece_Polynomial operator*(const Classic_McEliece_Polynomial& other) const;
 

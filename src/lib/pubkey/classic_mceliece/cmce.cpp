@@ -161,6 +161,8 @@ std::vector<Classic_McEliece_GF> berlekamp_massey(const Classic_McEliece_Paramet
    }
 
    std::reverse(big_c.begin(), big_c.end());
+
+   //TODO: Return locator poly:  auto locator_poly = Classic_McEliece_Polynomial(big_c);
    return big_c;
 }
 
@@ -391,7 +393,7 @@ Classic_McEliece_PrivateKey::Classic_McEliece_PrivateKey(RandomNumberGenerator& 
 Classic_McEliece_PrivateKey::Classic_McEliece_PrivateKey(std::span<const uint8_t> sk,
                                                          Classic_McEliece_Parameter_Set param_set) {
    auto params = Classic_McEliece_Parameters::create(param_set);
-   auto sk_internal = Classic_McEliece_PrivateKeyInternal::from_bytes(std::move(params), sk);
+   auto sk_internal = Classic_McEliece_PrivateKeyInternal::from_bytes(params, sk);
    m_private = std::make_shared<Classic_McEliece_PrivateKeyInternal>(std::move(sk_internal));
    m_public = nullptr;  // TODO: Create public key from sk
 }
