@@ -359,6 +359,15 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
          auto locator = berlekamp_massey(params, syndrome);
          result.test_is_eq("Berlekamp-Massey Algorithm", locator, ref_locator);
 
+         // Test application of the locator polynomial
+         auto loc_poly = Botan::Classic_McEliece_Polynomial(locator, params.poly_ring());
+         std::vector<Botan::Classic_McEliece_GF> images;
+         images.reserve(ref_field_ord.size());
+         for(auto& alpha : ref_field_ord) {
+            images.push_back(loc_poly(alpha));
+         }
+         result.test_is_eq("Test application of the locator polynomial", images, ref_images);
+
          return result;
       }
 };

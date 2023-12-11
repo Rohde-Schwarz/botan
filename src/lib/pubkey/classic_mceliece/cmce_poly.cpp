@@ -98,6 +98,18 @@ std::optional<Classic_McEliece_Minimal_Polynomial> Classic_McEliece_Polynomial::
    return Classic_McEliece_Minimal_Polynomial(mat.at(ring()->t()).coef());
 }
 
+Classic_McEliece_GF Classic_McEliece_Polynomial::operator()(const Classic_McEliece_GF& a) const {
+   BOTAN_ASSERT(a.modulus() == coef_at(0).modulus(), "Unmatching Galois fields");
+
+   Classic_McEliece_GF r(0, a.modulus());
+   for(auto it = m_coef.rbegin(); it != m_coef.rend(); ++it) {
+      r *= a;
+      r += *it;
+   }
+
+   return r;
+}
+
 Classic_McEliece_Polynomial Classic_McEliece_Polynomial::operator*(const Classic_McEliece_Polynomial& other) const {
    return m_ring->multiply(*this, other);
 }
