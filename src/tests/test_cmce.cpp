@@ -96,21 +96,21 @@ class CMCE_Utility_Tests final : public Test {
          // Created using the reference implementation
          auto random_bits = Botan::hex_decode(
             "d9b8bb962a3f9dac0f832d243def581e7d26f4028de1ff9cd168460e5050ab095a32a372b40d720bd5d75389a6b3f08fa1d13cec60a4b716d4d6c240f2f80cd3cbc76ae0dddca164c1130da185bd04e890f2256fb9f4754864811e14ea5a43b8b3612d59cecde1b2fdb6362659a0193d2b7d4b9d79aa1801dde3ca90dc300773");
-         auto exp_beta = field->create_element_from_coef(
+         auto exp_beta = field.create_element_from_coef(
             {0x08d9, 0x06bb, 0x0f2a, 0x0c9d, 0x030f, 0x042d, 0x0f3d, 0x0e58, 0x067d, 0x02f4, 0x018d, 0x0cff, 0x08d1,
              0x0e46, 0x0050, 0x09ab, 0x025a, 0x02a3, 0x0db4, 0x0b72, 0x07d5, 0x0953, 0x03a6, 0x0ff0, 0x01a1, 0x0c3c,
              0x0460, 0x06b7, 0x06d4, 0x00c2, 0x08f2, 0x030c, 0x07cb, 0x006a, 0x0cdd, 0x04a1, 0x03c1, 0x010d, 0x0d85,
              0x0804, 0x0290, 0x0f25, 0x04b9, 0x0875, 0x0164, 0x041e, 0x0aea, 0x0843, 0x01b3, 0x092d, 0x0dce, 0x02e1,
              0x06fd, 0x0636, 0x0059, 0x0d19, 0x0d2b, 0x0d4b, 0x0a79, 0x0118, 0x03dd, 0x00ca, 0x00dc, 0x0307});
 
-         auto exp_g = Botan::from_bytes(
+         auto exp_g = Botan::cmce_poly_from_bytes(
             Botan::hex_decode(
                "8d00a50f520a0307b8007c06cb04b9073b0f4a0f800fb706a60f2a05910a670b460375091209fc060a09ab036c09e5085a0df90d3506b404a30fda041d09970f1206d000e00aac01c00dc80f490cd80b4108330c0208cf00d602450ec00a21079806eb093f00de015f052905560917081b09270c820af002000c34094504cd03"),
             params.poly_f());
-         auto beta = field->create_element_from_bytes(random_bits);
+         auto beta = field.create_element_from_bytes(random_bits);
          result.test_is_eq("Beta creation", beta, exp_beta);
 
-         auto g = compute_minimal_polynomial(beta);
+         auto g = compute_minimal_polynomial(params, beta);
          result.confirm("Minimize polynomial successful", g.has_value());
          result.test_is_eq("Minimize polynomial", g.value().coef(), exp_g.coef());
 
@@ -151,27 +151,27 @@ class CMCE_Utility_Tests final : public Test {
 
          auto field = params.poly_ring();
 
-         auto val1 = field->create_element_from_coef(
+         auto val1 = field.create_element_from_coef(
             {0x2bb, 0x4d4, 0x937, 0xa4c, 0x3e4, 0x4c,  0xfb1, 0x9ed, 0x40a, 0xf85, 0xc66, 0xe3b, 0xe11,
              0x9b4, 0xa81, 0x186, 0xf5b, 0x458, 0xeca, 0x878, 0x698, 0xbe2, 0x35b, 0xbaa, 0x2c2, 0x50b,
              0x3ea, 0xd71, 0x2a9, 0xc34, 0xf39, 0xb63, 0x7bc, 0xda7, 0xbb2, 0xe9e, 0x3e4, 0x589, 0xaa0,
              0x909, 0x50a, 0x421, 0xa5e, 0x607, 0xb37, 0x5a,  0xa05, 0x41,  0xc48, 0xe4d, 0x8f,  0x673,
              0x992, 0x137, 0x4fe, 0xd65, 0xfbe, 0x7d0, 0x102, 0x41a, 0x391, 0x260, 0x43f, 0xafb});
-         auto val2 = field->create_element_from_coef(
+         auto val2 = field.create_element_from_coef(
             {0xc06, 0xb63, 0xa17, 0xbb,  0xf02, 0x3ef, 0x1e5, 0xe02, 0x989, 0x881, 0x1bf, 0xdf3, 0x9d3,
              0x0,   0xd0e, 0xc3d, 0x4a4, 0x1ec, 0x719, 0x260, 0x81f, 0x98c, 0xbb9, 0x60a, 0x2a7, 0x4d1,
              0xf50, 0x20f, 0xaf0, 0x258, 0x187, 0x90a, 0x14e, 0xd49, 0xc27, 0x573, 0x18,  0xabc, 0x3f3,
              0x1b9, 0x2b2, 0x3b5, 0x21,  0x228, 0x3b9, 0xace, 0x8b4, 0x806, 0xa3f, 0x62d, 0x2d0, 0xfdf,
              0x826, 0x11,  0x25c, 0xba1, 0xe30, 0xb5c, 0xda2, 0x414, 0x350, 0xfc5, 0x22f, 0x2de});
 
-         auto exp_mul = field->create_element_from_coef(std::vector<uint16_t>{
+         auto exp_mul = field.create_element_from_coef(std::vector<uint16_t>{
             0xd37, 0xb09, 0x19,  0xe8f, 0x1fb, 0x1f5, 0x41b, 0x5f9, 0xd4b, 0x71f, 0x41d, 0x157, 0x91e,
             0xdcd, 0x9fa, 0x3c,  0x84f, 0xe50, 0xa67, 0x5bb, 0x967, 0x0,   0x3f6, 0xa77, 0x539, 0x4bf,
             0x844, 0x2b8, 0x558, 0xb93, 0x125, 0x122, 0xa8d, 0xe56, 0xd84, 0xd96, 0xa9d, 0xd28, 0x61d,
             0x8fc, 0x7d5, 0x68c, 0xcfe, 0x6b4, 0x6d0, 0x21e, 0x9c6, 0x705, 0xed2, 0xcb1, 0x1b9, 0x846,
             0x45c, 0x32e, 0xe0c, 0x71a, 0xf91, 0xccd, 0xf5f, 0x6da, 0xc6c, 0x6ee, 0x11d, 0xff4});
 
-         auto mul = val1 * val2;
+         auto mul = field.multiply(val1, val2);  // val1 * val2;
          result.test_is_eq("GF multiplication", mul, exp_mul);
 
          return result;
@@ -330,7 +330,7 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
 
          auto [sk, pk] = Botan::cmce_key_gen(params, test_rng->random_vec(32));
 
-         to_bytes(sk.g());
+         cmce_poly_to_bytes(sk.g());
 
          auto control_bits = sk.alpha().alphas_control_bits();
 
@@ -344,8 +344,9 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
          result.test_is_eq("Read Field Ordering from Control Bits", n_alphas_from_control_bits, ref_field_ord);
 
          // Test Classic_McEliece_Minimal_Polynomial::from_bytes
-         auto goppa_poly_from_bytes = Botan::from_bytes(to_bytes(sk.g()), params.poly_f());
-         result.test_is_eq("Read Goppa Polynomial from Bytes", to_bytes(goppa_poly_from_bytes), to_bytes(sk.g()));
+         auto goppa_poly_from_bytes = Botan::cmce_poly_from_bytes(cmce_poly_to_bytes(sk.g()), params.poly_f());
+         result.test_is_eq(
+            "Read Goppa Polynomial from Bytes", cmce_poly_to_bytes(goppa_poly_from_bytes), cmce_poly_to_bytes(sk.g()));
 
          // Test syndrome computation
          auto code_word = Botan::bitvector(ct, params.m() * params.t());
@@ -359,7 +360,7 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
          result.test_is_eq("Berlekamp-Massey Algorithm", locator, ref_locator);
 
          // Test application of the locator polynomial
-         auto loc_poly = Botan::Classic_McEliece_Polynomial(locator, params.poly_ring());
+         auto loc_poly = Botan::Classic_McEliece_Polynomial(locator);
          std::vector<Botan::Classic_McEliece_GF> images;
          images.reserve(ref_field_ord.size());
          for(auto& alpha : ref_field_ord) {

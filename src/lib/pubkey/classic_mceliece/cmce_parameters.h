@@ -73,6 +73,9 @@ class BOTAN_PUBLIC_API(3, 1) Classic_McEliece_Parameters final {
       static Classic_McEliece_Parameter_Set param_set_from_oid(const OID& oid);
       static Classic_McEliece_Parameter_Set param_set_from_str(std::string_view param_name);
 
+      Classic_McEliece_Parameters(const Classic_McEliece_Parameters& other) :
+            Classic_McEliece_Parameters(other.m_set, other.m_m, other.m_n, other.m_t, other.m_poly_f) {}
+
       Classic_McEliece_Parameter_Set set() const { return m_set; }
 
       OID object_identifier() const { throw Not_Implemented("TODO"); }
@@ -101,7 +104,7 @@ class BOTAN_PUBLIC_API(3, 1) Classic_McEliece_Parameters final {
 
       size_t m() const { return m_m; }
 
-      size_t q() const { return m_q; }
+      size_t q() const { return (size_t(1) << m_m); }
 
       size_t n() const { return m_n; }
 
@@ -164,7 +167,7 @@ class BOTAN_PUBLIC_API(3, 1) Classic_McEliece_Parameters final {
          }
       }
 
-      std::shared_ptr<const Classic_McEliece_Polynomial_Ring> poly_ring() const { return m_poly_ring; }
+      const Classic_McEliece_Polynomial_Ring& poly_ring() const { return *m_poly_ring; }
 
       secure_vector<uint8_t> prg(std::span<const uint8_t> seed) const {
          BOTAN_ASSERT_EQUAL(seed.size(), 32, "Valid seed length");
@@ -186,12 +189,11 @@ class BOTAN_PUBLIC_API(3, 1) Classic_McEliece_Parameters final {
       Classic_McEliece_Parameter_Set m_set;
 
       size_t m_m;
-      size_t m_q;
       size_t m_n;
       size_t m_t;
 
       uint16_t m_poly_f;
-      std::shared_ptr<const Classic_McEliece_Polynomial_Ring> m_poly_ring;
+      std::unique_ptr<Classic_McEliece_Polynomial_Ring> m_poly_ring;
 };
 
 }  // namespace Botan

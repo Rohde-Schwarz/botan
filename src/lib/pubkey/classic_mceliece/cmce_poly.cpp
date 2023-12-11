@@ -12,95 +12,7 @@
 
 namespace Botan {
 
-#if false
-
-Classic_McEliece_GF Classic_McEliece_Minimal_Polynomial::operator()(const Classic_McEliece_GF& a) const {
-   BOTAN_ASSERT(a.modulus() == coef_at(0).modulus(), "Unmatching Galois fields");
-
-   auto r = Classic_McEliece_GF(1, a.modulus());  // coef for x^t is always 1
-
-   for(int i = degree() - 1; i >= 0; --i) {
-      r *= a;
-      r += coef_at(i);
-   }
-
-   return r;
-}
-
-secure_vector<uint8_t> Classic_McEliece_Minimal_Polynomial::to_bytes() const {
-   secure_vector<uint8_t> bytes(sizeof(u_int16_t) * m_coef.size());
-   BufferStuffer bytes_stuf(bytes);
-   for(auto& coef : m_coef) {
-      store_le(coef.elem(), bytes_stuf.next(sizeof(u_int16_t)).data());
-   }
-   BOTAN_ASSERT_NOMSG(bytes_stuf.full());
-   return bytes;
-}
-
-Classic_McEliece_Minimal_Polynomial Classic_McEliece_Minimal_Polynomial::from_bytes(std::span<const uint8_t> bytes,
-                                                                                    uint16_t poly_f) {
-   BOTAN_ASSERT_NOMSG(bytes.size() % 2 == 0);
-   size_t len = bytes.size() / 2;
-   std::vector<uint16_t> coef_vec(len);
-   load_le<uint16_t>(coef_vec.data(), bytes.data(), len);
-   std::vector<Classic_McEliece_GF> coeff_vec_gf;
-   std::transform(coef_vec.begin(), coef_vec.end(), std::back_inserter(coeff_vec_gf), [poly_f](auto& coeff) {
-      return Classic_McEliece_GF(coeff, poly_f);
-   });
-   //TODO: This can be generalized to also cover the Poly field create element functions
-
-   return Classic_McEliece_Minimal_Polynomial(coeff_vec_gf);
-}
-
-std::optional<Classic_McEliece_Minimal_Polynomial> Classic_McEliece_Polynomial::compute_minimal_polynomial() const {
-   const Classic_McEliece_Polynomial& f = *this;
-   std::vector<Classic_McEliece_Polynomial> mat;
-
-   mat.push_back(m_ring->create_element_from_coef(
-      concat_as<std::vector<uint16_t>>(std::vector<uint16_t>{1}, std::vector<uint16_t>(ring()->t() - 1, 0))));
-
-   mat.push_back(Classic_McEliece_Polynomial(f));
-
-   for(size_t j = 2; j <= ring()->t(); ++j) {
-      mat.push_back(mat.at(j - 1) * f);
-   }
-
-   // Gaussian
-   for(size_t j = 0; j < ring()->t(); ++j) {
-      for(size_t k = j + 1; k < ring()->t(); ++k) {
-         auto cond = CT::Mask<uint16_t>::is_zero(mat.at(j).coef_at(j).elem());
-
-         for(size_t c = j; c < ring()->t() + 1; ++c) {
-            auto acc = cond.select(mat.at(c).coef_at(k).elem(), 0);
-            mat.at(c).coef_at(j) += Classic_McEliece_GF(acc, m_ring->poly_f());
-         }
-      }
-
-      if(mat.at(j).coef_at(j).elem() == 0) {  // Fail if not systematic. TODO: make an appropriate member function
-         return std::nullopt;
-      }
-
-      auto inv = mat.at(j).coef_at(j).inv();
-
-      for(size_t c = j; c < ring()->t() + 1; ++c) {
-         mat.at(c).coef_at(j) *= inv;
-      }
-
-      for(size_t k = 0; k < ring()->t(); ++k) {
-         if(k != j) {
-            auto t = mat.at(j).coef_at(k);
-
-            for(size_t c = j; c < ring()->t() + 1; ++c) {
-               mat.at(c).coef_at(k) += mat.at(c).coef_at(j) * t;
-            }
-         }
-      }
-   }
-
-   return Classic_McEliece_Minimal_Polynomial(mat.at(ring()->t()).coef());
-}
-
-Classic_McEliece_GF Classic_McEliece_Polynomial::operator()(const Classic_McEliece_GF& a) const {
+Classic_McEliece_GF Classic_McEliece_Polynomial_Base::operator()(const Classic_McEliece_GF& a) const {
    BOTAN_ASSERT(a.modulus() == coef_at(0).modulus(), "Unmatching Galois fields");
 
    Classic_McEliece_GF r(0, a.modulus());
@@ -112,11 +24,7 @@ Classic_McEliece_GF Classic_McEliece_Polynomial::operator()(const Classic_McElie
    return r;
 }
 
-Classic_McEliece_Polynomial Classic_McEliece_Polynomial::operator*(const Classic_McEliece_Polynomial& other) const {
-   return m_ring->multiply(*this, other);
-}
-
-bool Classic_McEliece_Polynomial::operator==(const Classic_McEliece_Polynomial& other) const {
+bool Classic_McEliece_Polynomial_Base::operator==(const Classic_McEliece_Polynomial_Base& other) const {
    bool res = true;
    for(size_t i = 0; i < m_coef.size(); ++i) {
       res = res && m_coef.at(i) == other.m_coef.at(i);
@@ -124,15 +32,12 @@ bool Classic_McEliece_Polynomial::operator==(const Classic_McEliece_Polynomial& 
    return res;
 }
 
-#endif  // false
-
 bool Classic_McEliece_Polynomial_Ring::operator==(const Classic_McEliece_Polynomial_Ring& other) const {
    return m_poly_f == other.m_poly_f && m_t == other.m_t && m_position_map == other.m_position_map;
 }
 
-Classic_McEliece_Polynomial_Base<Classic_McEliece_Polynomial_Ring> Classic_McEliece_Polynomial_Ring::multiply(
-   const Classic_McEliece_Polynomial_Base<Classic_McEliece_Polynomial_Ring>& a,
-   const Classic_McEliece_Polynomial_Base<Classic_McEliece_Polynomial_Ring>& b) const {
+Classic_McEliece_Polynomial_Base Classic_McEliece_Polynomial_Ring::multiply(
+   const Classic_McEliece_Polynomial_Base& a, const Classic_McEliece_Polynomial_Base& b) const {
    std::vector<Classic_McEliece_GF> prod((m_t * 2 - 1), Classic_McEliece_GF(0, m_poly_f));
 
    for(size_t i = 0; i < m_t; ++i) {
@@ -149,7 +54,7 @@ Classic_McEliece_Polynomial_Base<Classic_McEliece_Polynomial_Ring> Classic_McEli
 
    prod.erase(prod.begin() + m_t, prod.end());
 
-   return Classic_McEliece_Polynomial(prod, shared_from_this());
+   return Classic_McEliece_Polynomial(prod);
 }
 
 Classic_McEliece_Polynomial Classic_McEliece_Polynomial_Ring::create_element_from_bytes(
@@ -162,7 +67,7 @@ Classic_McEliece_Polynomial Classic_McEliece_Polynomial_Ring::create_element_fro
 
 Classic_McEliece_Polynomial Classic_McEliece_Polynomial_Ring::create_element_from_coef(
    std::vector<Classic_McEliece_GF> coeff_vec) const {
-   return Classic_McEliece_Polynomial(std::move(coeff_vec), shared_from_this());
+   return Classic_McEliece_Polynomial(std::move(coeff_vec));
 }
 
 Classic_McEliece_Polynomial Classic_McEliece_Polynomial_Ring::create_element_from_coef(
@@ -171,7 +76,7 @@ Classic_McEliece_Polynomial Classic_McEliece_Polynomial_Ring::create_element_fro
    std::transform(coeff_vec.begin(), coeff_vec.end(), std::back_inserter(coeff_vec_gf), [this](auto& coeff) {
       return Classic_McEliece_GF(coeff, m_poly_f);
    });
-   return Classic_McEliece_Polynomial(coeff_vec_gf, shared_from_this());
+   return Classic_McEliece_Polynomial(coeff_vec_gf);
 }
 
 bool operator==(const Classic_McEliece_Polynomial_Ring::Big_F_Coefficient& first,
@@ -179,27 +84,27 @@ bool operator==(const Classic_McEliece_Polynomial_Ring::Big_F_Coefficient& first
    return first.coeff == second.coeff && first.idx == second.idx;
 }
 
-std::optional<Classic_McEliece_Minimal_Polynomial> compute_minimal_polynomial(const Classic_McEliece_Polynomial& f) {
-   //const Classic_McEliece_Polynomial& f = *this;
+std::optional<Classic_McEliece_Minimal_Polynomial> compute_minimal_polynomial(const Classic_McEliece_Parameters& params,
+                                                                              const Classic_McEliece_Polynomial& f) {
    std::vector<Classic_McEliece_Polynomial> mat;
 
-   mat.push_back(f.ring()->create_element_from_coef(
-      concat_as<std::vector<uint16_t>>(std::vector<uint16_t>{1}, std::vector<uint16_t>(f.ring()->t() - 1, 0))));
+   mat.push_back(params.poly_ring().create_element_from_coef(concat_as<std::vector<uint16_t>>(
+      std::vector<uint16_t>{1}, std::vector<uint16_t>(params.poly_ring().t() - 1, 0))));
 
    mat.push_back(Classic_McEliece_Polynomial(f));
 
-   for(size_t j = 2; j <= f.ring()->t(); ++j) {
-      mat.push_back(mat.at(j - 1) * f);
+   for(size_t j = 2; j <= params.poly_ring().t(); ++j) {
+      mat.push_back(params.poly_ring().multiply(mat.at(j - 1), f));
    }
 
    // Gaussian
-   for(size_t j = 0; j < f.ring()->t(); ++j) {
-      for(size_t k = j + 1; k < f.ring()->t(); ++k) {
+   for(size_t j = 0; j < params.poly_ring().t(); ++j) {
+      for(size_t k = j + 1; k < params.poly_ring().t(); ++k) {
          auto cond = CT::Mask<uint16_t>::is_zero(mat.at(j).coef_at(j).elem());
 
-         for(size_t c = j; c < f.ring()->t() + 1; ++c) {
+         for(size_t c = j; c < params.poly_ring().t() + 1; ++c) {
             auto acc = cond.select(mat.at(c).coef_at(k).elem(), 0);
-            mat.at(c).coef_at(j) += Classic_McEliece_GF(acc, f.ring()->poly_f());
+            mat.at(c).coef_at(j) += Classic_McEliece_GF(acc, params.poly_ring().poly_f());
          }
       }
 
@@ -209,28 +114,28 @@ std::optional<Classic_McEliece_Minimal_Polynomial> compute_minimal_polynomial(co
 
       auto inv = mat.at(j).coef_at(j).inv();
 
-      for(size_t c = j; c < f.ring()->t() + 1; ++c) {
+      for(size_t c = j; c < params.poly_ring().t() + 1; ++c) {
          mat.at(c).coef_at(j) *= inv;
       }
 
-      for(size_t k = 0; k < f.ring()->t(); ++k) {
+      for(size_t k = 0; k < params.poly_ring().t(); ++k) {
          if(k != j) {
             auto t = mat.at(j).coef_at(k);
 
-            for(size_t c = j; c < f.ring()->t() + 1; ++c) {
+            for(size_t c = j; c < params.poly_ring().t() + 1; ++c) {
                mat.at(c).coef_at(k) += mat.at(c).coef_at(j) * t;
             }
          }
       }
    }
 
-   auto minimal_poly_coeffs = mat.at(f.ring()->t()).coef();
-   minimal_poly_coeffs.push_back(Classic_McEliece_GF(1, f.ring()->poly_f()));
+   auto minimal_poly_coeffs = mat.at(params.poly_ring().t()).coef();
+   minimal_poly_coeffs.push_back(Classic_McEliece_GF(1, params.poly_ring().poly_f()));
 
-   return Classic_McEliece_Minimal_Polynomial(minimal_poly_coeffs, std::make_shared<Minimal_Polynomial_Ring>());
+   return Classic_McEliece_Minimal_Polynomial(minimal_poly_coeffs);
 }
 
-secure_vector<uint8_t> to_bytes(const Classic_McEliece_Minimal_Polynomial& poly) {
+secure_vector<uint8_t> cmce_poly_to_bytes(const Classic_McEliece_Minimal_Polynomial& poly) {
    BOTAN_ASSERT_NOMSG(!poly.coef().empty());
    auto coeffs_to_store = std::ranges::subrange(poly.coef().begin(), poly.coef().end() - 1);
    secure_vector<uint8_t> bytes(sizeof(u_int16_t) * coeffs_to_store.size());
@@ -242,7 +147,7 @@ secure_vector<uint8_t> to_bytes(const Classic_McEliece_Minimal_Polynomial& poly)
    return bytes;
 }
 
-Classic_McEliece_Minimal_Polynomial from_bytes(std::span<const uint8_t> bytes, uint16_t poly_f) {
+Classic_McEliece_Minimal_Polynomial cmce_poly_from_bytes(std::span<const uint8_t> bytes, uint16_t poly_f) {
    BOTAN_ASSERT_NOMSG(bytes.size() % 2 == 0);
    size_t len = bytes.size() / 2;
    std::vector<uint16_t> coef_vec(len);
@@ -255,7 +160,7 @@ Classic_McEliece_Minimal_Polynomial from_bytes(std::span<const uint8_t> bytes, u
 
    coeff_vec_gf.push_back(Classic_McEliece_GF(1, poly_f));
 
-   return Classic_McEliece_Minimal_Polynomial(coeff_vec_gf, std::make_shared<Minimal_Polynomial_Ring>());
+   return Classic_McEliece_Minimal_Polynomial(coeff_vec_gf);
 }
 
 }  // namespace Botan
