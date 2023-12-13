@@ -37,20 +37,17 @@ Classic_McEliece_GF Classic_McEliece_GF::operator*(const Classic_McEliece_GF& ot
    uint16_t result = 0;
    uint16_t a = m_elem;
    uint16_t b = other.m_elem;
-   //std::bitset<16> b(other.m_elem);
 
    size_t m = log_q();
 
    for(size_t i = 0; i < m; i++) {
       // XOR a with result if the LSB of b is 1
-      result ^= (b & 1) * a;  //CT::Mask<uint16_t>::expand_on_bit(b, 0).if_set_return(a);
+      result ^= CT::Mask<uint16_t>::expand(b & 1).if_set_return(a);
 
       a <<= 1;  // Left shift a
 
       // XOR a with the modulus if there was a carry
-      BOTAN_ASSERT_NOMSG((a >> (m)) < 2);
-
-      a ^= (a >> m) * m_modulus;  // carry.if_set_return(m_modulus);
+      a ^= CT::Mask<uint16_t>::expand(a >> m).if_set_return(m_modulus);
 
       b >>= 1;  // Right shift b
    }
@@ -63,7 +60,7 @@ Classic_McEliece_GF Classic_McEliece_GF::square() const {
 }
 
 Classic_McEliece_GF Classic_McEliece_GF::inv() const {
-   size_t exponent = (1 << log_q()) - 2; // This is public information
+   size_t exponent = (1 << log_q()) - 2;  // This is public information
    Classic_McEliece_GF base = *this;
 
    Classic_McEliece_GF result = {1, m_modulus};
