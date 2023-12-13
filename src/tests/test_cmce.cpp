@@ -288,7 +288,8 @@ class CMCE_Roundtrip_Test : public Text_Based_Test {
       // TODO: Reactivate semi-systematic instances
       bool skip_this_test(const std::string& params_str, const VarMap&) override {
          auto params = Botan::Classic_McEliece_Parameters::create(params_str);
-         return params.is_pc();
+         return params.set() != Botan::Classic_McEliece_Parameter_Set::mceliece6688128f;
+         //return params.is_pc();
       }
 };
 
