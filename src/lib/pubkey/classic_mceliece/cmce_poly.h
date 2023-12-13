@@ -37,6 +37,25 @@ class BOTAN_TEST_API Classic_McEliece_Polynomial_Base {
       std::vector<Classic_McEliece_GF> m_coef;
 };
 
+class Classic_McEliece_Minimal_Polynomial : public Classic_McEliece_Polynomial_Base {
+   public:
+      secure_vector<uint8_t> serialize() const;
+
+      static Classic_McEliece_Minimal_Polynomial from_bytes(std::span<const uint8_t> bytes, uint16_t poly_f);
+};
+
+class Classic_McEliece_Polynomial : public Classic_McEliece_Polynomial_Base {
+   public:
+      /**
+       * @brief Compute the minimal polynomial g of this polynomial over the ring @p ring.
+       *
+       * @param ring the ring over which to compute the minimal polynomial
+       * @return g or std::nullopt if g has not full degree.
+       */
+      std::optional<Classic_McEliece_Minimal_Polynomial> compute_minimal_polynomial(
+         const Classic_McEliece_Polynomial_Ring& ring) const;
+};
+
 // Stores all auxiliary information and logic of FF_(q^t) via FF_q[y]/F(y)
 class BOTAN_TEST_API Classic_McEliece_Polynomial_Ring {
    public:
@@ -56,15 +75,15 @@ class BOTAN_TEST_API Classic_McEliece_Polynomial_Ring {
 
       size_t t() const { return m_t; }
 
-      Classic_McEliece_Polynomial_Base multiply(const Classic_McEliece_Polynomial_Base& a,
-                                                const Classic_McEliece_Polynomial_Base& b) const;
+      Classic_McEliece_Polynomial multiply(const Classic_McEliece_Polynomial& a,
+                                           const Classic_McEliece_Polynomial& b) const;
 
-      Classic_McEliece_Polynomial_Base create_element_from_bytes(std::span<const uint8_t> bytes) const;
+      Classic_McEliece_Polynomial create_element_from_bytes(std::span<const uint8_t> bytes) const;
 
       // TODO: create_elements_from_coef should be private / max. be accessible for tests.
-      Classic_McEliece_Polynomial_Base create_element_from_coef(std::vector<Classic_McEliece_GF> coeff_vec) const;
+      Classic_McEliece_Polynomial create_element_from_coef(std::vector<Classic_McEliece_GF> coeff_vec) const;
 
-      Classic_McEliece_Polynomial_Base create_element_from_coef(std::vector<uint16_t> coeff_vec) const;
+      Classic_McEliece_Polynomial create_element_from_coef(std::vector<uint16_t> coeff_vec) const;
 
    private:
       /// Represents F(y) by storing the non-zero terms
@@ -77,19 +96,8 @@ class BOTAN_TEST_API Classic_McEliece_Polynomial_Ring {
       uint16_t m_poly_f;
 };
 
-// TODO: Only one Poly type or multiple with Strong Type
-using Classic_McEliece_Polynomial = Classic_McEliece_Polynomial_Base;
-using Classic_McEliece_Minimal_Polynomial = Classic_McEliece_Polynomial_Base;
-
 bool operator==(const Classic_McEliece_Polynomial_Ring::Big_F_Coefficient& first,
                 const Classic_McEliece_Polynomial_Ring::Big_F_Coefficient& second);
-
-std::optional<Classic_McEliece_Minimal_Polynomial> compute_minimal_polynomial(const Classic_McEliece_Parameters& params,
-                                                                              const Classic_McEliece_Polynomial& f);
-
-secure_vector<uint8_t> cmce_poly_to_bytes(const Classic_McEliece_Minimal_Polynomial& poly);
-
-Classic_McEliece_Minimal_Polynomial cmce_poly_from_bytes(std::span<const uint8_t> bytes, uint16_t poly_f);
 
 }  // namespace Botan
 #endif

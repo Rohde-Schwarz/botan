@@ -103,14 +103,14 @@ class CMCE_Utility_Tests final : public Test {
              0x0804, 0x0290, 0x0f25, 0x04b9, 0x0875, 0x0164, 0x041e, 0x0aea, 0x0843, 0x01b3, 0x092d, 0x0dce, 0x02e1,
              0x06fd, 0x0636, 0x0059, 0x0d19, 0x0d2b, 0x0d4b, 0x0a79, 0x0118, 0x03dd, 0x00ca, 0x00dc, 0x0307});
 
-         auto exp_g = Botan::cmce_poly_from_bytes(
+         auto exp_g = Botan::Classic_McEliece_Minimal_Polynomial::from_bytes(
             Botan::hex_decode(
                "8d00a50f520a0307b8007c06cb04b9073b0f4a0f800fb706a60f2a05910a670b460375091209fc060a09ab036c09e5085a0df90d3506b404a30fda041d09970f1206d000e00aac01c00dc80f490cd80b4108330c0208cf00d602450ec00a21079806eb093f00de015f052905560917081b09270c820af002000c34094504cd03"),
             params.poly_f());
          auto beta = field.create_element_from_bytes(random_bits);
          result.test_is_eq("Beta creation", beta, exp_beta);
 
-         auto g = compute_minimal_polynomial(params, beta);
+         auto g = beta.compute_minimal_polynomial(params.poly_ring());
          result.confirm("Minimize polynomial successful", g.has_value());
          result.test_is_eq("Minimize polynomial", g.value().coef(), exp_g.coef());
 
@@ -251,9 +251,9 @@ class CMCE_KeyGen_Test final : public Text_Based_Test {
       }
 };
 
-class CMCE_Encaps_Test : public Text_Based_Test {
+class CMCE_Roundtrip_Test : public Text_Based_Test {
    public:
-      CMCE_Encaps_Test() : Text_Based_Test("pubkey/cmce_kat_hashed.vec", "seed,ct,ss", "hashed_pk,hashed_sk") {}
+      CMCE_Roundtrip_Test() : Text_Based_Test("pubkey/cmce_kat_hashed.vec", "seed,ct,ss", "hashed_pk,hashed_sk") {}
 
       Test::Result run_one_test(const std::string& params_str, const VarMap& vars) override {
          Test::Result result("CMCE Encaps Test");
@@ -293,7 +293,7 @@ class CMCE_Encaps_Test : public Text_Based_Test {
 };
 
 // TODO: For easier development. Remove me before release.
-class CMCE_Fast_Test : public CMCE_Encaps_Test {
+class CMCE_Fast_Test : public CMCE_Roundtrip_Test {
       bool skip_this_test(const std::string& params_str, const VarMap&) override {
          auto params = Botan::Classic_McEliece_Parameters::create(params_str);
          return params.set() != Botan::Classic_McEliece_Parameter_Set::mceliece348864f;
@@ -340,8 +340,6 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
 
          auto [sk, pk] = Botan::cmce_key_gen(params, test_rng->random_vec(32));
 
-         cmce_poly_to_bytes(sk.g());
-
          auto control_bits = sk.alpha().alphas_control_bits();
 
          // Test field ordering from control bits
@@ -354,9 +352,9 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
          result.test_is_eq("Read Field Ordering from Control Bits", n_alphas_from_control_bits, ref_field_ord);
 
          // Test Classic_McEliece_Minimal_Polynomial::from_bytes
-         auto goppa_poly_from_bytes = Botan::cmce_poly_from_bytes(cmce_poly_to_bytes(sk.g()), params.poly_f());
-         result.test_is_eq(
-            "Read Goppa Polynomial from Bytes", cmce_poly_to_bytes(goppa_poly_from_bytes), cmce_poly_to_bytes(sk.g()));
+         auto goppa_poly_from_bytes =
+            Botan::Classic_McEliece_Minimal_Polynomial::from_bytes(sk.g().serialize(), params.poly_f());
+         result.test_is_eq("Read Goppa Polynomial from Bytes", goppa_poly_from_bytes.serialize(), sk.g().serialize());
 
          // Test syndrome computation
          auto code_word = Botan::bitvector(ct, params.m() * params.t());
@@ -366,12 +364,10 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
          result.test_is_eq("Compute Syndrome", syndrome, ref_syndrome);
 
          // Test the Berlekamp-Massey Algorithm
-
          auto locator = berlekamp_massey(params, syndrome);
          result.test_is_eq("Berlekamp-Massey Algorithm", locator.coef(), ref_locator);
 
          // Test application of the locator polynomial
-
          std::vector<Botan::Classic_McEliece_GF> images;
          images.reserve(ref_field_ord.size());
          for(auto& alpha : ref_field_ord) {
@@ -431,7 +427,7 @@ class CMCE_Minimal_Test final : public Test {
 
 BOTAN_REGISTER_TEST("cmce", "cmce_utility", CMCE_Utility_Tests);
 BOTAN_REGISTER_TEST("cmce", "cmce_keygen", CMCE_KeyGen_Test);
-BOTAN_REGISTER_TEST("cmce", "cmce_encaps", CMCE_Encaps_Test);
+BOTAN_REGISTER_TEST("cmce", "cmce_roundtrip", CMCE_Roundtrip_Test);
 BOTAN_REGISTER_TEST("cmce", "cmce_fast", CMCE_Fast_Test);
 BOTAN_REGISTER_TEST("cmce", "cmce_decaps_unit", CMCE_Decaps_Unit_Test);
 BOTAN_REGISTER_TEST("cmce", "cmce_minimal", CMCE_Minimal_Test);
