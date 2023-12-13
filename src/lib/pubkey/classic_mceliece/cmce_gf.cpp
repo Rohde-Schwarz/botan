@@ -63,7 +63,7 @@ Classic_McEliece_GF Classic_McEliece_GF::square() const {
 }
 
 Classic_McEliece_GF Classic_McEliece_GF::inv() const {
-   size_t exponent = (1 << log_q()) - 2;
+   size_t exponent = (1 << log_q()) - 2; // This is public information
    Classic_McEliece_GF base = *this;
 
    Classic_McEliece_GF result = {1, m_modulus};

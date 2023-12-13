@@ -251,7 +251,7 @@ class CMCE_KeyGen_Test final : public Text_Based_Test {
       }
 };
 
-class CMCE_Encaps_Test final : public Text_Based_Test {
+class CMCE_Encaps_Test : public Text_Based_Test {
    public:
       CMCE_Encaps_Test() : Text_Based_Test("pubkey/cmce_kat_hashed.vec", "seed,ct,ss", "hashed_pk,hashed_sk") {}
 
@@ -276,17 +276,27 @@ class CMCE_Encaps_Test final : public Text_Based_Test {
          result.test_is_eq("Ciphertext", encaps.encapsulated_shared_key(), ref_ct);
          result.test_is_eq("Shared Secret", encaps.shared_key(), ref_ss);
 
+         // Decaps
+         auto dec = Botan::PK_KEM_Decryptor(*private_key, *test_rng);
+         auto decaps = dec.decrypt(encaps.encapsulated_shared_key());
+
+         result.test_is_eq("Shared Secret from Decaps", decaps, ref_ss);
+
          return result;
       }
 
       // TODO: Reactivate semi-systematic instances
       bool skip_this_test(const std::string& params_str, const VarMap&) override {
-         return false;
          auto params = Botan::Classic_McEliece_Parameters::create(params_str);
-         //return (params.m() * params.t()) % 32 != 0;
-         //return params.set() != Botan::Classic_McEliece_Parameter_Set::mceliece6960119f;
-         //return params.set() != Botan::Classic_McEliece_Parameter_Set::mceliece348864f;
-         //return params.is_f();
+         return params.is_pc();
+      }
+};
+
+// TODO: For easier development. Remove me before release.
+class CMCE_Fast_Test : public CMCE_Encaps_Test {
+      bool skip_this_test(const std::string& params_str, const VarMap&) override {
+         auto params = Botan::Classic_McEliece_Parameters::create(params_str);
+         return params.set() != Botan::Classic_McEliece_Parameter_Set::mceliece348864f;
       }
 };
 
@@ -352,19 +362,20 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
          auto code_word = Botan::bitvector(ct, params.m() * params.t());
          code_word.resize(params.n());
 
-         auto syndrome = compute_goppa_syndrome(params, sk.g(), sk.alpha(), code_word);
+         auto syndrome = compute_goppa_syndrome(params, sk.g(), sk.alpha(), code_word.as_locked());
          result.test_is_eq("Compute Syndrome", syndrome, ref_syndrome);
 
          // Test the Berlekamp-Massey Algorithm
+
          auto locator = berlekamp_massey(params, syndrome);
-         result.test_is_eq("Berlekamp-Massey Algorithm", locator, ref_locator);
+         result.test_is_eq("Berlekamp-Massey Algorithm", locator.coef(), ref_locator);
 
          // Test application of the locator polynomial
-         auto loc_poly = Botan::Classic_McEliece_Polynomial(locator);
+
          std::vector<Botan::Classic_McEliece_GF> images;
          images.reserve(ref_field_ord.size());
          for(auto& alpha : ref_field_ord) {
-            images.push_back(loc_poly(alpha));
+            images.push_back(locator(alpha));
          }
          result.test_is_eq("Test application of the locator polynomial", images, ref_images);
 
@@ -421,6 +432,7 @@ class CMCE_Minimal_Test final : public Test {
 BOTAN_REGISTER_TEST("cmce", "cmce_utility", CMCE_Utility_Tests);
 BOTAN_REGISTER_TEST("cmce", "cmce_keygen", CMCE_KeyGen_Test);
 BOTAN_REGISTER_TEST("cmce", "cmce_encaps", CMCE_Encaps_Test);
+BOTAN_REGISTER_TEST("cmce", "cmce_fast", CMCE_Fast_Test);
 BOTAN_REGISTER_TEST("cmce", "cmce_decaps_unit", CMCE_Decaps_Unit_Test);
 BOTAN_REGISTER_TEST("cmce", "cmce_minimal", CMCE_Minimal_Test);
 
