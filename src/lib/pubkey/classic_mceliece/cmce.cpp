@@ -19,6 +19,11 @@
 
 namespace Botan {
 
+namespace {
+std::pair<CT::Mask<uint8_t>, secure_bitvector> cmce_decode(const Classic_McEliece_PrivateKeyInternal& sk,
+                                                           bitvector big_c);
+}
+
 class Classic_McEliece_Encryptor final : public PK_Ops::KEM_Encryption {
    public:
       Classic_McEliece_Encryptor(std::shared_ptr<Classic_McEliece_PublicKeyInternal> key) : m_key(std::move(key)) {}
@@ -69,7 +74,17 @@ class Classic_McEliece_Decryptor final : public PK_Ops::KEM_Decryption {
          BOTAN_UNUSED(desired_shared_key_len, salt);
          BOTAN_ASSERT(encapsulated_key.size() == m_key->params().ciphertext_size(), "Correct encapsulated key length");
          BOTAN_ASSERT(out_shared_key.size() == m_key->params().hash_out_bytes(), "Correct shared key output length");
-         throw Not_Implemented("TODO");
+
+         auto [decode_success_mask, maybe_e] = cmce_decode(*m_key, bitvector(encapsulated_key));  //TODO: pc variant
+         secure_vector<uint8_t> e_bytes(m_key->s().size());
+         decode_success_mask.select_n(e_bytes.data(), maybe_e.to_bytes().data(), m_key->s().data(), m_key->s().size());
+
+         auto hash_func = m_key->params().hash_func();
+         hash_func->update(decode_success_mask.select(1, 0));
+         hash_func->update(e_bytes);
+         hash_func->update(encapsulated_key);
+
+         std::ranges::copy(hash_func->final_stdvec(), out_shared_key.begin());
       }
 
    private:
@@ -84,12 +99,49 @@ bitvector cmce_encode(const Classic_McEliece_Parameters& params,
    return mat.mul(params, e);
 }
 
+std::pair<CT::Mask<uint8_t>, secure_bitvector> cmce_decode(const Classic_McEliece_PrivateKeyInternal& sk,
+                                                           bitvector big_c) {
+   big_c.resize(sk.params().n());
+
+   auto syndrome = compute_goppa_syndrome(sk.params(), sk.g(), sk.alpha(), big_c.as_locked());
+   auto locator = berlekamp_massey(sk.params(), syndrome);
+
+   std::vector<Classic_McEliece_GF> images;
+   //TODO: Avoid alpha().alphas()
+   auto alphas = sk.alpha().alphas();
+   auto n_alphas = std::ranges::subrange(alphas.begin(), alphas.begin() + sk.params().n());
+   std::transform(
+      n_alphas.begin(), n_alphas.end(), std::back_inserter(images), [&](const auto& alpha) { return locator(alpha); });
+
+   // Obtain e and check whether wt(e) = t
+   secure_bitvector e;
+   size_t hamming_weight_e = 0;
+   auto decode_success = CT::Mask<uint8_t>::set();  // Avoid bool to avoid compiler optimizations
+   for(auto& image : images) {
+      auto is_zero_mask = CT::Mask<uint16_t>::is_zero(image.elem());
+      e.push_back(is_zero_mask.as_bool());
+      hamming_weight_e += is_zero_mask.if_set_return(1);
+   }
+   decode_success &= CT::Mask<uint8_t>::is_equal(hamming_weight_e, sk.params().t());
+
+   // Check the error vector
+   auto syndrome_from_e = compute_goppa_syndrome(sk.params(), sk.g(), sk.alpha(), e);
+   auto syndromes_are_eq = CT::Mask<uint16_t>::set();
+   for(size_t i = 0; i < syndrome.size(); ++i) {
+      syndromes_are_eq &= CT::Mask<uint16_t>::is_equal(syndrome.at(i).elem(), syndrome_from_e.at(i).elem());
+   }
+
+   decode_success &= syndromes_are_eq;
+
+   return std::make_pair(decode_success, std::move(e));
+}
+
 }  // namespace
 
 std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_Parameters& params,
                                                         const Classic_McEliece_Minimal_Polynomial& goppa_poly,
                                                         const Classic_McEliece_Field_Ordering& ordering,
-                                                        const bitvector& code_word) {
+                                                        const secure_bitvector& code_word) {
    BOTAN_ASSERT(params.n() == code_word.size(), "Correct code word size");
    std::vector<Classic_McEliece_GF> syndrome(2 * params.t(), Classic_McEliece_GF(0, params.poly_f()));
 
@@ -112,8 +164,8 @@ std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_P
    return syndrome;
 }
 
-std::vector<Classic_McEliece_GF> berlekamp_massey(const Classic_McEliece_Parameters& params,
-                                                  const std::vector<Classic_McEliece_GF>& syndrome) {
+Classic_McEliece_Polynomial berlekamp_massey(const Classic_McEliece_Parameters& params,
+                                             const std::vector<Classic_McEliece_GF>& syndrome) {
    std::vector<Classic_McEliece_GF> output(params.t() + 1, Classic_McEliece_GF(0, params.poly_f()));
 
    std::vector<Classic_McEliece_GF> big_t(params.t() + 1, Classic_McEliece_GF(0, params.poly_f()));
@@ -162,8 +214,7 @@ std::vector<Classic_McEliece_GF> berlekamp_massey(const Classic_McEliece_Paramet
 
    std::reverse(big_c.begin(), big_c.end());
 
-   //TODO: Return locator poly:  auto locator_poly = Classic_McEliece_Polynomial(big_c);
-   return big_c;
+   return Classic_McEliece_Polynomial(big_c);
 }
 
 std::pair<Classic_McEliece_PrivateKeyInternal, Classic_McEliece_PublicKeyInternal> cmce_key_gen(

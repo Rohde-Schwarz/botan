@@ -115,10 +115,10 @@ std::optional<secure_bitvector> cmce_fixed_weight_vector_gen(const Classic_McEli
 std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_Parameters& params,
                                                         const Classic_McEliece_Minimal_Polynomial& goppa_poly,
                                                         const Classic_McEliece_Field_Ordering& ordering,
-                                                        const bitvector& word_to_decaps);
+                                                        const secure_bitvector& word_to_decaps);
 
-std::vector<Classic_McEliece_GF> berlekamp_massey(const Classic_McEliece_Parameters& params,
-                                                  const std::vector<Classic_McEliece_GF>& syndrome);
+Classic_McEliece_Polynomial berlekamp_massey(const Classic_McEliece_Parameters& params,
+                                             const std::vector<Classic_McEliece_GF>& syndrome);
 
 //------------------------------------------------------
 
