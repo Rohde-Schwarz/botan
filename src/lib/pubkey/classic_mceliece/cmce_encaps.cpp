@@ -11,18 +11,14 @@
 
 namespace Botan {
 
-namespace {
-bitvector cmce_encode(const Classic_McEliece_Parameters& params,
-                      const secure_bitvector& e,
-                      const Classic_McEliece_Matrix& mat) {
+bitvector Classic_McEliece_Encryptor::encode(const Classic_McEliece_Parameters& params,
+                                             const secure_bitvector& e,
+                                             const Classic_McEliece_Matrix& mat) {
    return mat.mul(params, e);
 }
 
-/**
-* Fixed-weight-vector generation algorithm according to ISO McEliece.
-*/
-std::optional<secure_bitvector> cmce_fixed_weight_vector_gen(const Classic_McEliece_Parameters& params,
-                                                             const secure_vector<uint8_t>& rand) {
+std::optional<secure_bitvector> Classic_McEliece_Encryptor::fixed_weight_vector_gen(
+   const Classic_McEliece_Parameters& params, const secure_vector<uint8_t>& rand) {
    BOTAN_ASSERT_NOMSG(rand.size() == params.tau() * params.sigma1() / 8);
    uint16_t mask_m = (uint32_t(1) << params.m()) - 1;  // Only take m least significant bits
    std::vector<uint16_t> a_values;
@@ -68,8 +64,6 @@ std::optional<secure_bitvector> cmce_fixed_weight_vector_gen(const Classic_McEli
    return e;
 }
 
-}  // anonymous namespace
-
 void Classic_McEliece_Encryptor::kem_encrypt(std::span<uint8_t> out_encapsulated_key,
                                              std::span<uint8_t> out_shared_key,
                                              RandomNumberGenerator& rng,
@@ -89,7 +83,7 @@ void Classic_McEliece_Encryptor::kem_encrypt(std::span<uint8_t> out_encapsulated
       if(ctr-- <= 0) {
          throw Internal_Error("Cannot created fixed weight vector.");
       }
-      auto weight_gen = cmce_fixed_weight_vector_gen(params, rng.random_vec((params.sigma1() / 8) * params.tau()));
+      auto weight_gen = fixed_weight_vector_gen(params, rng.random_vec((params.sigma1() / 8) * params.tau()));
 
       if(weight_gen.has_value()) {
          e = weight_gen.value();
@@ -97,7 +91,7 @@ void Classic_McEliece_Encryptor::kem_encrypt(std::span<uint8_t> out_encapsulated
       }
    }
 
-   auto big_c = cmce_encode(params, e, m_key->matrix()).to_bytes();
+   auto big_c = encode(params, e, m_key->matrix()).to_bytes();
    auto hash_func = params.hash_func();
 
    if(params.is_pc()) {

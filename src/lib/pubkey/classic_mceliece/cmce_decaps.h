@@ -39,6 +39,17 @@ class Classic_McEliece_Decryptor final : public PK_Ops::KEM_Decryption {
 
    private:
       std::shared_ptr<Classic_McEliece_PrivateKeyInternal> m_key;
+
+      std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_Parameters& params,
+                                                              const Classic_McEliece_Minimal_Polynomial& goppa_poly,
+                                                              const Classic_McEliece_Field_Ordering& ordering,
+                                                              const secure_bitvector& code_word);
+
+      Classic_McEliece_Polynomial berlekamp_massey(const Classic_McEliece_Parameters& params,
+                                                   const std::vector<Classic_McEliece_GF>& syndrome);
+
+      std::pair<CT::Mask<uint8_t>, secure_bitvector> decode(const Classic_McEliece_PrivateKeyInternal& sk,
+                                                            bitvector big_c);
 };
 
 }  // namespace Botan
