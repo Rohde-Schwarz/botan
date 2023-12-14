@@ -19,6 +19,9 @@ cmce_matrix.h
 cmce_gf.h
 cmce_debug_utils.h
 cmce_field_ordering.h
+cmce_encaps.h
+cmce_decaps.h
+cmce_keys_internal.h
 </header:internal>
 
 <header:public>
