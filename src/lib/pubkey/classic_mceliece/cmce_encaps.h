@@ -41,6 +41,16 @@ class Classic_McEliece_Encryptor final : public PK_Ops::KEM_Encryption {
 
    private:
       std::shared_ptr<Classic_McEliece_PublicKeyInternal> m_key;
+
+      bitvector encode(const Classic_McEliece_Parameters& params,
+                       const secure_bitvector& e,
+                       const Classic_McEliece_Matrix& mat);
+
+      /**
+      * Fixed-weight-vector generation algorithm according to ISO McEliece.
+      */
+      std::optional<secure_bitvector> fixed_weight_vector_gen(const Classic_McEliece_Parameters& params,
+                                                              const secure_vector<uint8_t>& rand);
 };
 
 }  // namespace Botan

@@ -52,29 +52,9 @@ class Classic_McEliece_PrivateKeyInternal {
             m_s(std::move(s)) {}
 
       static Classic_McEliece_PrivateKeyInternal from_bytes(const Classic_McEliece_Parameters& params,
-                                                            std::span<const uint8_t> sk_bytes) {
-         BOTAN_ASSERT(sk_bytes.size() == params.sk_size_bytes(), "Valid private key size");
-         BufferSlicer sk_slicer(sk_bytes);
-         auto delta = sk_slicer.copy_as_secure_vector(params.seed_len());
-         std::array<uint8_t, 8> c;
-         sk_slicer.copy_into(c);
-         auto g_bytes = sk_slicer.take(params.sk_poly_g_bytes());
-         BOTAN_UNUSED(g_bytes);
-         // TODO: Minim_Poly::from_bytes
-         // auto g = Classic_McEliece_Minimal_Polynomial::from_bytes(g_bytes)
-         auto alpha_control_bits = sk_slicer.take(params.sk_alpha_control_bytes());
-         // TODO: Reverse Benes network for field ordering recreation
-         auto field_ordering = Classic_McEliece_Field_Ordering::create_from_control_bits(params, alpha_control_bits);
-         auto s = sk_slicer.copy_as_secure_vector(params.sk_s_bytes());
-         throw Not_Implemented("TODO");
-         //return Classic_McEliece_PrivateKeyInternal(std::move(params), std::move(delta), c, std::move(g), std::move(alpha), std::move(s));
-      }
+                                                            std::span<const uint8_t> sk_bytes);
 
-      secure_vector<uint8_t> serialize() const {
-         auto c_bytes = m_c.to_bytes();
-
-         return Botan::concat(m_delta, c_bytes, m_g.serialize(), m_alpha.alphas_control_bits().to_bytes(), m_s);
-      }
+      secure_vector<uint8_t> serialize() const;
 
       const secure_vector<uint8_t>& delta() const { return m_delta; }
 
@@ -97,8 +77,13 @@ class Classic_McEliece_PrivateKeyInternal {
       secure_vector<uint8_t> m_s;
 };
 
-std::pair<Classic_McEliece_PrivateKeyInternal, Classic_McEliece_PublicKeyInternal> cmce_key_gen(
-   const Classic_McEliece_Parameters& params, const secure_vector<uint8_t>& seed);
+struct Classic_McEliece_KeyPair_Internal {
+      Classic_McEliece_PrivateKeyInternal private_key;
+      Classic_McEliece_PublicKeyInternal public_key;
+
+      static Classic_McEliece_KeyPair_Internal generate(const Classic_McEliece_Parameters& params,
+                                                        const secure_vector<uint8_t>& seed);
+};
 
 }  // namespace Botan
 

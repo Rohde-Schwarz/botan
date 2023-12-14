@@ -10,12 +10,11 @@
 
 namespace Botan {
 
-namespace {
-
-std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_Parameters& params,
-                                                        const Classic_McEliece_Minimal_Polynomial& goppa_poly,
-                                                        const Classic_McEliece_Field_Ordering& ordering,
-                                                        const secure_bitvector& code_word) {
+std::vector<Classic_McEliece_GF> Classic_McEliece_Decryptor::compute_goppa_syndrome(
+   const Classic_McEliece_Parameters& params,
+   const Classic_McEliece_Minimal_Polynomial& goppa_poly,
+   const Classic_McEliece_Field_Ordering& ordering,
+   const secure_bitvector& code_word) {
    BOTAN_ASSERT(params.n() == code_word.size(), "Correct code word size");
    std::vector<Classic_McEliece_GF> syndrome(2 * params.t(), Classic_McEliece_GF(0, params.poly_f()));
 
@@ -38,8 +37,8 @@ std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_P
    return syndrome;
 }
 
-Classic_McEliece_Polynomial berlekamp_massey(const Classic_McEliece_Parameters& params,
-                                             const std::vector<Classic_McEliece_GF>& syndrome) {
+Classic_McEliece_Polynomial Classic_McEliece_Decryptor::berlekamp_massey(
+   const Classic_McEliece_Parameters& params, const std::vector<Classic_McEliece_GF>& syndrome) {
    std::vector<Classic_McEliece_GF> output(params.t() + 1, Classic_McEliece_GF(0, params.poly_f()));
 
    std::vector<Classic_McEliece_GF> big_t(params.t() + 1, Classic_McEliece_GF(0, params.poly_f()));
@@ -91,8 +90,8 @@ Classic_McEliece_Polynomial berlekamp_massey(const Classic_McEliece_Parameters& 
    return Classic_McEliece_Polynomial(big_c);
 }
 
-std::pair<CT::Mask<uint8_t>, secure_bitvector> cmce_decode(const Classic_McEliece_PrivateKeyInternal& sk,
-                                                           bitvector big_c) {
+std::pair<CT::Mask<uint8_t>, secure_bitvector> Classic_McEliece_Decryptor::decode(
+   const Classic_McEliece_PrivateKeyInternal& sk, bitvector big_c) {
    BOTAN_ASSERT(big_c.size() == sk.params().m() * sk.params().t(), "Correct ciphertext input size");
    big_c.resize(sk.params().n());
 
@@ -129,8 +128,6 @@ std::pair<CT::Mask<uint8_t>, secure_bitvector> cmce_decode(const Classic_McEliec
    return std::make_pair(decode_success, std::move(e));
 }
 
-}  // namespace
-
 void Classic_McEliece_Decryptor::kem_decrypt(std::span<uint8_t> out_shared_key,
                                              std::span<const uint8_t> encapsulated_key,
                                              size_t desired_shared_key_len,  // TODO: Whats up with these?
@@ -151,7 +148,7 @@ void Classic_McEliece_Decryptor::kem_decrypt(std::span<uint8_t> out_shared_key,
       ct = bitvector(encapsulated_key, m_key->params().m() * m_key->params().t());
    }
 
-   auto [decode_success_mask, maybe_e] = cmce_decode(*m_key, ct);
+   auto [decode_success_mask, maybe_e] = decode(*m_key, ct);
 
    secure_vector<uint8_t> e_bytes(m_key->s().size());
    decode_success_mask.select_n(e_bytes.data(), maybe_e.to_bytes().data(), m_key->s().data(), m_key->s().size());
