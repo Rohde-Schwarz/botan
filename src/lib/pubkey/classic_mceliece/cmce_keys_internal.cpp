@@ -36,8 +36,8 @@ secure_vector<uint8_t> Classic_McEliece_PrivateKeyInternal::serialize() const {
    return Botan::concat(m_delta, c_bytes, m_g.serialize(), m_alpha.alphas_control_bits().to_bytes(), m_s);
 }
 
-std::pair<Classic_McEliece_PrivateKeyInternal, Classic_McEliece_PublicKeyInternal> cmce_key_gen(
-   const Classic_McEliece_Parameters& params, const secure_vector<uint8_t>& seed) {
+Classic_McEliece_KeyPair_Internal Classic_McEliece_KeyPair_Internal::generate(const Classic_McEliece_Parameters& params,
+                                                                              const secure_vector<uint8_t>& seed) {
    BOTAN_ASSERT_EQUAL(seed.size(), 32, "Valid seed length");
 
    auto field = params.poly_ring();
@@ -85,16 +85,16 @@ std::pair<Classic_McEliece_PrivateKeyInternal, Classic_McEliece_PublicKeyInterna
       auto& [pk_matrix, pivots] = pk_matrix_opt.value();
       auto pk_bytes_value = pk_matrix.bytes();
 
-      auto sk = Classic_McEliece_PrivateKeyInternal(params,
-                                                    delta,
-                                                    pivots,
-                                                    std::move(g.value()),
-                                                    std::move(field_ordering.value()),
-                                                    secure_vector<uint8_t>(s.begin(), s.end()));
+      auto sk = std::make_shared<Classic_McEliece_PrivateKeyInternal>(params,
+                                                                      delta,
+                                                                      pivots,
+                                                                      std::move(g.value()),
+                                                                      std::move(field_ordering.value()),
+                                                                      secure_vector<uint8_t>(s.begin(), s.end()));
 
-      auto pk = Classic_McEliece_PublicKeyInternal(params, std::move(pk_bytes_value));
+      auto pk = std::make_shared<Classic_McEliece_PublicKeyInternal>(params, std::move(pk_bytes_value));
 
-      return std::make_pair(std::move(sk), std::move(pk));
+      return Classic_McEliece_KeyPair_Internal{.private_key = sk, .public_key = pk};
    }
    BOTAN_ASSERT_UNREACHABLE();
 }

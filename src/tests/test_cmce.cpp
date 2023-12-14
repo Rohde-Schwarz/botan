@@ -153,7 +153,7 @@ class CMCE_Utility_Tests final : public Test {
          auto params =
             Botan::Classic_McEliece_Parameters::create(Botan::Classic_McEliece_Parameter_Set::mceliece348864);
 
-         auto field = params.poly_ring();
+         const auto& field = params.poly_ring();
 
          auto val1 = field.create_element_from_coef(
             {0x2bb, 0x4d4, 0x937, 0xa4c, 0x3e4, 0x4c,  0xfb1, 0x9ed, 0x40a, 0xf85, 0xc66, 0xe3b, 0xe11,
