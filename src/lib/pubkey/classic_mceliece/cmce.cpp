@@ -36,11 +36,11 @@ class Classic_McEliece_Encryptor final : public PK_Ops::KEM_Encryption {
 
       size_t encapsulated_key_length() const override { return m_key->params().ciphertext_size(); }
 
-      virtual void kem_encrypt(std::span<uint8_t> out_encapsulated_key,
-                               std::span<uint8_t> out_shared_key,
-                               RandomNumberGenerator& rng,
-                               size_t desired_shared_key_len,  // Whats up with these?
-                               std::span<const uint8_t> salt) override {
+      void kem_encrypt(std::span<uint8_t> out_encapsulated_key,
+                       std::span<uint8_t> out_shared_key,
+                       RandomNumberGenerator& rng,
+                       size_t desired_shared_key_len,  // Whats up with these?
+                       std::span<const uint8_t> salt) override {
          BOTAN_UNUSED(desired_shared_key_len, salt);
          BOTAN_ASSERT(out_encapsulated_key.size() == m_key->params().ciphertext_size(),
                       "Correct encapsulated key output length");
@@ -75,12 +75,36 @@ class Classic_McEliece_Decryptor final : public PK_Ops::KEM_Decryption {
          BOTAN_ASSERT(encapsulated_key.size() == m_key->params().ciphertext_size(), "Correct encapsulated key length");
          BOTAN_ASSERT(out_shared_key.size() == m_key->params().hash_out_bytes(), "Correct shared key output length");
 
-         auto [decode_success_mask, maybe_e] = cmce_decode(*m_key, bitvector(encapsulated_key));  //TODO: pc variant
+         bitvector ct;
+         std::span<const uint8_t> c1;
+         if(m_key->params().is_pc()) {
+            BufferSlicer encaps_key_slicer(encapsulated_key);
+            auto c0 = encaps_key_slicer.take(m_key->params().encode_out_size());
+            c1 = encaps_key_slicer.take(m_key->params().hash_out_bytes());
+            BOTAN_ASSERT_NOMSG(encaps_key_slicer.empty());
+            ct = bitvector(c0, m_key->params().m() * m_key->params().t());
+         } else {
+            ct = bitvector(encapsulated_key, m_key->params().m() * m_key->params().t());
+         }
+
+         auto [decode_success_mask, maybe_e] = cmce_decode(*m_key, ct);
+
          secure_vector<uint8_t> e_bytes(m_key->s().size());
          decode_success_mask.select_n(e_bytes.data(), maybe_e.to_bytes().data(), m_key->s().data(), m_key->s().size());
+         uint8_t b = decode_success_mask.select(1, 0);
 
          auto hash_func = m_key->params().hash_func();
-         hash_func->update(decode_success_mask.select(1, 0));
+
+         if(m_key->params().is_pc()) {
+            hash_func->update(2);
+            hash_func->update(e_bytes);
+            auto c1_p = hash_func->final_stdvec();
+            CT::Mask<uint8_t> eq_mask = CT::is_equal(c1.data(), c1_p.data(), c1.size());
+            eq_mask.select_n(e_bytes.data(), e_bytes.data(), m_key->s().data(), m_key->s().size());
+            b = eq_mask.select(b, 0);
+         }
+
+         hash_func->update(b);
          hash_func->update(e_bytes);
          hash_func->update(encapsulated_key);
 
@@ -101,13 +125,14 @@ bitvector cmce_encode(const Classic_McEliece_Parameters& params,
 
 std::pair<CT::Mask<uint8_t>, secure_bitvector> cmce_decode(const Classic_McEliece_PrivateKeyInternal& sk,
                                                            bitvector big_c) {
+   BOTAN_ASSERT(big_c.size() == sk.params().m() * sk.params().t(), "Correct ciphertext input size");
    big_c.resize(sk.params().n());
 
    auto syndrome = compute_goppa_syndrome(sk.params(), sk.g(), sk.alpha(), big_c.as_locked());
    auto locator = berlekamp_massey(sk.params(), syndrome);
 
    std::vector<Classic_McEliece_GF> images;
-   //TODO: Avoid alpha().alphas()
+   //TODO: Avoid alpha().alphas() -> field_ordering().alphas()
    auto alphas = sk.alpha().alphas();
    auto n_alphas = std::ranges::subrange(alphas.begin(), alphas.begin() + sk.params().n());
    std::transform(
