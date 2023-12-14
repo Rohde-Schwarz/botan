@@ -110,6 +110,16 @@ class Mask final {
       static Mask<T> expand(T v) { return ~Mask<T>::is_zero(v); }
 
       /**
+      * TODO: Remove me!!!
+      * Return a Mask<T> which is set iff the j-th bit of m is set
+      */
+      [[deprecated("Remove me")]] static CT::Mask<T> expand_on_bit(T m, size_t j) {
+         BOTAN_ASSERT(j < sizeof(T) * 8, "bit index ok");
+         T j_mask = static_cast<T>(1) << j;
+         return expand(m & j_mask);
+      }
+
+      /**
       * Return a Mask<T> which is set if m is set
       */
       template <typename U>

@@ -19,8 +19,8 @@ namespace Botan {
 // TODO: Move functions to cpp
 class Classic_McEliece_PublicKeyInternal {
    public:
-      Classic_McEliece_PublicKeyInternal(Classic_McEliece_Parameters params, Classic_McEliece_Matrix matrix) :
-            m_params(std::move(params)), m_matrix(std::move(matrix)) {
+      Classic_McEliece_PublicKeyInternal(const Classic_McEliece_Parameters& params, Classic_McEliece_Matrix matrix) :
+            m_params(params), m_matrix(std::move(matrix)) {
          BOTAN_ASSERT_NOMSG(m_matrix.bytes().size() == m_params.pk_size_bytes());
       }
 
@@ -78,8 +78,8 @@ class Classic_McEliece_PrivateKeyInternal {
 };
 
 struct Classic_McEliece_KeyPair_Internal {
-      Classic_McEliece_PrivateKeyInternal private_key;
-      Classic_McEliece_PublicKeyInternal public_key;
+      std::shared_ptr<Classic_McEliece_PrivateKeyInternal> private_key;
+      std::shared_ptr<Classic_McEliece_PublicKeyInternal> public_key;
 
       static Classic_McEliece_KeyPair_Internal generate(const Classic_McEliece_Parameters& params,
                                                         const secure_vector<uint8_t>& seed);
