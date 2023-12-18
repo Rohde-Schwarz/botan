@@ -39,8 +39,6 @@ std::vector<Classic_McEliece_GF> Classic_McEliece_Decryptor::compute_goppa_syndr
 
 Classic_McEliece_Polynomial Classic_McEliece_Decryptor::berlekamp_massey(
    const Classic_McEliece_Parameters& params, const std::vector<Classic_McEliece_GF>& syndrome) {
-   std::vector<Classic_McEliece_GF> output(params.t() + 1, params.gf(0));
-
    std::vector<Classic_McEliece_GF> big_t(params.t() + 1, params.gf(0));
    std::vector<Classic_McEliece_GF> big_c(params.t() + 1, params.gf(0));
    std::vector<Classic_McEliece_GF> big_b(params.t() + 1, params.gf(0));
