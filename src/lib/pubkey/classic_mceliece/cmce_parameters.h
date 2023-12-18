@@ -181,6 +181,8 @@ class BOTAN_PUBLIC_API(3, 1) Classic_McEliece_Parameters final {
 
       std::unique_ptr<HashFunction> hash_func() const { return HashFunction::create_or_throw("SHAKE-256(256)"); }
 
+      Classic_McEliece_GF gf(uint16_t elem) const { return Classic_McEliece_GF(elem, m_poly_f); }
+
    private:
       Classic_McEliece_Parameters(
          Classic_McEliece_Parameter_Set param_set, size_t m, size_t n, size_t t, uint16_t poly_f);

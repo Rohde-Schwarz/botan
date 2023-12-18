@@ -46,6 +46,8 @@ class BOTAN_TEST_API Classic_McEliece_GF {
 
       Classic_McEliece_GF& operator+=(const Classic_McEliece_GF& other);
 
+      Classic_McEliece_GF& operator^=(uint16_t other);
+
       Classic_McEliece_GF& operator*=(const Classic_McEliece_GF& other);
 
       Classic_McEliece_GF operator*(const Classic_McEliece_GF& other) const;
@@ -60,6 +62,41 @@ class BOTAN_TEST_API Classic_McEliece_GF {
       uint16_t m_elem;
 
       uint16_t m_modulus;
+};
+
+class GF_Mask final {
+   public:
+      static GF_Mask expand(const Classic_McEliece_GF& v) { return GF_Mask(CT::Mask<uint16_t>::expand(v.elem())); }
+
+      static GF_Mask is_lte(const Classic_McEliece_GF& a, const Classic_McEliece_GF& b) {
+         return GF_Mask(CT::Mask<uint16_t>::is_lte(a.elem(), b.elem()));
+      }
+
+      static GF_Mask is_equal(Classic_McEliece_GF a, Classic_McEliece_GF b) {
+         return GF_Mask(CT::Mask<uint16_t>::is_equal(a.elem(), b.elem()));
+      }
+
+      static GF_Mask set() { return GF_Mask(CT::Mask<uint16_t>::set()); }
+
+      GF_Mask(CT::Mask<uint16_t> underlying_mask) : m_mask(underlying_mask) {}
+
+      Classic_McEliece_GF if_set_return(const Classic_McEliece_GF& x) const {
+         return Classic_McEliece_GF(m_mask.if_set_return(x.elem()), x.modulus());
+      }
+
+      Classic_McEliece_GF select(const Classic_McEliece_GF& x, const Classic_McEliece_GF& y) const {
+         return Classic_McEliece_GF(m_mask.select(x.elem(), y.elem()), x.modulus());
+      }
+
+      GF_Mask& operator&=(const GF_Mask& o) {
+         m_mask &= o.m_mask;
+         return (*this);
+      }
+
+      CT::Mask<uint16_t>& elem_mask() { return m_mask; }
+
+   private:
+      CT::Mask<uint16_t> m_mask;
 };
 
 }  // namespace Botan

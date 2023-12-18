@@ -33,7 +33,7 @@ Classic_McEliece_PrivateKeyInternal Classic_McEliece_PrivateKeyInternal::from_by
 secure_vector<uint8_t> Classic_McEliece_PrivateKeyInternal::serialize() const {
    auto c_bytes = m_c.to_bytes();
 
-   return Botan::concat(m_delta, c_bytes, m_g.serialize(), m_alpha.alphas_control_bits().to_bytes(), m_s);
+   return Botan::concat(m_delta, c_bytes, m_g.serialize(), m_field_ordering.alphas_control_bits().to_bytes(), m_s);
 }
 
 Classic_McEliece_KeyPair_Internal Classic_McEliece_KeyPair_Internal::generate(const Classic_McEliece_Parameters& params,

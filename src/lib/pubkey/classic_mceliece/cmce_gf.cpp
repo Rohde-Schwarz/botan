@@ -25,6 +25,11 @@ Classic_McEliece_GF& Classic_McEliece_GF::operator+=(const Classic_McEliece_GF& 
    return *this;
 }
 
+Classic_McEliece_GF& Classic_McEliece_GF::operator^=(uint16_t other) {
+   m_elem ^= other;
+   return *this;
+}
+
 Classic_McEliece_GF& Classic_McEliece_GF::operator*=(const Classic_McEliece_GF& other) {
    BOTAN_ASSERT_NOMSG(m_modulus == other.m_modulus);
    *this = *this * other;

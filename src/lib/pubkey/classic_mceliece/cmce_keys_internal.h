@@ -48,7 +48,7 @@ class Classic_McEliece_PrivateKeyInternal {
             m_delta(std::move(delta)),
             m_c(std::move(c)),
             m_g(std::move(g)),
-            m_alpha(std::move(alpha)),
+            m_field_ordering(std::move(alpha)),
             m_s(std::move(s)) {}
 
       static Classic_McEliece_PrivateKeyInternal from_bytes(const Classic_McEliece_Parameters& params,
@@ -62,7 +62,7 @@ class Classic_McEliece_PrivateKeyInternal {
 
       const Classic_McEliece_Minimal_Polynomial& g() const { return m_g; }
 
-      const Classic_McEliece_Field_Ordering& alpha() const { return m_alpha; }
+      const Classic_McEliece_Field_Ordering& field_ordering() const { return m_field_ordering; }
 
       const secure_vector<uint8_t>& s() const { return m_s; }
 
@@ -73,7 +73,7 @@ class Classic_McEliece_PrivateKeyInternal {
       secure_vector<uint8_t> m_delta;
       secure_bitvector m_c;
       Classic_McEliece_Minimal_Polynomial m_g;
-      Classic_McEliece_Field_Ordering m_alpha;
+      Classic_McEliece_Field_Ordering m_field_ordering;
       secure_vector<uint8_t> m_s;
 };
 

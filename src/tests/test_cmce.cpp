@@ -140,7 +140,7 @@ class CMCE_Utility_Tests final : public Test {
          auto params =
             Botan::Classic_McEliece_Parameters::create(Botan::Classic_McEliece_Parameter_Set::mceliece348864);
 
-         auto v = Botan::Classic_McEliece_GF(42, params.poly_f());
+         auto v = params.gf(42);
          auto v_inv = v.inv();
          result.test_is_eq("Control bits creation", (v * v_inv).elem(), static_cast<uint16_t>(1));
 
@@ -302,7 +302,8 @@ class CMCE_Roundtrip_Test : public Text_Based_Test {
 class CMCE_Fast_Test : public CMCE_Roundtrip_Test {
       bool skip_this_test(const std::string& params_str, const VarMap&) override {
          auto params = Botan::Classic_McEliece_Parameters::create(params_str);
-         return params.set() != Botan::Classic_McEliece_Parameter_Set::mceliece6688128pcf;
+         return params.set() != Botan::Classic_McEliece_Parameter_Set::mceliece348864f;
+         //return params.set() != Botan::Classic_McEliece_Parameter_Set::mceliece6688128pcf;
       }
 };
 
