@@ -7,6 +7,7 @@
 * Botan is released under the Simplified BSD License (see license.txt)
 */
 
+#include "test_pubkey.h"
 #include "test_rng.h"
 #include "tests.h"
 
@@ -478,8 +479,38 @@ class CMCE_Minimal_Test final : public Test {
       }
 };
 
+class CMCE_Generic_Keygen_Tests final : public PK_Key_Generation_Test {
+   public:
+      // TODO: Find and fix "Not implemented TODO" :)
+      std::vector<std::string> keygen_params() const override {
+         return {"mceliece348864",
+                 "mceliece348864f",
+
+                 "mceliece460896",
+                 "mceliece460896f",
+
+                 "mceliece6688128",
+                 "mceliece6688128f",
+                 "mceliece6688128pc",
+                 "mceliece6688128pcf",
+
+                 "mceliece6960119",
+                 "mceliece6960119f",
+                 "mceliece6960119pc",
+                 "mceliece6960119pcf",
+
+                 "mceliece8192128",
+                 "mceliece8192128f",
+                 "mceliece8192128pc",
+                 "mceliece8192128pcf"};
+      }
+
+      std::string algo_name() const override { return "ClassicMcEliece"; }
+};
+
 BOTAN_REGISTER_TEST("cmce", "cmce_utility", CMCE_Utility_Tests);
 BOTAN_REGISTER_TEST("cmce", "cmce_keygen", CMCE_KeyGen_Test);
+BOTAN_REGISTER_TEST("cmce", "cmce_generic_keygen", CMCE_Generic_Keygen_Tests);
 BOTAN_REGISTER_TEST("cmce", "cmce_roundtrip", CMCE_Roundtrip_Test);
 BOTAN_REGISTER_TEST("cmce", "cmce_fast", CMCE_Fast_Test);
 BOTAN_REGISTER_TEST("cmce", "cmce_invalid", CMCE_Invalid_Test);

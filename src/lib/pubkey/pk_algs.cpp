@@ -210,6 +210,12 @@ std::unique_ptr<Public_Key> load_public_key(const AlgorithmIdentifier& alg_id,
    }
 #endif
 
+#if defined(BOTAN_HAS_CLASSICMCELIECE) || defined(BOTAN_HAS_CLASSICMCELIECE)
+   if(alg_name.starts_with("mceliece")) {
+      return std::make_unique<Classic_McEliece_PublicKey>(alg_id, key_bits);
+   }
+#endif
+
    throw Decoding_Error(fmt("Unknown or unavailable public key algorithm '{}'", alg_name));
 }
 
@@ -324,6 +330,12 @@ std::unique_ptr<Private_Key> load_private_key(const AlgorithmIdentifier& alg_id,
 #if defined(BOTAN_HAS_SPHINCS_PLUS_WITH_SHA2) || defined(BOTAN_HAS_SPHINCS_PLUS_WITH_SHAKE)
    if(alg_name == "SPHINCS+" || alg_name.starts_with("SphincsPlus-")) {
       return std::make_unique<SphincsPlus_PrivateKey>(alg_id, key_bits);
+   }
+#endif
+
+#if defined(BOTAN_HAS_CLASSICMCELIECE) || defined(BOTAN_HAS_CLASSICMCELIECE)
+   if(alg_name.starts_with("mceliece")) {
+      return std::make_unique<Classic_McEliece_PrivateKey>(alg_id, key_bits);
    }
 #endif
 

@@ -16,6 +16,8 @@
 
 namespace Botan {
 
+class Classic_McEliece_PrivateKeyInternal;
+
 // TODO: Move functions to cpp
 class Classic_McEliece_PublicKeyInternal {
    public:
@@ -23,6 +25,10 @@ class Classic_McEliece_PublicKeyInternal {
             m_params(params), m_matrix(std::move(matrix)) {
          BOTAN_ASSERT_NOMSG(m_matrix.bytes().size() == m_params.pk_size_bytes());
       }
+
+      // TODO: Do we want to return a shared_ptr or an object?
+      static std::shared_ptr<Classic_McEliece_PublicKeyInternal> create_from_sk(
+         const Classic_McEliece_PrivateKeyInternal& sk);
 
       std::vector<uint8_t> serialize() const { return m_matrix.bytes(); }
 

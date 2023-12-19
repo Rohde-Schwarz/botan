@@ -16,7 +16,7 @@ Classic_McEliece_PrivateKeyInternal Classic_McEliece_PrivateKeyInternal::from_by
    BufferSlicer sk_slicer(sk_bytes);
 
    auto delta = sk_slicer.copy_as_secure_vector(params.seed_len());
-   secure_bitvector c(sk_slicer.take_byte());
+   secure_bitvector c = secure_bitvector(sk_slicer.copy_as_secure_vector(params.sk_c_bytes()));
 
    auto g_bytes = sk_slicer.take(params.sk_poly_g_bytes());
    auto g = Classic_McEliece_Minimal_Polynomial::from_bytes(g_bytes, params.poly_f());
@@ -36,6 +36,23 @@ secure_vector<uint8_t> Classic_McEliece_PrivateKeyInternal::serialize() const {
    return Botan::concat(m_delta, c_bytes, m_g.serialize(), m_field_ordering.alphas_control_bits().to_bytes(), m_s);
 }
 
+std::shared_ptr<Classic_McEliece_PublicKeyInternal> Classic_McEliece_PublicKeyInternal::create_from_sk(
+   const Classic_McEliece_PrivateKeyInternal& sk) {
+   // TODO: Must be copied, because field ordering must be passed mutable (because pivot stuff). Can we prevent this?
+   Classic_McEliece_Field_Ordering field_ord(sk.field_ordering());
+   auto pk_matrix_opt = Classic_McEliece_Matrix::create_matrix(sk.params(), field_ord, sk.g());
+   if(!pk_matrix_opt.has_value()) {
+      throw Decoding_Error("Cannot create public key from private key. Private key is invalid.");
+   }
+   // TODO: Do we want to check that there is no pivot?
+   auto& [pk_matrix, _] = pk_matrix_opt.value();
+   auto pk_bytes_value = pk_matrix.bytes();
+
+   auto pk = std::make_shared<Classic_McEliece_PublicKeyInternal>(sk.params(), std::move(pk_bytes_value));
+
+   return pk;
+}
+
 Classic_McEliece_KeyPair_Internal Classic_McEliece_KeyPair_Internal::generate(const Classic_McEliece_Parameters& params,
                                                                               const secure_vector<uint8_t>& seed) {
    BOTAN_ASSERT_EQUAL(seed.size(), 32, "Valid seed length");
@@ -45,7 +62,7 @@ Classic_McEliece_KeyPair_Internal Classic_McEliece_KeyPair_Internal::generate(co
    auto delta = secure_vector<uint8_t>(seed);
 
    // TODO: Remove Counter - Only for debugging
-   int ctr = 10;
+   int ctr = 30;
    while(true) {
       if(ctr-- <= 0) {
          throw Internal_Error("Cannot generate key.");

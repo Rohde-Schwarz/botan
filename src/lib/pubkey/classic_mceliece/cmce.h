@@ -30,7 +30,7 @@ class BOTAN_PUBLIC_API(3, 4) Classic_McEliece_PublicKey : public virtual Public_
    public:
       Classic_McEliece_PublicKey(Classic_McEliece_Parameter_Set set, std::vector<uint8_t> pub_key);
 
-      Classic_McEliece_PublicKey(const AlgorithmIdentifier& alg_id, std::vector<uint8_t> key_bits);
+      Classic_McEliece_PublicKey(const AlgorithmIdentifier& alg_id, std::span<const uint8_t> key_bits);
 
       Classic_McEliece_PublicKey(const Classic_McEliece_PublicKey& other);
       Classic_McEliece_PublicKey& operator=(const Classic_McEliece_PublicKey& other);

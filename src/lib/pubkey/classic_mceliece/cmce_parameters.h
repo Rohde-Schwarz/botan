@@ -78,7 +78,7 @@ class BOTAN_PUBLIC_API(3, 1) Classic_McEliece_Parameters final {
 
       Classic_McEliece_Parameter_Set set() const { return m_set; }
 
-      OID object_identifier() const { throw Not_Implemented("TODO: CMCE_Parameters::object_identifier()"); }
+      OID object_identifier() const;
 
       bool is_pc() const {
          return (m_set == Classic_McEliece_Parameter_Set::mceliece6688128pc) ||

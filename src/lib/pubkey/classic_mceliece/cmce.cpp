@@ -30,10 +30,11 @@ Classic_McEliece_PublicKey::Classic_McEliece_PublicKey(Classic_McEliece_Paramete
 }
 
 Classic_McEliece_PublicKey::Classic_McEliece_PublicKey(const AlgorithmIdentifier& alg_id,
-                                                       std::vector<uint8_t> key_bits) {
+                                                       std::span<const uint8_t> key_bits) {
    // TODO: ASSERT Correct key length + correct zero padding in matrix?
+   std::vector<uint8_t> key_bits_vec(key_bits.begin(), key_bits.end());
    m_public = std::make_shared<Classic_McEliece_PublicKeyInternal>(Classic_McEliece_Parameters::create(alg_id.oid()),
-                                                                   Classic_McEliece_Matrix(std::move(key_bits)));
+                                                                   Classic_McEliece_Matrix(std::move(key_bits_vec)));
 }
 
 Classic_McEliece_PublicKey::Classic_McEliece_PublicKey(const Classic_McEliece_PublicKey& other) {
@@ -98,7 +99,7 @@ Classic_McEliece_PrivateKey::Classic_McEliece_PrivateKey(std::span<const uint8_t
    auto params = Classic_McEliece_Parameters::create(param_set);
    auto sk_internal = Classic_McEliece_PrivateKeyInternal::from_bytes(params, sk);
    m_private = std::make_shared<Classic_McEliece_PrivateKeyInternal>(std::move(sk_internal));
-   m_public = nullptr;  // TODO: Create public key from sk
+   m_public = Classic_McEliece_PublicKeyInternal::create_from_sk(*m_private);
 }
 
 Classic_McEliece_PrivateKey::Classic_McEliece_PrivateKey(const AlgorithmIdentifier& alg_id,

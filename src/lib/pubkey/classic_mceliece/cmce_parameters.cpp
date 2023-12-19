@@ -210,8 +210,11 @@ Classic_McEliece_Parameters Classic_McEliece_Parameters::create(const OID& oid) 
 }
 
 Classic_McEliece_Parameter_Set Classic_McEliece_Parameters::param_set_from_oid(const OID& oid) {
-   BOTAN_UNUSED(oid);
-   throw Not_Implemented("TODO: param set from oid");
+   return Classic_McEliece_Parameters::param_set_from_str(oid.to_formatted_string());
+}
+
+OID Classic_McEliece_Parameters::object_identifier() const {
+   return OID::from_string(str_from_param_set(m_set));
 }
 
 Classic_McEliece_Parameters::Classic_McEliece_Parameters(
