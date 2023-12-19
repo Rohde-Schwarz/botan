@@ -211,7 +211,7 @@ Classic_McEliece_Parameters Classic_McEliece_Parameters::create(const OID& oid) 
 
 Classic_McEliece_Parameter_Set Classic_McEliece_Parameters::param_set_from_oid(const OID& oid) {
    BOTAN_UNUSED(oid);
-   throw Not_Implemented("TODO");
+   throw Not_Implemented("TODO: param set from oid");
 }
 
 Classic_McEliece_Parameters::Classic_McEliece_Parameters(
@@ -221,6 +221,28 @@ Classic_McEliece_Parameters::Classic_McEliece_Parameters(
    auto poly_big_f_coef = determine_big_f_coef(m_t, poly_f);
    // TODO: Remove from constructor
    m_poly_ring = std::make_unique<Classic_McEliece_Polynomial_Ring>(poly_big_f_coef, poly_f, t);
+}
+
+size_t Classic_McEliece_Parameters::estimated_strength() const {
+   // Classic McEliece NIST Round 4 submission, Guide for security reviewers, Table 1:
+   // For each instance, the minimal strength against the best attack (with free memory access)
+   // is used as the overall security strength estimate. The strength is capped at 256, since the
+   // seed is only 256 bits long.
+   switch(n()) {
+      case 3488:
+         return 140;
+      case 4608:
+         return 179;
+      case 6688:
+         return 246;
+      case 6960:
+         return 245;
+      case 8192:
+         return 256;  // 275 in the document. Capped at 256 because of the seed length.
+      default:
+         throw Decoding_Error("Strength for parameter set ist not registed.");
+   }
+   BOTAN_ASSERT_UNREACHABLE();
 }
 
 }  // namespace Botan

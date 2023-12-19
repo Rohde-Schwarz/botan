@@ -60,7 +60,7 @@ size_t Classic_McEliece_PublicKey::key_length() const {
 }
 
 size_t Classic_McEliece_PublicKey::estimated_strength() const {
-   throw Not_Implemented("TODO");
+   return m_public->params().estimated_strength();
 }
 
 std::vector<uint8_t> Classic_McEliece_PublicKey::public_key_bits() const {

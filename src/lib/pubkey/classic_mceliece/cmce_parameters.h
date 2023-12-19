@@ -78,7 +78,7 @@ class BOTAN_PUBLIC_API(3, 1) Classic_McEliece_Parameters final {
 
       Classic_McEliece_Parameter_Set set() const { return m_set; }
 
-      OID object_identifier() const { throw Not_Implemented("TODO"); }
+      OID object_identifier() const { throw Not_Implemented("TODO: CMCE_Parameters::object_identifier()"); }
 
       bool is_pc() const {
          return (m_set == Classic_McEliece_Parameter_Set::mceliece6688128pc) ||
@@ -128,6 +128,8 @@ class BOTAN_PUBLIC_API(3, 1) Classic_McEliece_Parameters final {
       }
 
       uint16_t poly_f() const { return m_poly_f; }
+
+      size_t estimated_strength() const;
 
       // seed_len and all sk_*_bytes are defined in ISO 9.2.12
 
