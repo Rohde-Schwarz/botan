@@ -23,8 +23,6 @@ class BOTAN_TEST_API Classic_McEliece_Polynomial_Base {
 
       Classic_McEliece_GF operator()(const Classic_McEliece_GF& a) const;
 
-      bool operator==(const Classic_McEliece_Polynomial_Base& other) const;
-
       Classic_McEliece_GF& coef_at(size_t i) { return m_coef.at(i); }
 
       const Classic_McEliece_GF& coef_at(size_t i) const { return m_coef.at(i); }

@@ -113,7 +113,7 @@ class CMCE_Utility_Tests final : public Test {
                "8d00a50f520a0307b8007c06cb04b9073b0f4a0f800fb706a60f2a05910a670b460375091209fc060a09ab036c09e5085a0df90d3506b404a30fda041d09970f1206d000e00aac01c00dc80f490cd80b4108330c0208cf00d602450ec00a21079806eb093f00de015f052905560917081b09270c820af002000c34094504cd03"),
             params.poly_f());
          auto beta = field.create_element_from_bytes(random_bits);
-         result.test_is_eq("Beta creation", beta, exp_beta);
+         result.test_is_eq("Beta creation", beta.coef(), exp_beta.coef());
 
          auto g = beta.compute_minimal_polynomial(params.poly_ring());
          result.confirm("Minimize polynomial successful", g.has_value());
@@ -177,7 +177,7 @@ class CMCE_Utility_Tests final : public Test {
             0x45c, 0x32e, 0xe0c, 0x71a, 0xf91, 0xccd, 0xf5f, 0x6da, 0xc6c, 0x6ee, 0x11d, 0xff4});
 
          auto mul = field.multiply(val1, val2);  // val1 * val2;
-         result.test_is_eq("GF multiplication", mul, exp_mul);
+         result.test_is_eq("GF multiplication", mul.coef(), exp_mul.coef());
 
          return result;
       }
@@ -481,7 +481,6 @@ class CMCE_Minimal_Test final : public Test {
 
 class CMCE_Generic_Keygen_Tests final : public PK_Key_Generation_Test {
    public:
-      // TODO: Find and fix "Not implemented TODO" :)
       std::vector<std::string> keygen_params() const override {
          return {"mceliece348864",
                  "mceliece348864f",

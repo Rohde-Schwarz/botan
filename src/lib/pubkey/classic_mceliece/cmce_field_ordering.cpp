@@ -22,41 +22,25 @@ namespace CMCE_CT {
 namespace {
 
 template <typename T1, typename T2>
-void cond_swap_pair(bool cond, std::pair<T1, T2>& a, std::pair<T1, T2>& b) {
-   using greaterT = std::conditional_t<(sizeof(T1) >= sizeof(T2)), T1, T2>;
-   auto mask = CT::Mask<greaterT>::expand(cond);
-   mask.conditional_swap(a.first, b.first);
-   mask.conditional_swap(a.second, b.second);
+void cond_swap_pair(CT::Mask<uint64_t> cond_mask, std::pair<T1, T2>& a, std::pair<T1, T2>& b) {
+   cond_mask.conditional_swap(a.first, b.first);
+   cond_mask.conditional_swap(a.second, b.second);
 }
 
-template <typename T>
-void ct_compare_and_swap_generic(std::span<T> a,
-                                 const std::function<bool(const T&, const T&)>& comp,
-                                 const std::function<void(bool, T&, T&)>& ct_cond_swap,
-                                 size_t i,
-                                 size_t k,
-                                 size_t l) {
+template <typename T1, typename T2>
+void ct_compare_and_swap_pair(std::span<std::pair<T1, T2>> a, size_t i, size_t k, size_t l) {
    if((i & k) == 0) {  // i and k do not depend on secret data
-      ct_cond_swap(comp(a[l], a[i]), a[i], a[l]);
+      auto swap_required_mask = CT::Mask<uint64_t>::is_lt(a[l].first, a[i].first);
+      cond_swap_pair(swap_required_mask, a[i], a[l]);
    } else {
-      ct_cond_swap(comp(a[i], a[l]), a[i], a[l]);
+      auto swap_required_mask = CT::Mask<uint64_t>::is_gt(a[l].first, a[i].first);
+      cond_swap_pair(swap_required_mask, a[i], a[l]);
    }
 }
 
-/**
- * @brief Constant time, inplace, sort of a vector with a pow 2 size.
- *
- * A constant time bitonic sort implementation.
- *
- * @tparam T The data type of the vector elements
- * @param a The vector to sort inplace
- * @param cond_swap constant time function ct_cond_swap(cond,a,b) swapping a and b iff cond == true
- * @param comp A comparison function comp(a,b) which returns true iff a < b
- */
-template <typename T>
-void ct_bitonic_sort_generic(std::span<T> a,
-                             const std::function<void(bool, T&, T&)>& ct_cond_swap,
-                             const std::function<bool(const T&, const T&)>& comp = std::cmp_less<T, T>) {
+// Sorts a vector of pairs after the first element
+template <typename T1, typename T2>
+void ct_bitonic_sort_pair(std::span<std::pair<T1, T2>> a) {
    size_t n = a.size();
    BOTAN_ARG_CHECK(is_power_of_2(n), "Input vector size must be a power of 2");
 
@@ -65,29 +49,16 @@ void ct_bitonic_sort_generic(std::span<T> a,
          for(size_t i = 0; i < n; i++) {
             size_t l = i ^ j;
             if(l > i) {
-               ct_compare_and_swap_generic(a, comp, ct_cond_swap, i, k, l);
+               ct_compare_and_swap_pair(a, i, k, l);
             }
          }
       }
    }
 }
 
-template <typename T1, typename T2>
-bool pair_comp_on_first(const std::pair<T1, T2>& a, const std::pair<T1, T2>& b) {
-   return a.first < b.first;
-}
-
-template <typename T1, typename T2>
-void ct_bitonic_sort_pair_on_first(std::vector<std::pair<T1, T2>>& vec_to_sort) {
-   CMCE_CT::ct_bitonic_sort_generic(
-      std::span(vec_to_sort),
-      std::function(CMCE_CT::cond_swap_pair<T1, T2>),
-      std::function(pair_comp_on_first<T1, T2>));  // Sort a and pi lexicographically according to a
-}
-
 template <typename T>
-T ct_min(const T& a, const T& b) {
-   auto mask = CT::Mask<T>::expand(a < b);
+T min(const T& a, const T& b) {
+   auto mask = CT::Mask<T>::is_lt(a, b);
    return mask.select(a, b);
 }
 
@@ -126,7 +97,7 @@ secure_vector<uint16_t> create_pi(secure_vector<uint32_t>& a) {
    std::iota(pi.begin(), pi.end(), 0);  // contains 0, 1, ..., q-1
 
    auto a_pi_zipped = zip(a, pi);
-   CMCE_CT::ct_bitonic_sort_pair_on_first(a_pi_zipped);
+   CMCE_CT::ct_bitonic_sort_pair(std::span(a_pi_zipped));
 
    auto [a_sorted, pi_sorted] = unzip(std::move(a_pi_zipped));
    a = std::move(a_sorted);
@@ -218,7 +189,7 @@ secure_vector<uint16_t> Classic_McEliece_Field_Ordering::composeinv(const secure
                                                                     const secure_vector<uint16_t>& pi) {
    //TODO: Use secure_vector ?
    auto pi_c_zipped = zip(pi, c);
-   CMCE_CT::ct_bitonic_sort_pair_on_first(pi_c_zipped);
+   CMCE_CT::ct_bitonic_sort_pair(std::span(pi_c_zipped));
    auto [pi_sorted, c_sorted] = unzip(pi_c_zipped);
 
    return c_sorted;
@@ -262,7 +233,7 @@ secure_vector<uint16_t> Classic_McEliece_Field_Ordering::generate_control_bits_i
 
    secure_vector<uint16_t> c(n);
    for(uint16_t x = 0; size_t(x) < n; ++x) {
-      c.at(x) = CMCE_CT::ct_min(x, p.at(x));
+      c.at(x) = CMCE_CT::min(x, p.at(x));
    }
 
    simultaneous_composeinv(p, q);
@@ -271,7 +242,7 @@ secure_vector<uint16_t> Classic_McEliece_Field_Ordering::generate_control_bits_i
       auto cp = composeinv(c, q);
       simultaneous_composeinv(p, q);
       for(uint16_t x = 0; size_t(x) < n; ++x) {
-         c.at(x) = CMCE_CT::ct_min(c.at(x), cp.at(x));
+         c.at(x) = CMCE_CT::min(c.at(x), cp.at(x));
       }
    }
 

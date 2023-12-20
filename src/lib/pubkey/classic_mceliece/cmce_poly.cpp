@@ -24,14 +24,6 @@ Classic_McEliece_GF Classic_McEliece_Polynomial_Base::operator()(const Classic_M
    return r;
 }
 
-bool Classic_McEliece_Polynomial_Base::operator==(const Classic_McEliece_Polynomial_Base& other) const {
-   bool res = true;
-   for(size_t i = 0; i < m_coef.size(); ++i) {
-      res = res && m_coef.at(i) == other.m_coef.at(i);
-   }
-   return res;
-}
-
 bool Classic_McEliece_Polynomial_Ring::operator==(const Classic_McEliece_Polynomial_Ring& other) const {
    return m_poly_f == other.m_poly_f && m_t == other.m_t && m_position_map == other.m_position_map;
 }

@@ -39,7 +39,7 @@ class BOTAN_PUBLIC_API(3, 4) Classic_McEliece_PublicKey : public virtual Public_
 
       ~Classic_McEliece_PublicKey() override = default;
 
-      std::string algo_name() const override { return "Classic McEliece"; }  //TODO: Use "CMCE" or "Classic_McEliece"?
+      std::string algo_name() const override { return "ClassicMcEliece"; }  //TODO: Use "CMCE" or "Classic_McEliece"?
 
       AlgorithmIdentifier algorithm_identifier() const override;
 
