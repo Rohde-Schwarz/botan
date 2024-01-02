@@ -1,7 +1,7 @@
 /*
  * Classic McEliece Parameters
  * (C) 2023 Jack Lloyd
- *     2023 Fabian Albert, Amos Treiber - Rohde & Schwarz Cybersecurity
+ *     2023,2024 Fabian Albert, Amos Treiber - Rohde & Schwarz Cybersecurity
  *
  * Botan is released under the Simplified BSD License (see license.txt)
  **/
@@ -112,9 +112,9 @@ class BOTAN_PUBLIC_API(3, 1) Classic_McEliece_Parameters final {
 
       static constexpr size_t ell() { return 256; }  // TODO: Better way for const params?
 
-      size_t sigma1() const { return 16; }
+      static constexpr size_t sigma1() { return 16; }
 
-      size_t sigma2() const { return 32; }
+      static constexpr size_t sigma2() { return 32; }
 
       static constexpr size_t mu() { return 32; }
 

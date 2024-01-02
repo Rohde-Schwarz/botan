@@ -2,7 +2,7 @@
 * Tests for Classic McEliece
 *
 * (C) 2023 Jack Lloyd
-*     2023 Fabian Albert, Amos Treiber - Rohde & Schwarz Cybersecurity
+*     2023,2024 Fabian Albert, Amos Treiber - Rohde & Schwarz Cybersecurity
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -292,10 +292,10 @@ class CMCE_Roundtrip_Test : public Text_Based_Test {
 
       // TODO: Reactivate semi-systematic instances
       bool skip_this_test(const std::string& params_str, const VarMap&) override {
-         return false;
-         //    auto params = Botan::Classic_McEliece_Parameters::create(params_str);
-         //    return params.set() != Botan::Classic_McEliece_Parameter_Set::mceliece6688128f;
-         //    return params.is_pc();
+         // return false
+         auto params = Botan::Classic_McEliece_Parameters::create(params_str);
+
+         return !params.is_f();
       }
 };
 

@@ -1,7 +1,7 @@
 /*
 * Classic McEliece GF arithmetic
 * (C) 2023 Jack Lloyd
-*     2023 Fabian Albert, Amos Treiber - Rohde & Schwarz Cybersecurity
+*     2023,2024 Fabian Albert, Amos Treiber - Rohde & Schwarz Cybersecurity
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 **/
