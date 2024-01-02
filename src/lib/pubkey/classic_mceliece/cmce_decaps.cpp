@@ -62,7 +62,6 @@ Classic_McEliece_Polynomial Classic_McEliece_Decryptor::berlekamp_massey(
       auto f = d / b;
 
       for(size_t i = 0; i <= params.t(); ++i) {
-         //TODO: Integrate CT below into Classic_McEliece_GF
          big_c.at(i) += mne.if_set_return((f * big_b.at(i)));
       }
 
@@ -92,7 +91,6 @@ std::pair<CT::Mask<uint8_t>, secure_bitvector> Classic_McEliece_Decryptor::decod
    auto locator = berlekamp_massey(sk.params(), syndrome);
 
    std::vector<Classic_McEliece_GF> images;
-   //TODO: Avoid alpha().alphas() -> field_ordering().alphas()
    auto alphas = sk.field_ordering().alphas();
    auto n_alphas = std::ranges::subrange(alphas.begin(), alphas.begin() + sk.params().n());
    std::transform(
@@ -126,7 +124,7 @@ void Classic_McEliece_Decryptor::kem_decrypt(std::span<uint8_t> out_shared_key,
                                              size_t desired_shared_key_len,  // TODO: Whats up with these?
                                              std::span<const uint8_t> salt) {
    BOTAN_UNUSED(desired_shared_key_len, salt);
-   // TODO: Throw exception on failure
+   // TODO: Throw exception on failure?
    BOTAN_ASSERT(encapsulated_key.size() == m_key->params().ciphertext_size(), "Correct encapsulated key length");
    BOTAN_ASSERT(out_shared_key.size() == m_key->params().hash_out_bytes(), "Correct shared key output length");
 
