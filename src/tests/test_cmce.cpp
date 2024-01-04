@@ -291,12 +291,7 @@ class CMCE_Roundtrip_Test : public Text_Based_Test {
       }
 
       // TODO: Reactivate semi-systematic instances
-      bool skip_this_test(const std::string& params_str, const VarMap&) override {
-         // return false
-         auto params = Botan::Classic_McEliece_Parameters::create(params_str);
-
-         return !params.is_f();
-      }
+      bool skip_this_test(const std::string& params_str, const VarMap&) override { return false; }
 };
 
 // TODO: For easier development. Remove me before release.
