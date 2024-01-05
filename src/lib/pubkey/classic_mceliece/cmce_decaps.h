@@ -20,8 +20,15 @@
 
 namespace Botan {
 
+/**
+ * Classic McEliece Decapsulation Operation
+*/
 class Classic_McEliece_Decryptor final : public PK_Ops::KEM_Decryption {
    public:
+      /**
+       * @brief Constructs a Classic_McEliece_Decryptor object with the given private key.
+       * @param key The private key used for decryption.
+       */
       Classic_McEliece_Decryptor(std::shared_ptr<Classic_McEliece_PrivateKeyInternal> key) : m_key(std::move(key)) {}
 
       size_t shared_key_length(size_t desired_shared_key_len) const override {
@@ -34,22 +41,45 @@ class Classic_McEliece_Decryptor final : public PK_Ops::KEM_Decryption {
 
       void kem_decrypt(std::span<uint8_t> out_shared_key,
                        std::span<const uint8_t> encapsulated_key,
-                       size_t desired_shared_key_len,  // TODO: Whats up with these?
+                       size_t desired_shared_key_len,
                        std::span<const uint8_t> salt) override;
 
    private:
-      std::shared_ptr<Classic_McEliece_PrivateKeyInternal> m_key;
-
+      /**
+       * @brief Computes the syndrome of a code word.
+       *
+       * @param params The McEliece parameters.
+       * @param goppa_poly The Goppa polynomial.
+       * @param ordering The field ordering.
+       * @param code_word The code word.
+       * @return The syndrome of the code word.
+       */
       std::vector<Classic_McEliece_GF> compute_goppa_syndrome(const Classic_McEliece_Parameters& params,
                                                               const Classic_McEliece_Minimal_Polynomial& goppa_poly,
                                                               const Classic_McEliece_Field_Ordering& ordering,
                                                               const secure_bitvector& code_word);
 
+      /**
+       * @brief Applies the Berlekamp-Massey algorithm to compute the error locator polynomial.
+       *
+       * @param params The McEliece parameters.
+       * @param syndrome The syndrome of the code word.
+       * @return The error locator polynomial.
+       */
       Classic_McEliece_Polynomial berlekamp_massey(const Classic_McEliece_Parameters& params,
                                                    const std::vector<Classic_McEliece_GF>& syndrome);
 
+      /**
+       * @brief Decodes a code word.
+       *
+       * @param sk The McEliece private key.
+       * @param big_c The code word.
+       * @return A pair containing the decoded message and the error pattern.
+       */
       std::pair<CT::Mask<uint8_t>, secure_bitvector> decode(const Classic_McEliece_PrivateKeyInternal& sk,
                                                             bitvector big_c);
+
+      std::shared_ptr<Classic_McEliece_PrivateKeyInternal> m_key;
 };
 
 }  // namespace Botan

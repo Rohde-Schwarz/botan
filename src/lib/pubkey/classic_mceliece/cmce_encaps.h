@@ -42,6 +42,14 @@ class Classic_McEliece_Encryptor final : public PK_Ops::KEM_Encryption {
    private:
       std::shared_ptr<Classic_McEliece_PublicKeyInternal> m_key;
 
+      /**
+       * @brief Encodes an error vector by multiplying it with the Classic McEliece matrix.
+       *
+       * @param params
+       * @param e
+       * @param mat
+       * @return bitvector
+       */
       bitvector encode(const Classic_McEliece_Parameters& params,
                        const secure_bitvector& e,
                        const Classic_McEliece_Matrix& mat);
