@@ -40,7 +40,7 @@ std::vector<secure_bitvector> init_matrix_with_alphas(const Classic_McEliece_Par
    std::vector<Classic_McEliece_GF> alphas(all_alphas.begin(), all_alphas.begin() + params.n());
    std::vector<Classic_McEliece_GF> inv_g_of_alpha;
    inv_g_of_alpha.reserve(params.n());
-   for(auto& alpha : alphas) {
+   for(const auto& alpha : alphas) {
       inv_g_of_alpha.push_back(g(alpha).inv());
    }
    std::vector<secure_bitvector> mat(params.pk_no_rows(), secure_bitvector(params.n()));

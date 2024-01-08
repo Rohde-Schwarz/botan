@@ -30,7 +30,7 @@ bool Classic_McEliece_Polynomial_Ring::operator==(const Classic_McEliece_Polynom
 
 Classic_McEliece_Polynomial Classic_McEliece_Polynomial_Ring::multiply(const Classic_McEliece_Polynomial& a,
                                                                        const Classic_McEliece_Polynomial& b) const {
-   std::vector<Classic_McEliece_GF> prod((m_t * 2 - 1), Classic_McEliece_GF(0, m_poly_f));
+   std::vector<Classic_McEliece_GF> prod((m_t * 2 - 1), {0, m_poly_f});
 
    for(size_t i = 0; i < m_t; ++i) {
       for(size_t j = 0; j < m_t; ++j) {
@@ -63,7 +63,7 @@ Classic_McEliece_Polynomial Classic_McEliece_Polynomial_Ring::create_element_fro
 }
 
 Classic_McEliece_Polynomial Classic_McEliece_Polynomial_Ring::create_element_from_coef(
-   std::vector<uint16_t> coeff_vec) const {
+   const std::vector<uint16_t>& coeff_vec) const {
    std::vector<Classic_McEliece_GF> coeff_vec_gf;
    std::transform(coeff_vec.begin(), coeff_vec.end(), std::back_inserter(coeff_vec_gf), [this](auto& coeff) {
       return Classic_McEliece_GF(coeff, m_poly_f);
@@ -71,9 +71,9 @@ Classic_McEliece_Polynomial Classic_McEliece_Polynomial_Ring::create_element_fro
    return Classic_McEliece_Polynomial(coeff_vec_gf);
 }
 
-bool operator==(const Classic_McEliece_Polynomial_Ring::Big_F_Coefficient& first,
-                const Classic_McEliece_Polynomial_Ring::Big_F_Coefficient& second) {
-   return first.coeff == second.coeff && first.idx == second.idx;
+bool operator==(const Classic_McEliece_Polynomial_Ring::Big_F_Coefficient& lhs,
+                const Classic_McEliece_Polynomial_Ring::Big_F_Coefficient& rhs) {
+   return lhs.coeff == rhs.coeff && lhs.idx == rhs.idx;
 }
 
 std::optional<Classic_McEliece_Minimal_Polynomial> Classic_McEliece_Polynomial::compute_minimal_polynomial(
@@ -83,7 +83,7 @@ std::optional<Classic_McEliece_Minimal_Polynomial> Classic_McEliece_Polynomial::
    mat.push_back(ring.create_element_from_coef(
       concat_as<std::vector<uint16_t>>(std::vector<uint16_t>{1}, std::vector<uint16_t>(ring.t() - 1, 0))));
 
-   mat.push_back(Classic_McEliece_Polynomial(*this));
+   mat.emplace_back(*this);
 
    for(size_t j = 2; j <= ring.t(); ++j) {
       mat.push_back(ring.multiply(mat.at(j - 1), *this));
@@ -122,9 +122,9 @@ std::optional<Classic_McEliece_Minimal_Polynomial> Classic_McEliece_Polynomial::
    }
 
    auto minimal_poly_coeffs = mat.at(ring.t()).coef();
-   minimal_poly_coeffs.push_back(Classic_McEliece_GF(1, ring.poly_f()));
+   minimal_poly_coeffs.emplace_back(1, ring.poly_f());
 
-   return Classic_McEliece_Minimal_Polynomial(minimal_poly_coeffs);
+   return Classic_McEliece_Minimal_Polynomial(std::move(minimal_poly_coeffs));
 }
 
 secure_vector<uint8_t> Classic_McEliece_Minimal_Polynomial::serialize() const {
@@ -151,7 +151,7 @@ Classic_McEliece_Minimal_Polynomial Classic_McEliece_Minimal_Polynomial::from_by
    });
    //TODO: This can be generalized to also cover the Poly field create element functions
 
-   coeff_vec_gf.push_back(Classic_McEliece_GF(1, poly_f));
+   coeff_vec_gf.emplace_back(1, poly_f);
 
    return Classic_McEliece_Minimal_Polynomial(coeff_vec_gf);
 }

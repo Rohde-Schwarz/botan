@@ -26,6 +26,8 @@ namespace Botan {
  * represented by a uint16_t, where the i-th least significant bit corresponds to
  * the coefficient of z^i. For example, the element (z^3 + z^2 + 1) is represented
  * by the uint16_t 0b1101.
+ *
+ * TODO: Copy instead of reference
  */
 class BOTAN_TEST_API Classic_McEliece_GF {
    public:

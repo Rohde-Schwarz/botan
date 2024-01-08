@@ -81,7 +81,7 @@ class BOTAN_TEST_API Classic_McEliece_Polynomial_Ring {
       // TODO: create_elements_from_coef should be private / max. be accessible for tests.
       Classic_McEliece_Polynomial create_element_from_coef(std::vector<Classic_McEliece_GF> coeff_vec) const;
 
-      Classic_McEliece_Polynomial create_element_from_coef(std::vector<uint16_t> coeff_vec) const;
+      Classic_McEliece_Polynomial create_element_from_coef(const std::vector<uint16_t>& coeff_vec) const;
 
    private:
       /// Represents F(y) by storing the non-zero terms
@@ -94,8 +94,8 @@ class BOTAN_TEST_API Classic_McEliece_Polynomial_Ring {
       uint16_t m_poly_f;
 };
 
-bool operator==(const Classic_McEliece_Polynomial_Ring::Big_F_Coefficient& first,
-                const Classic_McEliece_Polynomial_Ring::Big_F_Coefficient& second);
+bool operator==(const Classic_McEliece_Polynomial_Ring::Big_F_Coefficient& lhs,
+                const Classic_McEliece_Polynomial_Ring::Big_F_Coefficient& rhs);
 
 }  // namespace Botan
 #endif

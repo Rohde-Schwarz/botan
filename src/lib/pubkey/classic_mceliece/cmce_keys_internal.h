@@ -143,6 +143,7 @@ struct Classic_McEliece_KeyPair_Internal {
       /**
        * @brief Generate a Classic McEliece key pair using the algorithm described
        * in Classic McEliece ISO Section 8.3
+       * TODO: seed -> std::span or per value.
        *
        * @param params
        * @param seed

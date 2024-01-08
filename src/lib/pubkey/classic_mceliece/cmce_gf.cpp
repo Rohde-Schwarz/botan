@@ -11,6 +11,7 @@
 namespace Botan {
 
 Classic_McEliece_GF Classic_McEliece_GF::operator/(const Classic_McEliece_GF& other) const {
+   BOTAN_ASSERT_NOMSG(m_modulus == other.m_modulus);
    return *this * other.inv();
 }
 

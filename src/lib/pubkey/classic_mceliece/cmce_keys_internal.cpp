@@ -16,7 +16,7 @@ Classic_McEliece_PrivateKeyInternal Classic_McEliece_PrivateKeyInternal::from_by
    BufferSlicer sk_slicer(sk_bytes);
 
    auto delta = sk_slicer.copy_as_secure_vector(params.seed_len());
-   secure_bitvector c = secure_bitvector(sk_slicer.copy_as_secure_vector(params.sk_c_bytes()));
+   auto c = secure_bitvector(sk_slicer.take(params.sk_c_bytes()));
 
    auto g_bytes = sk_slicer.take(params.sk_poly_g_bytes());
    auto g = Classic_McEliece_Minimal_Polynomial::from_bytes(g_bytes, params.poly_f());
@@ -27,13 +27,11 @@ Classic_McEliece_PrivateKeyInternal Classic_McEliece_PrivateKeyInternal::from_by
    auto s = sk_slicer.copy_as_secure_vector(params.sk_s_bytes());
    BOTAN_ASSERT_NOMSG(sk_slicer.empty());
    return Classic_McEliece_PrivateKeyInternal(
-      params, std::move(delta), c, std::move(g), std::move(field_ordering), std::move(s));
+      params, std::move(delta), std::move(c), std::move(g), std::move(field_ordering), std::move(s));
 }
 
 secure_vector<uint8_t> Classic_McEliece_PrivateKeyInternal::serialize() const {
-   auto c_bytes = m_c.to_bytes();
-
-   return Botan::concat(m_delta, c_bytes, m_g.serialize(), m_field_ordering.alphas_control_bits().to_bytes(), m_s);
+   return concat(m_delta, m_c.to_bytes(), m_g.serialize(), m_field_ordering.alphas_control_bits().to_bytes(), m_s);
 }
 
 std::shared_ptr<Classic_McEliece_PublicKeyInternal> Classic_McEliece_PublicKeyInternal::create_from_sk(
@@ -59,16 +57,21 @@ Classic_McEliece_KeyPair_Internal Classic_McEliece_KeyPair_Internal::generate(co
 
    auto field = params.poly_ring();
 
+   // TODO: Remove Counter - Only for debugging. Keep this for emergency abort.
+   int ctr = 30;
+
    auto delta = secure_vector<uint8_t>(seed);
 
-   // TODO: Remove Counter - Only for debugging
-   int ctr = 30;
    while(true) {
       if(ctr-- <= 0) {
          throw Internal_Error("Cannot generate key.");
       }
+
       auto big_e = params.prg(delta);
 
+      // TODO: Return XOF for PRG and pull data directly from xof object
+      //       e.g. xof->output<secure_vector<uint8_t>>(params.n() / 8)
+      //       Advantage: params.prg() doesn't need to know anything about its output structure
       BufferSlicer big_e_slicer(big_e);
 
       auto s = big_e_slicer.take(params.n() / 8);
@@ -78,9 +81,19 @@ Classic_McEliece_KeyPair_Internal Classic_McEliece_KeyPair_Internal::generate(co
       BOTAN_ASSERT_NOMSG(big_e_slicer.empty());
 
       auto field_ordering = Classic_McEliece_Field_Ordering::create_field_ordering(params, ordering_seed);
-      //auto pi = field_ordering(params, ordering_seed);  // ord = FieldOrdering(params, ordering_seed)
       if(!field_ordering.has_value()) {
+         // TODO: maybe: copy_mem(delta, delta_p) or delta.assign(delta_p.begin(), delta_p.end())
+         // TODO: Only once at the start of the loop
          delta = secure_vector<uint8_t>(delta_p.begin(), delta_p.end());
+
+         // TODO: maybe avoid `continue`. Not at all cost! That's really nit-picky.
+         //       Instead, consider using a method that early-returns
+         //
+         //   if(auto sk = try_generate_sk()) {
+         //      if(auto pk = try_generate_pk(sk.value())) {
+         //         return {sk, pk};
+         //      }
+         //   }
          continue;
       }
 

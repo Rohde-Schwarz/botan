@@ -87,7 +87,8 @@ std::pair<CT::Mask<uint8_t>, secure_bitvector> Classic_McEliece_Decryptor::decod
    BOTAN_ASSERT(big_c.size() == sk.params().m() * sk.params().t(), "Correct ciphertext input size");
    big_c.resize(sk.params().n());
 
-   auto syndrome = compute_goppa_syndrome(sk.params(), sk.g(), sk.field_ordering(), big_c.as_locked());
+   auto syndrome = compute_goppa_syndrome(
+      sk.params(), sk.g(), sk.field_ordering(), big_c.as_locked() /* TODO: can we avoid this copy? */);
    auto locator = berlekamp_massey(sk.params(), syndrome);
 
    std::vector<Classic_McEliece_GF> images;
@@ -100,7 +101,7 @@ std::pair<CT::Mask<uint8_t>, secure_bitvector> Classic_McEliece_Decryptor::decod
    secure_bitvector e;
    size_t hamming_weight_e = 0;
    auto decode_success = CT::Mask<uint8_t>::set();  // Avoid bool to avoid compiler optimizations
-   for(auto& image : images) {
+   for(const auto& image : images) {
       auto is_zero_mask = CT::Mask<uint16_t>::is_zero(image.elem());
       e.push_back(is_zero_mask.as_bool());
       hamming_weight_e += is_zero_mask.if_set_return(1);
@@ -116,7 +117,7 @@ std::pair<CT::Mask<uint8_t>, secure_bitvector> Classic_McEliece_Decryptor::decod
 
    decode_success &= syndromes_are_eq;
 
-   return std::make_pair(decode_success, std::move(e));
+   return {decode_success, std::move(e)};
 }
 
 void Classic_McEliece_Decryptor::kem_decrypt(std::span<uint8_t> out_shared_key,
@@ -128,17 +129,17 @@ void Classic_McEliece_Decryptor::kem_decrypt(std::span<uint8_t> out_shared_key,
    BOTAN_ASSERT(encapsulated_key.size() == m_key->params().ciphertext_size(), "Correct encapsulated key length");
    BOTAN_ASSERT(out_shared_key.size() == m_key->params().hash_out_bytes(), "Correct shared key output length");
 
-   bitvector ct;
-   std::span<const uint8_t> c1;
-   if(m_key->params().is_pc()) {
-      BufferSlicer encaps_key_slicer(encapsulated_key);
-      auto c0 = encaps_key_slicer.take(m_key->params().encode_out_size());
-      c1 = encaps_key_slicer.take(m_key->params().hash_out_bytes());
-      BOTAN_ASSERT_NOMSG(encaps_key_slicer.empty());
-      ct = bitvector(c0, m_key->params().m() * m_key->params().t());
-   } else {
-      ct = bitvector(encapsulated_key, m_key->params().m() * m_key->params().t());
-   }
+   auto [ct, c1] = [&]() -> std::pair<bitvector, std::span<const uint8_t>> {
+      if(m_key->params().is_pc()) {
+         BufferSlicer encaps_key_slicer(encapsulated_key);
+         auto c0 = encaps_key_slicer.take(m_key->params().encode_out_size());
+         auto c1 = encaps_key_slicer.take(m_key->params().hash_out_bytes());
+         BOTAN_ASSERT_NOMSG(encaps_key_slicer.empty());
+         return {bitvector(c0, m_key->params().m() * m_key->params().t()), c1};
+      } else {
+         return {bitvector(encapsulated_key, m_key->params().m() * m_key->params().t()), {}};
+      }
+   }();
 
    auto [decode_success_mask, maybe_e] = decode(*m_key, ct);
 
@@ -160,8 +161,7 @@ void Classic_McEliece_Decryptor::kem_decrypt(std::span<uint8_t> out_shared_key,
    hash_func->update(b);
    hash_func->update(e_bytes);
    hash_func->update(encapsulated_key);
-
-   std::ranges::copy(hash_func->final_stdvec(), out_shared_key.begin());
+   hash_func->final(out_shared_key);
 }
 
 }  // namespace Botan
