@@ -82,9 +82,8 @@ class CMCE_Utility_Tests final : public Test {
 
          auto ord = Botan::Classic_McEliece_Field_Ordering::create_field_ordering(params, random_bits);
          result.confirm("Field order creation successful", ord.has_value());
-         auto control_bits = ord->alphas_control_bits();
-         Botan::secure_bitvector control_bv(control_bits);
-         auto ord_from_cb = Botan::Classic_McEliece_Field_Ordering::create_from_control_bits(params, control_bv);
+         auto ord_from_cb =
+            Botan::Classic_McEliece_Field_Ordering::create_from_control_bits(params, ord->alphas_control_bits());
          result.test_is_eq("Field order creation from control bits", ord_from_cb.pi_ref(), ord->pi_ref());
 
          return result;
@@ -96,26 +95,21 @@ class CMCE_Utility_Tests final : public Test {
          auto params =
             Botan::Classic_McEliece_Parameters::create(Botan::Classic_McEliece_Parameter_Set::mceliece348864);
 
-         auto field = params.poly_ring();
+         auto& field = params.poly_ring();
 
          // Created using the reference implementation
          auto random_bits = Botan::hex_decode(
             "d9b8bb962a3f9dac0f832d243def581e7d26f4028de1ff9cd168460e5050ab095a32a372b40d720bd5d75389a6b3f08fa1d13cec60a4b716d4d6c240f2f80cd3cbc76ae0dddca164c1130da185bd04e890f2256fb9f4754864811e14ea5a43b8b3612d59cecde1b2fdb6362659a0193d2b7d4b9d79aa1801dde3ca90dc300773");
-         auto exp_beta = field.create_element_from_coef(
-            {0x08d9, 0x06bb, 0x0f2a, 0x0c9d, 0x030f, 0x042d, 0x0f3d, 0x0e58, 0x067d, 0x02f4, 0x018d, 0x0cff, 0x08d1,
-             0x0e46, 0x0050, 0x09ab, 0x025a, 0x02a3, 0x0db4, 0x0b72, 0x07d5, 0x0953, 0x03a6, 0x0ff0, 0x01a1, 0x0c3c,
-             0x0460, 0x06b7, 0x06d4, 0x00c2, 0x08f2, 0x030c, 0x07cb, 0x006a, 0x0cdd, 0x04a1, 0x03c1, 0x010d, 0x0d85,
-             0x0804, 0x0290, 0x0f25, 0x04b9, 0x0875, 0x0164, 0x041e, 0x0aea, 0x0843, 0x01b3, 0x092d, 0x0dce, 0x02e1,
-             0x06fd, 0x0636, 0x0059, 0x0d19, 0x0d2b, 0x0d4b, 0x0a79, 0x0118, 0x03dd, 0x00ca, 0x00dc, 0x0307});
 
          auto exp_g = Botan::Classic_McEliece_Minimal_Polynomial::from_bytes(
             Botan::hex_decode(
                "8d00a50f520a0307b8007c06cb04b9073b0f4a0f800fb706a60f2a05910a670b460375091209fc060a09ab036c09e5085a0df90d3506b404a30fda041d09970f1206d000e00aac01c00dc80f490cd80b4108330c0208cf00d602450ec00a21079806eb093f00de015f052905560917081b09270c820af002000c34094504cd03"),
             params.poly_f());
          auto beta = field.create_element_from_bytes(random_bits);
-         result.test_is_eq("Beta creation", beta.coef(), exp_beta.coef());
+         result.test_is_eq("Beta creation", beta.coef_at(0), Botan::Classic_McEliece_GF(0x08d9, params.poly_f()));
+         result.test_is_eq("Beta length", beta.coef().size(), random_bits.size() / sizeof(uint16_t));
 
-         auto g = beta.compute_minimal_polynomial(params.poly_ring());
+         auto g = params.poly_ring().compute_minimal_polynomial(beta);
          result.confirm("Minimize polynomial successful", g.has_value());
          result.test_is_eq("Minimize polynomial", g.value().coef(), exp_g.coef());
 
@@ -156,25 +150,14 @@ class CMCE_Utility_Tests final : public Test {
 
          const auto& field = params.poly_ring();
 
-         auto val1 = field.create_element_from_coef(
-            {0x2bb, 0x4d4, 0x937, 0xa4c, 0x3e4, 0x4c,  0xfb1, 0x9ed, 0x40a, 0xf85, 0xc66, 0xe3b, 0xe11,
-             0x9b4, 0xa81, 0x186, 0xf5b, 0x458, 0xeca, 0x878, 0x698, 0xbe2, 0x35b, 0xbaa, 0x2c2, 0x50b,
-             0x3ea, 0xd71, 0x2a9, 0xc34, 0xf39, 0xb63, 0x7bc, 0xda7, 0xbb2, 0xe9e, 0x3e4, 0x589, 0xaa0,
-             0x909, 0x50a, 0x421, 0xa5e, 0x607, 0xb37, 0x5a,  0xa05, 0x41,  0xc48, 0xe4d, 0x8f,  0x673,
-             0x992, 0x137, 0x4fe, 0xd65, 0xfbe, 0x7d0, 0x102, 0x41a, 0x391, 0x260, 0x43f, 0xafb});
-         auto val2 = field.create_element_from_coef(
-            {0xc06, 0xb63, 0xa17, 0xbb,  0xf02, 0x3ef, 0x1e5, 0xe02, 0x989, 0x881, 0x1bf, 0xdf3, 0x9d3,
-             0x0,   0xd0e, 0xc3d, 0x4a4, 0x1ec, 0x719, 0x260, 0x81f, 0x98c, 0xbb9, 0x60a, 0x2a7, 0x4d1,
-             0xf50, 0x20f, 0xaf0, 0x258, 0x187, 0x90a, 0x14e, 0xd49, 0xc27, 0x573, 0x18,  0xabc, 0x3f3,
-             0x1b9, 0x2b2, 0x3b5, 0x21,  0x228, 0x3b9, 0xace, 0x8b4, 0x806, 0xa3f, 0x62d, 0x2d0, 0xfdf,
-             0x826, 0x11,  0x25c, 0xba1, 0xe30, 0xb5c, 0xda2, 0x414, 0x350, 0xfc5, 0x22f, 0x2de});
+         auto val1 = field.create_element_from_bytes(Botan::hex_decode(
+            "bb02d40437094c0ae4034c00b10fed090a04850f660c3b0e110eb409810a86015b0f5804ca0e78089806e20b5b03aa0bc2020b05ea03710da902340c390f630bbc07a70db20b9e0ee4038905a00a09090a0521045e0a0706370b5a00050a4100480c4d0e8f00730692093701fe04650dbe0fd00702011a04910360023f04fb0a"));
 
-         auto exp_mul = field.create_element_from_coef(std::vector<uint16_t>{
-            0xd37, 0xb09, 0x19,  0xe8f, 0x1fb, 0x1f5, 0x41b, 0x5f9, 0xd4b, 0x71f, 0x41d, 0x157, 0x91e,
-            0xdcd, 0x9fa, 0x3c,  0x84f, 0xe50, 0xa67, 0x5bb, 0x967, 0x0,   0x3f6, 0xa77, 0x539, 0x4bf,
-            0x844, 0x2b8, 0x558, 0xb93, 0x125, 0x122, 0xa8d, 0xe56, 0xd84, 0xd96, 0xa9d, 0xd28, 0x61d,
-            0x8fc, 0x7d5, 0x68c, 0xcfe, 0x6b4, 0x6d0, 0x21e, 0x9c6, 0x705, 0xed2, 0xcb1, 0x1b9, 0x846,
-            0x45c, 0x32e, 0xe0c, 0x71a, 0xf91, 0xccd, 0xf5f, 0x6da, 0xc6c, 0x6ee, 0x11d, 0xff4});
+         auto val2 = field.create_element_from_bytes(Botan::hex_decode(
+            "060c630b170abb00020fef03e501020e89098108bf01f30dd30900000e0d3d0ca404ec01190760021f088c09b90b0a06a702d104500f0f02f00a580287010a094e01490d270c73051800bc0af303b901b202b50321002802b903ce0ab40806083f0a2d06d002df0f260811005c02a10b300e5c0ba20d14045003c50f2f02de02"));
+
+         auto exp_mul = field.create_element_from_bytes(Botan::hex_decode(
+            "370d090b19008f0efb01f5011b04f9054b0d1f071d0457011e09cd0dfa093c004f08500e670abb0567090000f603770a3905bf044408b8025805930b250122018d0a560e840d960d9d0a280d1d06fc08d5078c06fe0cb406d0061e02c6090507d20eb10cb90146085c042e030c0e1a07910fcd0c5f0fda066c0cee061d01f40f"));
 
          auto mul = field.multiply(val1, val2);  // val1 * val2;
          result.test_is_eq("GF multiplication", mul.coef(), exp_mul.coef());
@@ -182,41 +165,14 @@ class CMCE_Utility_Tests final : public Test {
          return result;
       }
 
-      Test::Result compute_syndrome_test() {
-         Test::Result result("CMCE Syndrome Computation");
-
-         auto params = Botan::Classic_McEliece_Parameters::create(Botan::Classic_McEliece_Parameter_Set::toy);
-
-         // Created using the reference implementation
-         auto random_bits = Botan::hex_decode_locked(
-            "3273e9bb840d921b0540238e64f3805fce7fff31a4c027bea478c467e87f996f9cfe12ddcee5263e3e1e9c470c8e023b07508380e1a704931a9e8538749d741f");
-
-         auto ord = Botan::Classic_McEliece_Field_Ordering::create_field_ordering(params, random_bits);
-         result.confirm("Field order creation successful", ord.has_value());
-         auto control_bits = ord->alphas_control_bits();
-         auto control_bv = Botan::secure_bitvector(control_bits);
-         auto ord_from_cb = Botan::Classic_McEliece_Field_Ordering::create_from_control_bits(params, control_bv);
-         result.test_is_eq("Field order creation from control bits", ord_from_cb.pi_ref(), ord->pi_ref());
-
-         return result;
-      }
-
       std::vector<Test::Result> run() override {
-         const std::vector<std::function<Test::Result(void)>> test_methods = {
-            [this]() { return expand_seed_test(); },
-            [this]() { return create_field_ordering_test(); },
-            [this]() { return irreducible_poly_gen_test(); },
-            [this]() { return gf_test(); },
-            [this]() { return gf_inv_test(); },
-            [this]() { return gf_poly_mul_test(); },
-            [this]() { return reconstruct_field_ordering_test(); }};
-         std::vector<Test::Result> results;
-         results.reserve(test_methods.size());
-         for(const auto& test_method : test_methods) {
-            results.push_back(test_method());
-         }
-
-         return results;
+         return {expand_seed_test(),
+                 create_field_ordering_test(),
+                 irreducible_poly_gen_test(),
+                 gf_test(),
+                 gf_inv_test(),
+                 gf_poly_mul_test(),
+                 reconstruct_field_ordering_test()};
       }
 };
 
@@ -290,7 +246,7 @@ class CMCE_Roundtrip_Test : public Text_Based_Test {
          return result;
       }
 
-      // TODO: Reactivate semi-systematic instances
+      // TODO: Skip slow instances if slow tests are disabled
       bool skip_this_test(const std::string& params_str, const VarMap&) override { return false; }
 };
 
