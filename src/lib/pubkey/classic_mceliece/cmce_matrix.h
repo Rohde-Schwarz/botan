@@ -18,21 +18,58 @@
 
 namespace Botan {
 
+/**
+ * @brief Representation of the Classic McEliece matrix H, with H = (I_mt | T).
+ *
+ * Only the bytes of the submatrix T are stored.
+ */
 class BOTAN_TEST_API Classic_McEliece_Matrix {
    public:
       //TODO: Strong type for pivots
+      /**
+       * @brief Create the matrix H for a Classic McEliece instance given its
+       * parameters, field ordering and minimal polynomial.
+       *
+       * Output is a pair of the matrix and the pivot vector c that was used to
+       * create it in the semi-systematic form as described in Classic McEliece ISO
+       * Section 9.2.11.
+       *
+       * @param params Classic McEliece parameters
+       * @param field_ordering Field ordering
+       * @param g Minimal polynomial
+       * @return Pair(the matrix H, pivot vector c)
+       */
       static std::optional<std::pair<Classic_McEliece_Matrix, secure_bitvector>> create_matrix(
          const Classic_McEliece_Parameters& params,
          Classic_McEliece_Field_Ordering& field_ordering,
          const Classic_McEliece_Minimal_Polynomial& g);
 
+      /**
+       * @brief The bytes of the submatrix T, with H=(I_mt, T) as defined in Classic
+       * McEliece ISO Section 9.2.7.
+       *
+       * @return The matrix bytes
+       */
       std::vector<uint8_t> bytes() const { return m_mat_bytes; }
 
+      /**
+       * @brief Create a Classic_McEliece_Matrix from bytes.
+       *
+       * @param mat_bytes The bytes of the submatrix T as defined in Classic McEliece ISO Section 9.2.7.
+       */
       Classic_McEliece_Matrix(std::vector<uint8_t> mat_bytes) : m_mat_bytes(std::move(mat_bytes)) {}
 
+      /**
+       * @brief Multiply the Classic McEliece matrix H with a bitvector e.
+       *
+       * @param params Classic McEliece parameters
+       * @param e The bitvector e
+       * @return H*e
+       */
       bitvector mul(const Classic_McEliece_Parameters& params, const secure_bitvector& e) const;
 
    private:
+      /// The bytes of the submatrix T
       const std::vector<uint8_t> m_mat_bytes;
 };
 
