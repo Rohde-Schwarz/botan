@@ -246,7 +246,7 @@ class CMCE_Roundtrip_Test : public Text_Based_Test {
       }
 
       // TODO: Skip slow instances if slow tests are disabled
-      bool skip_this_test(const std::string& params_str, const VarMap&) override { return false; }
+      bool skip_this_test(const std::string&, const VarMap&) override { return false; }
 };
 
 // TODO: For easier development. Remove me before release.
@@ -383,52 +383,6 @@ class CMCE_Decaps_Unit_Test final : public Text_Based_Test {
 };
 #endif
 
-/**
- * This is a test using a minimal instance. Since this instance is self constructed,
- * we have no known answer to check against. However, this test may be useful for
- * side channel analysis.
- *
- * Hints for SCA:
- * Build only ClassicMcEliece with (for example):
- *    ./configure.py --compiler-cache=ccache --minimized-build --enable-modules=classic_mceliece --build-targets=static,tests --without-documentation --build-tool=ninja && ninja
- * Run only this test without prints:
- *    ./botan-test cmce_minimal --test-threads=1 --no-stdout
- */
-class CMCE_Minimal_Test final : public Test {
-   public:
-      Test::Result run_minimal_keygen_test(std::string_view param_set) {
-         Test::Result result("Minimal KeyGen Test");
-
-         const Botan::secure_vector<uint8_t> rng_seed(48, 0);
-         const auto test_rng = std::make_unique<CTR_DRBG_AES256>(rng_seed);
-
-         // Test Keygen
-         std::unique_ptr<Botan::Private_Key> private_key;
-         result.test_no_throw("Key Generation", [&] {
-            private_key = Botan::create_private_key("ClassicMcEliece", *test_rng, param_set);
-         });
-
-         // (optional)
-         // result.test_no_throw("Encapsulation", [&] {
-         //    auto enc = Botan::PK_KEM_Encryptor(*private_key, "Raw", "base");
-         //    enc.encrypt(*test_rng);
-         // });
-
-         return result;
-      }
-
-      std::vector<Test::Result> run() override {
-         std::vector<Test::Result> results;
-         // The parameter decides which instance is tested, i.e. with our without
-         // semi-systematic gauss or plaintext confirmation.
-         results.push_back(run_minimal_keygen_test("test"));
-         //results.push_back(run_minimal_keygen_test("testf"));
-         //results.push_back(run_minimal_keygen_test("testpc"));
-
-         return results;
-      }
-};
-
 class CMCE_Generic_Keygen_Tests final : public PK_Key_Generation_Test {
    public:
       std::vector<std::string> keygen_params() const override {
@@ -455,6 +409,67 @@ class CMCE_Generic_Keygen_Tests final : public PK_Key_Generation_Test {
       }
 
       std::string algo_name() const override { return "ClassicMcEliece"; }
+};
+
+/**
+ * This is a test using a minimal instance. Since this instance is self constructed,
+ * we have no known answer to check against. However, this test may be useful for
+ * side channel analysis.
+ *
+ * Hints for SCA:
+ * Build only ClassicMcEliece with (for example):
+ *    ./configure.py --compiler-cache=ccache --minimized-build --enable-modules=classic_mceliece --build-targets=static,tests --without-documentation --build-tool=ninja && ninja
+ * Run only this test without prints:
+ *    ./botan-test cmce_minimal --test-threads=1 --no-stdout
+ */
+class CMCE_Minimal_Test final : public Test {
+   public:
+      Test::Result run_minimal_keygen_test(std::string_view param_set) {
+         Test::Result result("Minimal KeyGen Test");
+
+         const Botan::secure_vector<uint8_t> rng_seed(48, 0);
+         const auto test_rng = std::make_unique<CTR_DRBG_AES256>(rng_seed);
+
+         // Test Keygen
+         std::unique_ptr<Botan::Private_Key> private_key;
+         result.test_no_throw("Key Generation", [&] {
+            private_key = Botan::create_private_key("ClassicMcEliece", *test_rng, param_set);
+         });
+         if(!private_key) {
+            // Keygen failed
+            return result;
+         }
+
+         // Test Encapsulation
+         std::optional<Botan::KEM_Encapsulation> encaps = std::nullopt;
+         result.test_no_throw("Encapsulation", [&] {
+            auto enc = Botan::PK_KEM_Encryptor(*private_key, "Raw", "base");
+            encaps = enc.encrypt(*test_rng);
+         });
+
+         // Test Decapsulation
+         Botan::secure_vector<uint8_t> decaps;
+         result.test_no_throw("Decapsulation", [&] {
+            auto dec = Botan::PK_KEM_Decryptor(*private_key, *test_rng);
+            decaps = dec.decrypt(encaps->encapsulated_shared_key());
+         });
+
+         result.test_is_eq("Decapsulated secret is correct", decaps, encaps->shared_key());
+
+         return result;
+      }
+
+      std::vector<Test::Result> run() override {
+         std::vector<Test::Result> results;
+         // The parameter decides which instance is tested, i.e. with our without
+         // semi-systematic gauss or plaintext confirmation.
+         results.push_back(run_minimal_keygen_test("test"));
+         results.push_back(run_minimal_keygen_test("testf"));
+         results.push_back(run_minimal_keygen_test("testpc"));
+         results.push_back(run_minimal_keygen_test("testpcf"));
+
+         return results;
+      }
 };
 
 BOTAN_REGISTER_TEST("cmce", "cmce_utility", CMCE_Utility_Tests);

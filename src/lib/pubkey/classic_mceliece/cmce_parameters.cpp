@@ -57,6 +57,8 @@ namespace {
          return "testf";
       case Classic_McEliece_Parameter_Set::testpc:
          return "testpc";
+      case Classic_McEliece_Parameter_Set::testpcf:
+         return "testpcf";
       default:
          throw Decoding_Error("Parameter set not supported");
    }
@@ -66,9 +68,12 @@ namespace {
 std::vector<Classic_McEliece_Polynomial_Ring::Big_F_Coefficient> determine_big_f_coef(size_t t, uint16_t modulus) {
    std::vector<Classic_McEliece_Polynomial_Ring::Big_F_Coefficient> big_f_coef;
    switch(t) {
-      case 4:  //y^4 + y + 1 (test instances)
-         big_f_coef.push_back({1, Classic_McEliece_GF(1, modulus)});
-         big_f_coef.push_back({0, Classic_McEliece_GF(2, modulus)});
+      // TODO: Remove test instance on final PR
+      case 8:  //y^8 + y^4 + y^3 + y^2 + 1 (test instances)
+         big_f_coef.push_back({0, Classic_McEliece_GF(1, modulus)});
+         big_f_coef.push_back({2, Classic_McEliece_GF(1, modulus)});
+         big_f_coef.push_back({3, Classic_McEliece_GF(1, modulus)});
+         big_f_coef.push_back({4, Classic_McEliece_GF(1, modulus)});
          break;
       case 64:  //y^64 + y^3 + y + z
          big_f_coef.push_back({3, Classic_McEliece_GF(1, modulus)});
@@ -92,7 +97,7 @@ std::vector<Classic_McEliece_Polynomial_Ring::Big_F_Coefficient> determine_big_f
          big_f_coef.push_back({0, Classic_McEliece_GF(1, modulus)});
          break;
       default:
-         throw Decoding_Error("");
+         throw Decoding_Error("No instance with this t value is supported");
    }
 
    return big_f_coef;
@@ -158,6 +163,9 @@ Classic_McEliece_Parameter_Set Classic_McEliece_Parameters::param_set_from_str(s
    if(param_name == "testpc") {
       return Classic_McEliece_Parameter_Set::testpc;
    }
+   if(param_name == "testpcf") {
+      return Classic_McEliece_Parameter_Set::testpcf;
+   }
 
    throw Decoding_Error("Cannot convert string to CMCE parameter set");
 }
@@ -193,10 +201,12 @@ Classic_McEliece_Parameters Classic_McEliece_Parameters::create(Classic_McEliece
       case Classic_McEliece_Parameter_Set::toy:
          return Classic_McEliece_Parameters(set, 4, 6688, 128, 0b0010000000011011);
 
+      // TODO: Remove on final PR
       case Botan::Classic_McEliece_Parameter_Set::test:
       case Botan::Classic_McEliece_Parameter_Set::testf:
       case Botan::Classic_McEliece_Parameter_Set::testpc:
-         return Classic_McEliece_Parameters(set, 8, 40, 4, 0b0000000110000111);
+      case Botan::Classic_McEliece_Parameter_Set::testpcf:
+         return Classic_McEliece_Parameters(set, 8, 128, 8, 0b0000000110000111);
    }
 
    BOTAN_ASSERT_UNREACHABLE();
