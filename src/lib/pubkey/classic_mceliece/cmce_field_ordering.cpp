@@ -123,26 +123,6 @@ Classic_McEliece_GF from_pi(uint16_t pi_elem, uint16_t modulus, size_t m) {
    return Classic_McEliece_GF(static_cast<uint16_t>(reversed_bits.to_ulong()), modulus);
 }
 
-secure_vector<uint8_t> convert_bits_to_bytes(const secure_vector<uint16_t>& bits) {
-   BOTAN_ASSERT_NOMSG(bits.size() % 8 == 0);
-   secure_vector<uint8_t> bytes;
-   uint8_t current_byte = 0;
-   size_t bit_count = 0;
-
-   for(uint16_t bit_value : bits) {
-      current_byte |= (bit_value << bit_count);
-      bit_count++;
-
-      if(bit_count == 8) {
-         bytes.push_back(current_byte);
-         current_byte = 0;
-         bit_count = 0;
-      }
-   }
-
-   return bytes;
-}
-
 }  // anonymous namespace
 
 std::optional<Classic_McEliece_Field_Ordering> Classic_McEliece_Field_Ordering::create_field_ordering(

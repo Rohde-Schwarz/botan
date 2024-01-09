@@ -77,8 +77,8 @@ void Classic_McEliece_Encryptor::kem_encrypt(std::span<uint8_t> out_encapsulated
    // Call fixed_weight until it is successful
    auto& params = m_key->params();
    secure_bitvector e;
-   // TODO: Remove Counter - Only for debugging
-   int ctr = 10;
+   // TODO: Remove Counter - Only for debugging - For emergency break - Compute sensible max_attempts
+   int ctr = 100;
    while(true) {
       if(ctr-- <= 0) {
          throw Internal_Error("Cannot created fixed weight vector.");

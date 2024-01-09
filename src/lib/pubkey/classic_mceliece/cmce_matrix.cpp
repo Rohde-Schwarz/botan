@@ -16,7 +16,6 @@ using word_t = uint64_t;
 
 }  // Anonymous namespace
 
-// TODO: Refactoring potential (after semi-systematic form is implemented)
 namespace Botan {
 namespace {
 size_t count_lsb_zeros(secure_bitvector n) {
