@@ -21,6 +21,10 @@
 
 namespace Botan {
 
+/**
+ * @brief Classic McEliece Encapsulation Operation
+
+ */
 class Classic_McEliece_Encryptor final : public PK_Ops::KEM_Encryption {
    public:
       Classic_McEliece_Encryptor(std::shared_ptr<Classic_McEliece_PublicKeyInternal> key) : m_key(std::move(key)) {}

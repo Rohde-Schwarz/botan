@@ -10,6 +10,62 @@
 
 namespace Botan {
 
+namespace {
+
+std::optional<Classic_McEliece_KeyPair_Internal> try_generate_keypair(std::span<uint8_t> out_next_seed,
+                                                                      const Classic_McEliece_Parameters& params,
+                                                                      std::span<const uint8_t> seed) {
+   BOTAN_ASSERT_EQUAL(seed.size(), 32, "Valid seed length");
+   BOTAN_ASSERT_EQUAL(out_next_seed.size(), 32, "Valid output seed length");
+
+   auto field = params.poly_ring();
+
+   auto big_e_xof = params.prg(seed);
+
+   auto s = big_e_xof->output<secure_vector<uint8_t>>(params.n() / 8);
+   auto ordering_seed = big_e_xof->output<secure_vector<uint8_t>>((params.sigma2() * params.q()) / 8);
+   auto irreducible_seed = big_e_xof->output<secure_vector<uint8_t>>((params.sigma1() * params.t()) / 8);
+   big_e_xof->output(out_next_seed);
+
+   // Field-ordering generation - Classic McEliece ISO 8.2
+   auto field_ordering = Classic_McEliece_Field_Ordering::create_field_ordering(params, ordering_seed);
+   if(!field_ordering) {
+      return std::nullopt;
+   }
+
+   // Irreducible-polynomial generation - Classic McEliece ISO 8.1
+   auto beta = field.create_element_from_bytes(irreducible_seed);
+   auto g = params.poly_ring().compute_minimal_polynomial(beta);
+   if(!g) {
+      return std::nullopt;
+   }
+
+   // Matrix generation for Goppa codes - Classic McEliece ISO 7.2
+   auto pk_matrix_opt = Classic_McEliece_Matrix::create_matrix(params, field_ordering.value(), g.value());
+   if(!pk_matrix_opt) {
+      return std::nullopt;
+   }
+   auto& [pk_matrix, pivots] = pk_matrix_opt.value();
+   // Possibly, field_ordering is updated if semi-systematic form is used
+   if(params.is_f()) {
+      field_ordering.value().permute_with_pivots(params, pivots);
+   }
+   auto pk_bytes_value = pk_matrix.bytes();
+
+   auto sk = std::make_shared<Classic_McEliece_PrivateKeyInternal>(params,
+                                                                   secure_vector<uint8_t>(seed.begin(), seed.end()),
+                                                                   pivots,
+                                                                   std::move(g.value()),
+                                                                   std::move(field_ordering.value()),
+                                                                   std::move(s));
+
+   auto pk = std::make_shared<Classic_McEliece_PublicKeyInternal>(params, std::move(pk_bytes_value));
+
+   return Classic_McEliece_KeyPair_Internal{.private_key = sk, .public_key = pk};
+}
+
+}  // namespace
+
 Classic_McEliece_PrivateKeyInternal Classic_McEliece_PrivateKeyInternal::from_bytes(
    const Classic_McEliece_Parameters& params, std::span<const uint8_t> sk_bytes) {
    BOTAN_ASSERT(sk_bytes.size() == params.sk_size_bytes(), "Valid private key size");
@@ -34,11 +90,11 @@ secure_vector<uint8_t> Classic_McEliece_PrivateKeyInternal::serialize() const {
    return concat(m_delta, m_c.to_bytes(), m_g.serialize(), m_field_ordering.alphas_control_bits().to_bytes(), m_s);
 }
 
-std::shared_ptr<Classic_McEliece_PublicKeyInternal> Classic_McEliece_PublicKeyInternal::create_from_sk(
+std::shared_ptr<Classic_McEliece_PublicKeyInternal> Classic_McEliece_PublicKeyInternal::create_from_private_key(
    const Classic_McEliece_PrivateKeyInternal& sk) {
    // TODO: Must be copied, because field ordering must be passed mutable (because pivot stuff). Can we prevent this?
-   Classic_McEliece_Field_Ordering field_ord(sk.field_ordering());
-   auto pk_matrix_opt = Classic_McEliece_Matrix::create_matrix(sk.params(), field_ord, sk.g());
+   //Classic_McEliece_Field_Ordering field_ord(sk.field_ordering());
+   auto pk_matrix_opt = Classic_McEliece_Matrix::create_matrix(sk.params(), sk.field_ordering(), sk.g());
    if(!pk_matrix_opt.has_value()) {
       throw Decoding_Error("Cannot create public key from private key. Private key is invalid.");
    }
@@ -52,81 +108,22 @@ std::shared_ptr<Classic_McEliece_PublicKeyInternal> Classic_McEliece_PublicKeyIn
 }
 
 Classic_McEliece_KeyPair_Internal Classic_McEliece_KeyPair_Internal::generate(const Classic_McEliece_Parameters& params,
-                                                                              const secure_vector<uint8_t>& seed) {
+                                                                              std::span<const uint8_t> seed) {
    BOTAN_ASSERT_EQUAL(seed.size(), 32, "Valid seed length");
 
-   auto field = params.poly_ring();
+   secure_vector<uint8_t> next_seed(32);
 
-   // TODO: Remove Counter - Only for debugging. Keep this for emergency abort.
-   int ctr = 30;
-
-   auto delta = secure_vector<uint8_t>(seed);
-
-   while(true) {
-      if(ctr-- <= 0) {
-         throw Internal_Error("Cannot generate key.");
+   // Emergency abort in case unexpected logical error to prevent endless loops
+   //   Success probability: >29% per attempt [>98% for 'f' instances]
+   //   => 162 [15] attempts for 2^(-80) fail probability
+   const size_t MAX_ATTEMPTS = params.is_f() ? 15 : 162;
+   for(size_t attempt = 0; attempt < MAX_ATTEMPTS; ++attempt) {
+      if(auto keypair = try_generate_keypair(next_seed, params, seed)) {
+         return keypair.value();
       }
-
-      auto big_e = params.prg(delta);
-
-      // TODO: Return XOF for PRG and pull data directly from xof object
-      //       e.g. xof->output<secure_vector<uint8_t>>(params.n() / 8)
-      //       Advantage: params.prg() doesn't need to know anything about its output structure
-      BufferSlicer big_e_slicer(big_e);
-
-      auto s = big_e_slicer.take(params.n() / 8);
-      auto ordering_seed = big_e_slicer.take((params.sigma2() * params.q()) / 8);
-      auto irreducible_seed = big_e_slicer.take((params.sigma1() * params.t()) / 8);
-      auto delta_p = big_e_slicer.take(params.ell() / 8);
-      BOTAN_ASSERT_NOMSG(big_e_slicer.empty());
-
-      auto field_ordering = Classic_McEliece_Field_Ordering::create_field_ordering(params, ordering_seed);
-      if(!field_ordering.has_value()) {
-         // TODO: maybe: copy_mem(delta, delta_p) or delta.assign(delta_p.begin(), delta_p.end())
-         // TODO: Only once at the start of the loop
-         delta = secure_vector<uint8_t>(delta_p.begin(), delta_p.end());
-
-         // TODO: maybe avoid `continue`. Not at all cost! That's really nit-picky.
-         //       Instead, consider using a method that early-returns
-         //
-         //   if(auto sk = try_generate_sk()) {
-         //      if(auto pk = try_generate_pk(sk.value())) {
-         //         return {sk, pk};
-         //      }
-         //   }
-         continue;
-      }
-
-      //Irreducible algorithm 8.1
-      auto beta = field.create_element_from_bytes(irreducible_seed);
-      auto g = beta.compute_minimal_polynomial(params.poly_ring());  //TODO: Check if degree is t and optional return?
-
-      if(!g.has_value()) {
-         delta = secure_vector<uint8_t>(delta_p.begin(), delta_p.end());
-         continue;
-      }
-
-      // Create pk, possibly update field_ordering
-      auto pk_matrix_opt = Classic_McEliece_Matrix::create_matrix(params, field_ordering.value(), g.value());
-      if(!pk_matrix_opt.has_value()) {
-         delta = secure_vector<uint8_t>(delta_p.begin(), delta_p.end());
-         continue;
-      }
-      auto& [pk_matrix, pivots] = pk_matrix_opt.value();
-      auto pk_bytes_value = pk_matrix.bytes();
-
-      auto sk = std::make_shared<Classic_McEliece_PrivateKeyInternal>(params,
-                                                                      delta,
-                                                                      pivots,
-                                                                      std::move(g.value()),
-                                                                      std::move(field_ordering.value()),
-                                                                      secure_vector<uint8_t>(s.begin(), s.end()));
-
-      auto pk = std::make_shared<Classic_McEliece_PublicKeyInternal>(params, std::move(pk_bytes_value));
-
-      return Classic_McEliece_KeyPair_Internal{.private_key = sk, .public_key = pk};
+      seed = next_seed;
    }
-   BOTAN_ASSERT_UNREACHABLE();
+   throw Internal_Error("Key generation fails consistently. Something went wrong.");
 }
 
 }  // namespace Botan

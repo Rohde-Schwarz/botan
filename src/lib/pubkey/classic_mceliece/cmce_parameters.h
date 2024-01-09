@@ -22,6 +22,16 @@ namespace Botan {
 struct Classic_McEliece_Big_F_Coefficient;
 class Classic_McEliece_Polynomial_Ring;
 
+/**
+ * Specifies the Classic McEliece parameter sets defined in the NIST Round 4
+ * submission and the Classic McEliece ISO Draft.
+ *
+ * Instances are defined in the following format:
+ * mceliece{n}{t}{[pc]}{[f]}
+ *
+ * Instance with 'pc' use plaintext confirmation as defined in the ISO Draft.
+ * Instance with 'f' use matrix reduction with the semi-systematic form.
+ */
 enum class Classic_McEliece_Parameter_Set {
    mceliece348864,   // NIST
    mceliece348864f,  // NIST
@@ -292,35 +302,38 @@ class BOTAN_PUBLIC_API(3, 1) Classic_McEliece_Parameters final {
       const Classic_McEliece_Polynomial_Ring& poly_ring() const { return *m_poly_ring; }
 
       /**
-       * @brief Apply the hash function H to a seed.
+       * @brief Create a seeded XOF object representing Classic McEliece's PRG.
+       * See Classic McEliece ISO 9.1.
        *
-       * @param seed The seed to apply the hash function to.
+       * @param seed The seed used for the XOF.
        */
-      secure_vector<uint8_t> prg(std::span<const uint8_t> seed) const {
-         BOTAN_ASSERT_EQUAL(seed.size(), 32, "Valid seed length");
-         auto xof = XOF::create_or_throw("SHAKE-256");  // TODO: Possibly optimize and avoid re-creating object
+      std::unique_ptr<XOF> prg(std::span<const uint8_t> seed) const;
 
-         xof->update(std::array<uint8_t, 1>({64}));
-         xof->update(seed);
-
-         return xof->output((n() + sigma2() * q() + sigma1() * t() + ell()) / 8);
-      }
-
+      /**
+       * @brief Create an instance of the hash function Hash(x) used in Classic McEliece's
+       * Decaps and Encaps algorithms.
+       *
+       * @return a new instance of the hash function.
+       */
       std::unique_ptr<HashFunction> hash_func() const { return HashFunction::create_or_throw("SHAKE-256(256)"); }
 
+      /**
+       * @brief Create a GF(q) element using the modulus for the current instance.
+       *
+       * @param elem The GF(q) element as a uint16_t.
+       * @return The GF(q) element.
+       */
       Classic_McEliece_GF gf(uint16_t elem) const { return Classic_McEliece_GF(elem, m_poly_f); }
 
    private:
       Classic_McEliece_Parameters(
          Classic_McEliece_Parameter_Set param_set, size_t m, size_t n, size_t t, uint16_t poly_f);
 
-   private:
       Classic_McEliece_Parameter_Set m_set;
 
       size_t m_m;
       size_t m_n;
       size_t m_t;
-
       uint16_t m_poly_f;
       std::unique_ptr<Classic_McEliece_Polynomial_Ring> m_poly_ring;
 };

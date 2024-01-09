@@ -13,6 +13,8 @@ namespace Botan {
 
 namespace {
 
+// TODO: Maybe use parameter mapping like this: https://godbolt.org/z/e8oo7WKMK
+
 // TODO: unused?
 [[maybe_unused]] std::string str_from_param_set(Classic_McEliece_Parameter_Set param) {
    switch(param) {
@@ -246,6 +248,16 @@ size_t Classic_McEliece_Parameters::estimated_strength() const {
          throw Decoding_Error("Strength for parameter set ist not registed.");
    }
    BOTAN_ASSERT_UNREACHABLE();
+}
+
+std::unique_ptr<XOF> Classic_McEliece_Parameters::prg(std::span<const uint8_t> seed) const {
+   BOTAN_ASSERT_EQUAL(seed.size(), 32, "Valid seed length");
+   auto xof = XOF::create_or_throw("SHAKE-256");
+
+   xof->update(std::array<uint8_t, 1>({64}));
+   xof->update(seed);
+
+   return xof;
 }
 
 }  // namespace Botan

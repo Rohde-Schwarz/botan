@@ -25,11 +25,25 @@ namespace Botan {
  * It is endorsed by the German Federal Office for Information Security for its conservative security
  * assumptions and a corresponding draft for an ISO standard has been prepared. Both NIST and ISO parameter
  * sets are implemented here.
+ *
+ * Advantages of Classic McEliece:
+ * - Conservative post-quantum security assumptions
+ * - Very fast encapsulation
+ * - Fast decapsulation
+ *
+ * Disadvantages of Classic McEliece:
+ * - Very large public keys (0.26 MB - 1.36 MB)
+ * - Relatively slow key generation
+ * - Algorithm is complex and hard to implement side-channel resistant
  */
 class BOTAN_PUBLIC_API(3, 4) Classic_McEliece_PublicKey : public virtual Public_Key {
    public:
-      Classic_McEliece_PublicKey(Classic_McEliece_Parameter_Set set, std::vector<uint8_t> pub_key);
-
+      /**
+       * @brief Load a Classic McEliece public key from bytes.
+       *
+       * @param alg_id The algorithm identifier
+       * @param key_bits The public key bytes
+       */
       Classic_McEliece_PublicKey(const AlgorithmIdentifier& alg_id, std::span<const uint8_t> key_bits);
 
       Classic_McEliece_PublicKey(const Classic_McEliece_PublicKey& other);
@@ -76,10 +90,28 @@ BOTAN_DIAGNOSTIC_IGNORE_INHERITED_VIA_DOMINANCE
 class BOTAN_PUBLIC_API(3, 4) Classic_McEliece_PrivateKey final : public virtual Classic_McEliece_PublicKey,
                                                                  public virtual Private_Key {
    public:
+      /**
+       * @brief Create a new Classic McEliece private key for a specified parameter set.
+       *
+       * @param rng A random number generator
+       * @param param_set The parameter set to use
+       */
       Classic_McEliece_PrivateKey(RandomNumberGenerator& rng, Classic_McEliece_Parameter_Set param_set);
 
-      Classic_McEliece_PrivateKey(std::span<const uint8_t> sk, Classic_McEliece_Parameter_Set param_set);
+      /**
+       * @brief Load a Classic McEliece private key from bytes.
+       *
+       * @param param_set The parameter set to use
+       * @param sk The private key bytes
+       */
+      Classic_McEliece_PrivateKey(Classic_McEliece_Parameter_Set param_set, std::span<const uint8_t> sk);
 
+      /**
+       * @brief Load a Classic McEliece private key from bytes.
+       *
+       * @param alg_id The algorithm identifier
+       * @param key_bits The private key bytes
+       */
       Classic_McEliece_PrivateKey(const AlgorithmIdentifier& alg_id, std::span<const uint8_t> key_bits);
 
       std::unique_ptr<Public_Key> public_key() const override;

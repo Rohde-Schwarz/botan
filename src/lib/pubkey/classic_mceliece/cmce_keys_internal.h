@@ -28,19 +28,42 @@ class Classic_McEliece_PrivateKeyInternal;
  */
 class Classic_McEliece_PublicKeyInternal {
    public:
+      /**
+       * @brief Construct a Classic McEliece public key.
+       *
+       * @param params The Classic McEliece parameters
+       * @param matrix The public key matrix
+       */
       Classic_McEliece_PublicKeyInternal(const Classic_McEliece_Parameters& params, Classic_McEliece_Matrix matrix) :
             m_params(params), m_matrix(std::move(matrix)) {
          BOTAN_ASSERT_NOMSG(m_matrix.bytes().size() == m_params.pk_size_bytes());
       }
 
-      // TODO: Do we want to return a shared_ptr or an object?
-      static std::shared_ptr<Classic_McEliece_PublicKeyInternal> create_from_sk(
+      /**
+       * @brief Create a Classic McEliece public key from a private key.
+       *
+       * Create the matrix from the private key values. Expects that the private key is valid, i.e.
+       * the matrix creation works.
+       *
+       * @param sk The private key
+       * @return The public key as a shared pointer
+       */
+      static std::shared_ptr<Classic_McEliece_PublicKeyInternal> create_from_private_key(
          const Classic_McEliece_PrivateKeyInternal& sk);
 
+      /**
+       * @brief Serializes the Classic McEliece public key as defined in Classic McEliece ISO Section 9.2.7.
+       */
       std::vector<uint8_t> serialize() const { return m_matrix.bytes(); }
 
+      /**
+       * @brief The Classic McEliece matrix.
+       */
       const Classic_McEliece_Matrix& matrix() const { return m_matrix; }
 
+      /**
+       * @brief The Classic McEliece parameters.
+       */
       const Classic_McEliece_Parameters& params() const { return m_params; }
 
    private:
@@ -62,6 +85,16 @@ class Classic_McEliece_PublicKeyInternal {
  */
 class Classic_McEliece_PrivateKeyInternal {
    public:
+      /**
+       * @brief Construct a Classic McEliece private key.
+       *
+       * @param params The Classic McEliece parameters
+       * @param delta The seed delta
+       * @param c The column selection pivot vector c
+       * @param g The minimal polynomial g
+       * @param alpha The field ordering alpha
+       * @param s The seed s for implicit rejection
+       */
       Classic_McEliece_PrivateKeyInternal(const Classic_McEliece_Parameters& params,
                                           secure_vector<uint8_t> delta,
                                           secure_bitvector c,
@@ -143,14 +176,9 @@ struct Classic_McEliece_KeyPair_Internal {
       /**
        * @brief Generate a Classic McEliece key pair using the algorithm described
        * in Classic McEliece ISO Section 8.3
-       * TODO: seed -> std::span or per value.
-       *
-       * @param params
-       * @param seed
-       * @return Classic_McEliece_KeyPair_Internal
        */
       static Classic_McEliece_KeyPair_Internal generate(const Classic_McEliece_Parameters& params,
-                                                        const secure_vector<uint8_t>& seed);
+                                                        std::span<const uint8_t> seed);
 };
 
 }  // namespace Botan

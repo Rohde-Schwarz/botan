@@ -310,4 +310,20 @@ Classic_McEliece_Field_Ordering Classic_McEliece_Field_Ordering::create_from_con
    return Classic_McEliece_Field_Ordering(std::move(pi), params.poly_f());
 }
 
+void Classic_McEliece_Field_Ordering::permute_with_pivots(const Classic_McEliece_Parameters& params,
+                                                          const secure_bitvector& pivots) {
+   auto col_offset = params.pk_no_rows() - Classic_McEliece_Parameters::mu();
+
+   for(uint64_t p_idx = 1; p_idx <= Classic_McEliece_Parameters::mu(); ++p_idx) {
+      uint64_t p_counter = 0;
+      for(uint64_t col = 0; col < Classic_McEliece_Parameters::nu(); ++col) {
+         auto mask_is_pivot_set = CT::Mask<uint64_t>::expand(pivots.at(col));
+         p_counter += CT::Mask<uint64_t>::expand(pivots.at(col)).if_set_return(1);
+         auto mask_is_current_pivot = CT::Mask<uint64_t>::is_equal(p_idx, p_counter);
+         (mask_is_pivot_set & mask_is_current_pivot)
+            .conditional_swap(m_pi.at(col_offset + col), m_pi.at(col_offset + p_idx - 1));
+      }
+   }
+}
+
 }  // namespace Botan

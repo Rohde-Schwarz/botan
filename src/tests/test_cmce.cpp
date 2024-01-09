@@ -39,15 +39,14 @@ class CMCE_Utility_Tests final : public Test {
          // Created using the reference implementation
          auto seed = Botan::hex_decode_locked("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
 
-         auto exp_first_and_last_bytes = Botan::hex_decode_locked(
+         auto exp_first_and_last_bytes = Botan::hex_decode(
             "543e2791fd98dbc1"    // first 8 bytes
             "d332a7c40776ca01");  // last 8 bytes
 
-         size_t exp_bit_length =
-            params.n() + params.sigma2() * params.q() + params.sigma1() * params.t() + params.ell();
+         size_t byte_length =
+            (params.n() + params.sigma2() * params.q() + params.sigma1() * params.t() + params.ell()) / 8;
 
-         Botan::secure_vector<uint8_t> rand = params.prg(seed);
-         result.test_eq("Expanded seed length", rand.size(), exp_bit_length / 8);
+         auto rand = params.prg(seed)->output_stdvec(byte_length);
          rand.erase(rand.begin() + 8, rand.end() - 8);
 
          result.test_is_eq("Seed expansion", rand, exp_first_and_last_bytes);

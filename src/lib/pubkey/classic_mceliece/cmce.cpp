@@ -22,13 +22,6 @@
 
 namespace Botan {
 
-Classic_McEliece_PublicKey::Classic_McEliece_PublicKey(Classic_McEliece_Parameter_Set set,
-                                                       std::vector<uint8_t> pub_key) {
-   // TODO: ASSERT Correct key length + correct zero padding in matrix?
-   m_public = std::make_shared<Classic_McEliece_PublicKeyInternal>(Classic_McEliece_Parameters::create(set),
-                                                                   Classic_McEliece_Matrix(std::move(pub_key)));
-}
-
 Classic_McEliece_PublicKey::Classic_McEliece_PublicKey(const AlgorithmIdentifier& alg_id,
                                                        std::span<const uint8_t> key_bits) {
    // TODO: ASSERT Correct key length + correct zero padding in matrix?
@@ -88,23 +81,24 @@ std::unique_ptr<PK_Ops::KEM_Encryption> Classic_McEliece_PublicKey::create_kem_e
 Classic_McEliece_PrivateKey::Classic_McEliece_PrivateKey(RandomNumberGenerator& rng,
                                                          Classic_McEliece_Parameter_Set param_set) {
    auto params = Classic_McEliece_Parameters::create(param_set);
-   auto key_pair = Classic_McEliece_KeyPair_Internal::generate(params, rng.random_vec(params.seed_len()));
+   auto seed = rng.random_vec(params.seed_len());
+   auto key_pair = Classic_McEliece_KeyPair_Internal::generate(params, seed);
 
    m_private = key_pair.private_key;
    m_public = key_pair.public_key;
 }
 
-Classic_McEliece_PrivateKey::Classic_McEliece_PrivateKey(std::span<const uint8_t> sk,
-                                                         Classic_McEliece_Parameter_Set param_set) {
+Classic_McEliece_PrivateKey::Classic_McEliece_PrivateKey(Classic_McEliece_Parameter_Set param_set,
+                                                         std::span<const uint8_t> sk) {
    auto params = Classic_McEliece_Parameters::create(param_set);
    auto sk_internal = Classic_McEliece_PrivateKeyInternal::from_bytes(params, sk);
    m_private = std::make_shared<Classic_McEliece_PrivateKeyInternal>(std::move(sk_internal));
-   m_public = Classic_McEliece_PublicKeyInternal::create_from_sk(*m_private);
+   m_public = Classic_McEliece_PublicKeyInternal::create_from_private_key(*m_private);
 }
 
 Classic_McEliece_PrivateKey::Classic_McEliece_PrivateKey(const AlgorithmIdentifier& alg_id,
                                                          std::span<const uint8_t> key_bits) :
-      Classic_McEliece_PrivateKey(key_bits, Classic_McEliece_Parameters::param_set_from_oid(alg_id.oid())) {}
+      Classic_McEliece_PrivateKey(Classic_McEliece_Parameters::param_set_from_oid(alg_id.oid()), key_bits) {}
 
 std::unique_ptr<Public_Key> Classic_McEliece_PrivateKey::public_key() const {
    return std::make_unique<Classic_McEliece_PublicKey>(*this);

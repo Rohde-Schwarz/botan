@@ -34,6 +34,9 @@ class BOTAN_TEST_API Classic_McEliece_Matrix {
        * create it in the semi-systematic form as described in Classic McEliece ISO
        * Section 9.2.11.
        *
+       * Note that the field ordering must be updated according to the pivot output vectorm,
+       * as described in Classic McEliece ISO Section 7.2.3 Step 4.
+       *
        * @param params Classic McEliece parameters
        * @param field_ordering Field ordering
        * @param g Minimal polynomial
@@ -41,7 +44,7 @@ class BOTAN_TEST_API Classic_McEliece_Matrix {
        */
       static std::optional<std::pair<Classic_McEliece_Matrix, secure_bitvector>> create_matrix(
          const Classic_McEliece_Parameters& params,
-         Classic_McEliece_Field_Ordering& field_ordering,
+         const Classic_McEliece_Field_Ordering& field_ordering,
          const Classic_McEliece_Minimal_Polynomial& g);
 
       /**

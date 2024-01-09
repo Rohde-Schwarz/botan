@@ -32,7 +32,7 @@ size_t count_lsb_zeros(secure_bitvector n) {
 }
 
 std::vector<secure_bitvector> init_matrix_with_alphas(const Classic_McEliece_Parameters& params,
-                                                      Classic_McEliece_Field_Ordering& field_ordering,
+                                                      const Classic_McEliece_Field_Ordering& field_ordering,
                                                       const Classic_McEliece_Minimal_Polynomial& g) {
    auto all_alphas = field_ordering.alphas();
    BOTAN_ASSERT_NOMSG(params.n() <= all_alphas.size());
@@ -62,9 +62,7 @@ std::vector<secure_bitvector> init_matrix_with_alphas(const Classic_McEliece_Par
 }
 
 std::optional<secure_bitvector> move_columns(std::vector<secure_bitvector>& mat,
-                                             Classic_McEliece_Field_Ordering& field_ordering,
                                              const Classic_McEliece_Parameters& params) {
-   // TODO refactor w/ new bitvector
    static_assert(Classic_McEliece_Parameters::nu() == 64,
                  "nu needs to be 64");  // Since we use uint64_t to represent tows in the mu x nu sub-matrix
    // A 32x64 sub-matrix of mat containing the elements mat[m*t-32][m*t-32] at the top left
@@ -77,7 +75,6 @@ std::optional<secure_bitvector> move_columns(std::vector<secure_bitvector>& mat,
       sub_mat.at(i) = mat.at(pos_offset + i).subvector(pos_offset, Classic_McEliece_Parameters::nu());
    }
 
-   secure_bitvector pivots(Classic_McEliece_Parameters::nu());
    std::array<size_t, Classic_McEliece_Parameters::mu()> pivot_indices = {0};  // ctz_list
 
    // Identify the pivot indices, i.e. the indices of the leading ones for all rows
@@ -100,7 +97,6 @@ std::optional<secure_bitvector> move_columns(std::vector<secure_bitvector>& mat,
       // bit for the current row, i.e. the first index where we can set
       // the bit to one rowby adding any subsequent row
       pivot_indices.at(row_idx) = count_lsb_zeros(row_acc);
-      pivots.at(pivot_indices.at(row_idx)).set();
 
       // Add subsequent rows to the current row, until the pivot
       // bit is set.
@@ -121,15 +117,12 @@ std::optional<secure_bitvector> move_columns(std::vector<secure_bitvector>& mat,
       }
    }
 
-   // Update pi (i.e., update field ordering reference) by swapping values
-   //TODO: Separate function using pivots/c?
-   auto& pi_ref = field_ordering.pi_ref();
-   for(size_t j = 0; j < 32; ++j) {
-      for(size_t k = j + 1; k < 64; ++k) {
-         // If k == pivot_indices[j], swap pi[row_offset + j] and pi[row_offset + k]
-         // Use 64-bit mask since pivot_indices is 64 bit. TODO: Do we really need 64 bit?
-         auto mask = CT::Mask<uint16_t>::is_equal(k, pivot_indices.at(j));
-         mask.conditional_swap(pi_ref.at(pos_offset + j), pi_ref.at(pos_offset + k));
+   // Create pivot bitvector from the pivot index vector
+   secure_bitvector pivots(Classic_McEliece_Parameters::nu());
+   for(auto pivot_idx : pivot_indices) {
+      for(size_t i = 0; i < Classic_McEliece_Parameters::nu(); ++i) {
+         auto mask_is_at_current_idx = Botan::CT::Mask<size_t>::is_equal(i, pivot_idx);
+         pivots.at(i) = mask_is_at_current_idx.select(1, pivots.at(i));
       }
    }
 
@@ -149,7 +142,6 @@ std::optional<secure_bitvector> move_columns(std::vector<secure_bitvector>& mat,
 }
 
 std::optional<secure_bitvector> apply_gauss(const Classic_McEliece_Parameters& params,
-                                            Classic_McEliece_Field_Ordering& field_ordering,
                                             std::vector<secure_bitvector>& mat) {
    // Initialized for systematic form instances
    // Is overridden for semi systematic instances
@@ -158,7 +150,7 @@ std::optional<secure_bitvector> apply_gauss(const Classic_McEliece_Parameters& p
    // Gaussian Elimination
    for(size_t diag_pos = 0; diag_pos < params.pk_no_rows(); ++diag_pos) {
       if(params.is_f() && diag_pos == params.pk_no_rows() - params.mu()) {
-         auto ret_pivots = move_columns(mat, field_ordering, params);
+         auto ret_pivots = move_columns(mat, params);
          if(!ret_pivots) {
             return std::nullopt;
          } else {
@@ -216,10 +208,10 @@ std::vector<uint8_t> extract_pk_bytes_from_matrix(const Classic_McEliece_Paramet
 
 std::optional<std::pair<Classic_McEliece_Matrix, secure_bitvector>> Classic_McEliece_Matrix::create_matrix(
    const Classic_McEliece_Parameters& params,
-   Classic_McEliece_Field_Ordering& field_ordering,
+   const Classic_McEliece_Field_Ordering& field_ordering,
    const Classic_McEliece_Minimal_Polynomial& g) {
    auto mat = init_matrix_with_alphas(params, field_ordering, g);
-   auto pivots = apply_gauss(params, field_ordering, mat);
+   auto pivots = apply_gauss(params, mat);
 
    if(!pivots) {
       return std::nullopt;

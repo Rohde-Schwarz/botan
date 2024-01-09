@@ -132,10 +132,10 @@ void Classic_McEliece_Decryptor::kem_decrypt(std::span<uint8_t> out_shared_key,
    auto [ct, c1] = [&]() -> std::pair<bitvector, std::span<const uint8_t>> {
       if(m_key->params().is_pc()) {
          BufferSlicer encaps_key_slicer(encapsulated_key);
-         auto c0 = encaps_key_slicer.take(m_key->params().encode_out_size());
-         auto c1 = encaps_key_slicer.take(m_key->params().hash_out_bytes());
+         auto c0_ret = encaps_key_slicer.take(m_key->params().encode_out_size());
+         auto c1_ret = encaps_key_slicer.take(m_key->params().hash_out_bytes());
          BOTAN_ASSERT_NOMSG(encaps_key_slicer.empty());
-         return {bitvector(c0, m_key->params().m() * m_key->params().t()), c1};
+         return {bitvector(c0_ret, m_key->params().m() * m_key->params().t()), c1_ret};
       } else {
          return {bitvector(encapsulated_key, m_key->params().m() * m_key->params().t()), {}};
       }

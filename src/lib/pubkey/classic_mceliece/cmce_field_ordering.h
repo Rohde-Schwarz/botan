@@ -64,6 +64,20 @@ class BOTAN_TEST_API Classic_McEliece_Field_Ordering {
        */
       secure_vector<uint16_t>& pi_ref() { return m_pi; }
 
+      /**
+       * @brief Permute the field ordering with the given pivots.
+       *
+       * For example: If the pivot vector is 10101, the first, third and fifth element of the field ordering
+       * are permuted to positions 0, 1 and 2, respectively. The remaining elements are put at the end.
+       *
+       * The permutation is done for the elements from position m*t - mu,..., m*t + mu (excl.).
+       * This function implements Classic McEliece ISO Sec. 7.2.3 Step 4.
+       *
+       * @param params The McEliece parameters.
+       * @param pivots The pivot vector.
+       */
+      void permute_with_pivots(const Classic_McEliece_Parameters& params, const secure_bitvector& pivots);
+
    private:
       Classic_McEliece_Field_Ordering(secure_vector<uint16_t> pi, uint16_t poly_f) :
             m_pi(std::move(pi)), m_poly_f(poly_f) {}
