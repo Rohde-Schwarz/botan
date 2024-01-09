@@ -18,11 +18,10 @@ std::vector<Classic_McEliece_GF> Classic_McEliece_Decryptor::compute_goppa_syndr
    BOTAN_ASSERT(params.n() == code_word.size(), "Correct code word size");
    std::vector<Classic_McEliece_GF> syndrome(2 * params.t(), params.gf(0));
 
-   auto all_alphas = ordering.alphas();
-   auto n_alphas = std::span(all_alphas).subspan(0, params.n());
+   auto alphas = ordering.alphas(params.n());
 
    for(size_t i = 0; i < params.n(); ++i) {
-      auto e = goppa_poly(n_alphas[i]);
+      auto e = goppa_poly(alphas[i]);
       auto e_inv = (e * e).inv();
 
       auto c_mask = GF_Mask(CT::Mask<uint16_t>::expand(code_word.at(i)));
@@ -30,7 +29,7 @@ std::vector<Classic_McEliece_GF> Classic_McEliece_Decryptor::compute_goppa_syndr
       // TODO: Is this CT for all compiler optimizations? A smart compiler could skip the XOR if code_word[i] == 0.
       for(size_t j = 0; j < 2 * params.t(); ++j) {
          syndrome.at(j) += c_mask.if_set_return(e_inv);
-         e_inv = e_inv * n_alphas[i];
+         e_inv = e_inv * alphas[i];
       }
    }
 
@@ -92,10 +91,9 @@ std::pair<CT::Mask<uint8_t>, secure_bitvector> Classic_McEliece_Decryptor::decod
    auto locator = berlekamp_massey(sk.params(), syndrome);
 
    std::vector<Classic_McEliece_GF> images;
-   auto alphas = sk.field_ordering().alphas();
-   auto n_alphas = std::ranges::subrange(alphas.begin(), alphas.begin() + sk.params().n());
+   auto alphas = sk.field_ordering().alphas(sk.params().n());
    std::transform(
-      n_alphas.begin(), n_alphas.end(), std::back_inserter(images), [&](const auto& alpha) { return locator(alpha); });
+      alphas.begin(), alphas.end(), std::back_inserter(images), [&](const auto& alpha) { return locator(alpha); });
 
    // Obtain e and check whether wt(e) = t
    secure_bitvector e;

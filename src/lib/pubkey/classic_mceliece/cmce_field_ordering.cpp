@@ -145,14 +145,17 @@ std::optional<Classic_McEliece_Field_Ordering> Classic_McEliece_Field_Ordering::
    return Classic_McEliece_Field_Ordering(std::move(pi), params.poly_f());
 }
 
-std::vector<Classic_McEliece_GF> Classic_McEliece_Field_Ordering::alphas() const {
+std::vector<Classic_McEliece_GF> Classic_McEliece_Field_Ordering::alphas(size_t n) const {
    BOTAN_ASSERT_NOMSG(m_poly_f != 0);
+   BOTAN_ASSERT_NOMSG(m_pi.size() >= n);
 
-   std::vector<Classic_McEliece_GF> res;
-   for(auto& pi_elem : m_pi) {
-      res.push_back(from_pi(pi_elem, m_poly_f, Classic_McEliece_GF::log_q(m_poly_f)));
-   }
-   return res;
+   std::vector<Classic_McEliece_GF> n_alphas_vec;
+
+   std::transform(m_pi.begin(), m_pi.begin() + n, std::back_inserter(n_alphas_vec), [this](uint16_t pi_elem) {
+      return from_pi(pi_elem, m_poly_f, Classic_McEliece_GF::log_q(m_poly_f));
+   });
+
+   return n_alphas_vec;
 }
 
 secure_bitvector Classic_McEliece_Field_Ordering::alphas_control_bits() const {

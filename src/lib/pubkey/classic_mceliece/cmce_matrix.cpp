@@ -33,10 +33,7 @@ size_t count_lsb_zeros(secure_bitvector n) {
 std::vector<secure_bitvector> init_matrix_with_alphas(const Classic_McEliece_Parameters& params,
                                                       const Classic_McEliece_Field_Ordering& field_ordering,
                                                       const Classic_McEliece_Minimal_Polynomial& g) {
-   auto all_alphas = field_ordering.alphas();
-   BOTAN_ASSERT_NOMSG(params.n() <= all_alphas.size());
-   // TODO: In own function
-   std::vector<Classic_McEliece_GF> alphas(all_alphas.begin(), all_alphas.begin() + params.n());
+   auto alphas = field_ordering.alphas(params.n());
    std::vector<Classic_McEliece_GF> inv_g_of_alpha;
    inv_g_of_alpha.reserve(params.n());
    for(const auto& alpha : alphas) {

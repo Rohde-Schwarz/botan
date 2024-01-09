@@ -46,9 +46,10 @@ class BOTAN_TEST_API Classic_McEliece_Field_Ordering {
       /**
        * @brief Returns the field ordering as a vector of all alphas from alpha_0 to alpha_{n-1}.
        *
-       * @return the vector of alphas.
+       * @param n The number of alphas to return.
+       * @return the vector of n alphas.
        */
-      std::vector<Classic_McEliece_GF> alphas() const;
+      std::vector<Classic_McEliece_GF> alphas(size_t n) const;
 
       /**
        * @brief Generates the control bits of the benes network corresponding to the field ordering.
