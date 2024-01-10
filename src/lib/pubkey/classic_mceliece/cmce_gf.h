@@ -53,7 +53,7 @@ class BOTAN_TEST_API Classic_McEliece_GF {
        * @param modulus The modulus of GF(q).
        * @return size_t The degree log_q of the modulus (m for GF(2^m)).
        */
-      static size_t log_q(u_int16_t modulus) { return high_bit(modulus) - 1; }
+      static size_t log_q(uint16_t modulus) { return high_bit(modulus) - 1; }
 
       /**
        * @brief Get m.
