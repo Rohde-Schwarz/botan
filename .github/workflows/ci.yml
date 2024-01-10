@@ -13,7 +13,7 @@ permissions:
 on:
   # TODO Remove on PR
   push:
-    branches: [ master, pqc/classic_mceliece, ci/** ]
+    branches: [ master, pqc/classic_mceliece ]
   pull_request:
     branches: [ master ]
 

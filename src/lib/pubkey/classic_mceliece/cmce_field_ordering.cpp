@@ -152,7 +152,7 @@ std::vector<Classic_McEliece_GF> Classic_McEliece_Field_Ordering::alphas(size_t 
    std::vector<Classic_McEliece_GF> n_alphas_vec;
 
    std::transform(m_pi.begin(), m_pi.begin() + n, std::back_inserter(n_alphas_vec), [this](uint16_t pi_elem) {
-      return from_pi(pi_elem, m_poly_f, Classic_McEliece_GF::log_q(m_poly_f));
+      return from_pi(pi_elem, m_poly_f, Classic_McEliece_GF::log_q_from_mod(m_poly_f));
    });
 
    return n_alphas_vec;
