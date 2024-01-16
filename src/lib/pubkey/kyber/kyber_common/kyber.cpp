@@ -990,19 +990,17 @@ class Ciphertext {
 
 class Kyber_PublicKeyInternal {
    public:
-      Kyber_PublicKeyInternal(KyberConstants mode, std::span<const uint8_t> polynomials, std::vector<uint8_t> seed) :
-            m_mode(std::move(mode)),
-            m_polynomials(PolynomialVector::from_bytes(polynomials, m_mode)),
-            m_seed(std::move(seed)),
-            m_public_key_bits_raw(concat(m_polynomials.to_bytes<std::vector<uint8_t>>(), m_seed)),
-            m_H_public_key_bits_raw(m_mode.H()->process<std::vector<uint8_t>>(m_public_key_bits_raw)) {}
-
       Kyber_PublicKeyInternal(KyberConstants mode, PolynomialVector polynomials, std::vector<uint8_t> seed) :
             m_mode(std::move(mode)),
             m_polynomials(std::move(polynomials)),
             m_seed(std::move(seed)),
             m_public_key_bits_raw(concat(m_polynomials.to_bytes<std::vector<uint8_t>>(), m_seed)),
             m_H_public_key_bits_raw(m_mode.H()->process<std::vector<uint8_t>>(m_public_key_bits_raw)) {}
+
+      Kyber_PublicKeyInternal(const KyberConstants& mode,
+                              std::span<const uint8_t> polynomials,
+                              std::vector<uint8_t> seed) :
+            Kyber_PublicKeyInternal(mode, PolynomialVector::from_bytes(polynomials, mode), std::move(seed)) {}
 
       const PolynomialVector& polynomials() const { return m_polynomials; }
 
