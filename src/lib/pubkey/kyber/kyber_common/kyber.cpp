@@ -15,7 +15,6 @@
 #include <botan/kyber.h>
 
 #include <botan/assert.h>
-#include <botan/ber_dec.h>
 #include <botan/concepts.h>
 #include <botan/hash.h>
 #include <botan/mem_ops.h>
@@ -38,12 +37,9 @@
    #include <botan/internal/kyber_90s.h>
 #endif
 
-#include <algorithm>
 #include <array>
-#include <iterator>
 #include <limits>
 #include <memory>
-#include <optional>
 #include <vector>
 
 namespace Botan {
