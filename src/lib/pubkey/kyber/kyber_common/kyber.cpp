@@ -572,11 +572,8 @@ class Polynomial {
        * to a mod q in {0,...,q}.
        */
       static int16_t barrett_reduce(int16_t a) {
-         int16_t t;
-         const int16_t v = ((1U << 26) + KyberConstants::Q / 2) / KyberConstants::Q;
-
-         t = static_cast<int32_t>(v) * a >> 26;
-         t *= KyberConstants::Q;
+         constexpr int32_t v = ((1U << 26) + KyberConstants::Q / 2) / KyberConstants::Q;
+         const int16_t t = (v * a >> 26) * KyberConstants::Q;
          return a - t;
       }
 
