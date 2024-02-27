@@ -13,6 +13,7 @@
 #include <botan/dilithium.h>
 
 #include <botan/xof.h>
+#include <botan/internal/dilithium_types.h>
 #include <botan/internal/shake.h>
 
 #include <memory>
@@ -29,10 +30,36 @@ class Dilithium_Symmetric_Primitives {
    public:
       enum class XofType { k128, k256 };
 
+   protected:
+      Dilithium_Symmetric_Primitives() : m_h(XOF::create_or_throw("SHAKE-256")) {}
+
    public:
       static std::unique_ptr<Dilithium_Symmetric_Primitives> create(DilithiumMode mode);
 
       virtual ~Dilithium_Symmetric_Primitives() = default;
+
+      std::tuple<DilithiumSeedRho, DilithiumSeedRhoPrime, DilithiumSeedK> H(
+         StrongSpan<const DilithiumSeedRandomness> seed) const {
+         auto result = std::make_tuple(DilithiumSeedRho(32 /* TODO: SEEDBYTES*/),
+                                       DilithiumSeedRhoPrime(64 /* TODO: CRHBYTES*/),
+                                       DilithiumSeedK(32 /* TODO: SEEDBYTES*/));
+         m_h->update(seed);
+         m_h->output(std::get<0>(result));
+         m_h->output(std::get<1>(result));
+         m_h->output(std::get<2>(result));
+         m_h->clear();
+         return result;
+      }
+
+      DilithiumTR H(StrongSpan<const DilithiumSerializedPublicKey> pk, size_t outlen) const {
+         m_h->update(pk);
+
+         // TODO: Once Dilithium-R3.1 is removed, this can be simplified to
+         //       a hard-coded outlen of 32 instead of requiring it as a parameter.
+         auto result = m_h->output<DilithiumTR>(outlen);
+         m_h->clear();
+         return result;
+      }
 
       // H is same for all modes
       secure_vector<uint8_t> H(std::span<const uint8_t> seed, size_t out_len) const {
@@ -51,6 +78,9 @@ class Dilithium_Symmetric_Primitives {
 
       // Mode dependent function
       virtual std::unique_ptr<Botan::XOF> XOF(XofType type, std::span<const uint8_t> seed, uint16_t nonce) const = 0;
+
+   private:
+      std::unique_ptr<Botan::XOF> m_h;
 };
 
 enum DilithiumEta : uint32_t { Eta2 = 2, Eta4 = 4 };
@@ -124,6 +154,8 @@ class DilithiumModeConstants {
 
       size_t polyw1_packedbytes() const { return m_polyw1_packedbytes; }
 
+      size_t tr_bytes() const { return m_tr_bytes; }
+
       size_t omega() const { return m_omega; }
 
       size_t polyz_packedbytes() const { return m_polyz_packedbytes; }
@@ -151,6 +183,8 @@ class DilithiumModeConstants {
       size_t private_key_bytes() const { return m_private_key_bytes; }
 
       size_t nist_security_strength() const { return m_nist_security_strength; }
+
+      Dilithium_Symmetric_Primitives& symmetric_primitives() const { return *m_symmetric_primitives; }
 
       // Wrapper
       decltype(auto) H(std::span<const uint8_t> seed, size_t out_len) const {
@@ -188,6 +222,7 @@ class DilithiumModeConstants {
       int32_t m_gamma1;
       int32_t m_gamma2;
       int32_t m_omega;
+      int32_t m_tr_bytes;
       int32_t m_stream128_blockbytes;
       int32_t m_stream256_blockbytes;
       int32_t m_poly_uniform_nblocks;

@@ -14,9 +14,11 @@ dilithium.h
 
 <header:internal>
 dilithium_polynomials.h
+dilithium_types.h
 dilithium_symmetric_primitives.h
 </header:internal>
 
 <requires>
 shake
+shake_xof
 </requires>

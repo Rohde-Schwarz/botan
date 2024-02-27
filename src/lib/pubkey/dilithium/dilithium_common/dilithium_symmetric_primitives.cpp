@@ -104,6 +104,7 @@ DilithiumModeConstants::DilithiumModeConstants(DilithiumMode mode) :
    }
 
    // For all modes the same calculation
+   m_tr_bytes = DilithiumModeConstants::SEEDBYTES;
    m_polyvech_packedbytes = m_omega + m_k;
    m_poly_uniform_nblocks = ((768 + m_stream128_blockbytes - 1) / m_stream128_blockbytes);
    m_public_key_bytes = DilithiumModeConstants::SEEDBYTES + m_k * DilithiumModeConstants::POLYT1_PACKEDBYTES;

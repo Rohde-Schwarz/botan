@@ -146,7 +146,7 @@ class Polynomial {
       *              - const DilithiumModeConstants& mode: Mode dependent values.
       **************************************************/
       static void fill_poly_uniform_eta(Polynomial& a,
-                                        const secure_vector<uint8_t>& seed,
+                                        std::span<const uint8_t> seed,
                                         uint16_t nonce,
                                         const DilithiumModeConstants& mode) {
          BOTAN_ASSERT_NOMSG(seed.size() == DilithiumModeConstants::CRHBYTES);
@@ -987,7 +987,7 @@ class PolynomialVector {
       *              - const DilithiumModeConstants& mode: reference to dilihtium mode values
       * Return Polynomial
       **************************************************/
-      static Polynomial poly_uniform(const std::vector<uint8_t>& seed,
+      static Polynomial poly_uniform(std::span<const uint8_t> seed,
                                      uint16_t nonce,
                                      const DilithiumModeConstants& mode) {
          Polynomial sample_poly;
@@ -1014,7 +1014,7 @@ class PolynomialVector {
       }
 
       static void fill_polyvec_uniform_eta(PolynomialVector& v,
-                                           const secure_vector<uint8_t>& seed,
+                                           std::span<const uint8_t> seed,
                                            uint16_t nonce,
                                            const DilithiumModeConstants& mode) {
          for(size_t i = 0; i < v.m_vec.size(); ++i) {
@@ -1418,7 +1418,7 @@ class PolynomialMatrix {
       *              - const DilithiumModeConstants& mode: reference to dilihtium mode values
       * Returns the output matrix mat[k]
       **************************************************/
-      static PolynomialMatrix generate_matrix(const std::vector<uint8_t>& rho, const DilithiumModeConstants& mode) {
+      static PolynomialMatrix generate_matrix(std::span<const uint8_t> rho, const DilithiumModeConstants& mode) {
          BOTAN_ASSERT(rho.size() >= DilithiumModeConstants::SEEDBYTES, "wrong byte length for rho/seed");
 
          PolynomialMatrix matrix(mode);
