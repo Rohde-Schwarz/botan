@@ -547,7 +547,7 @@ class Polynomial {
       *              - uint16_t nonce: 16-bit nonce
       *              - const DilithiumModeConstants& mode: reference to dilihtium mode values
       **************************************************/
-      void poly_uniform_gamma1(const secure_vector<uint8_t>& seed, uint16_t nonce, const DilithiumModeConstants& mode) {
+      void poly_uniform_gamma1(std::span<const uint8_t> seed, uint16_t nonce, const DilithiumModeConstants& mode) {
          auto buf = mode.ExpandMask(seed, nonce);
 
          Polynomial::polyz_unpack(*this, buf.data(), mode);
@@ -1235,9 +1235,7 @@ class PolynomialVector {
          }
       }
 
-      void polyvecl_uniform_gamma1(const secure_vector<uint8_t>& seed,
-                                   uint16_t nonce,
-                                   const DilithiumModeConstants& mode) {
+      void polyvecl_uniform_gamma1(std::span<const uint8_t> seed, uint16_t nonce, const DilithiumModeConstants& mode) {
          BOTAN_ASSERT_NOMSG(m_vec.size() <= std::numeric_limits<uint16_t>::max());
          for(uint16_t i = 0; i < static_cast<uint16_t>(this->m_vec.size()); ++i) {
             m_vec[i].poly_uniform_gamma1(seed, mode.l() * nonce + i, mode);

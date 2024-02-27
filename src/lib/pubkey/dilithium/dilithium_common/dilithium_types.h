@@ -43,6 +43,9 @@ using DilithiumSerializedPublicKey = Strong<std::vector<uint8_t>, struct Dilithi
 /// Hash value of the serialized public key data (result of H(BytesToBits(pkEncode(pk)))
 using DilithiumHashedPublicKey = Strong<std::vector<uint8_t>, struct DilithiumHashedPublicKey_>;
 
+/// Representation of the message to be signed
+using DilithiumMessageRepresentative = Strong<std::vector<uint8_t>, struct DilithiumMessageRepresentative_>;
+
 }  // namespace Botan
 
 #endif

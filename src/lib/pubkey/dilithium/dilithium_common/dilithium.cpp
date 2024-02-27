@@ -63,7 +63,15 @@ std::pair<Dilithium::PolynomialVector, Dilithium::PolynomialVector> calculate_t0
    return {std::move(t0), std::move(t1)};
 }
 
-Dilithium::PolynomialMatrix expand_A(const DilithiumModeConstants& mode, const DilithiumSeedRho& rho) {
+// TODO: this function could be a member of Dilithium::PolynomialVector
+//       returning a copy in NTT domain
+Dilithium::PolynomialVector ntt(const Dilithium::PolynomialVector& p) {
+   auto result = p;
+   result.ntt();
+   return result;
+}
+
+Dilithium::PolynomialMatrix expand_A(const DilithiumModeConstants& mode, StrongSpan<const DilithiumSeedRho> rho) {
    return Dilithium::PolynomialMatrix::generate_matrix(rho, mode);
 }
 
@@ -75,6 +83,17 @@ std::pair<Dilithium::PolynomialVector, Dilithium::PolynomialVector> expand_s(
    Dilithium::PolynomialVector::fill_polyvec_uniform_eta(std::get<1>(result), rhoprime, mode.l(), mode);
 
    return result;
+}
+
+Dilithium::PolynomialVector expand_mask(const DilithiumModeConstants& mode,
+                                        StrongSpan<const DilithiumSeedRhoPrime> rhoprime,
+                                        uint16_t kappa) {
+   // TODO: implement polyvecl_uniform_gamma1 here, using the mode's XOF
+   //       to avoid holding the entire sample data in memory
+   // auto xof = mode.symmetric_primitives().XOF(Dilithium_Symmetric_Primitives::XofType::k256, rhoprime, kappa);
+   Dilithium::PolynomialVector y(mode.l());
+   y.polyvecl_uniform_gamma1(rhoprime, kappa, mode);
+   return y;
 }
 
 std::pair<Dilithium::PolynomialVector, Dilithium::PolynomialVector> power2round(const DilithiumModeConstants& mode,
@@ -275,99 +294,93 @@ class Dilithium_PrivateKeyInternal {
 
 class Dilithium_Signature_Operation final : public PK_Ops::Signature {
    public:
-      Dilithium_Signature_Operation(const Dilithium_PrivateKey& priv_key_dilithium, bool randomized) :
-            m_priv_key(priv_key_dilithium),
-            m_matrix(
-               Dilithium::PolynomialMatrix::generate_matrix(m_priv_key.m_private->rho(), m_priv_key.m_private->mode())),
-            m_shake(DilithiumModeConstants::CRHBYTES * 8),
-            m_randomized(randomized) {
-         m_shake.update(m_priv_key.m_private->tr());
-      }
+      Dilithium_Signature_Operation(std::shared_ptr<Dilithium_PrivateKeyInternal> sk, bool randomized) :
+            m_priv_key(std::move(sk)),
+            m_mode(m_priv_key->mode()),
+            m_randomized(randomized),
+            m_s1_hat(ntt(m_priv_key->s1())),
+            m_s2_hat(ntt(m_priv_key->s2())),
+            m_t0_hat(ntt(m_priv_key->t0())),
+            m_matrix(expand_A(m_mode,
+                              StrongSpan<const DilithiumSeedRho>(m_priv_key->rho()) /* TODO: remove disambiguation */)),
+            m_h(m_mode.symmetric_primitives().get_H(
+               DilithiumTR(m_priv_key->tr()) /* TODO: remove disambiguation eventually */)) {}
 
-      void update(const uint8_t msg[], size_t msg_len) override { m_shake.update(msg, msg_len); }
+      void update(const uint8_t msg[], size_t msg_len) override { m_h.update({msg, msg_len}); }
 
+      /**
+       * NIST FIPS 204 IPD, Algorithm 2 (ML-DSA.Sign)
+       */
       secure_vector<uint8_t> sign(RandomNumberGenerator& rng) override {
-         const auto mu = m_shake.final_stdvec();
+         // Note: preparation of s1, s2, t0 and A are done in the constructor to
+         //       avoid unnecessary recomputation when creating more than one
+         //       signature using this operation object.
 
-         // Get set up for the next message (if any)
-         m_shake.update(m_priv_key.m_private->tr());
+         const auto mu = m_h.final();
 
-         const auto& mode = m_priv_key.m_private->mode();
-
-         const auto rhoprime = (m_randomized) ? rng.random_vec(DilithiumModeConstants::CRHBYTES)
-                                              : mode.CRH(concat(m_priv_key.m_private->get_key(), mu));
-
-         /* Transform vectors */
-         auto s1 = m_priv_key.m_private->s1();
-         s1.ntt();
-
-         auto s2 = m_priv_key.m_private->s2();
-         s2.ntt();
-
-         auto t0 = m_priv_key.m_private->t0();
-         t0.ntt();
+         // TODO: ML-DSA generates rhoprime differently, namely
+         //       rhoprime = H(K, rnd, mu) with rnd being 32 random bytes or 32 zero bytes
+         const auto rhoprime = DilithiumSeedRhoPrime((m_randomized) ? rng.random_vec(DilithiumModeConstants::CRHBYTES)
+                                                                    : m_mode.CRH(concat(m_priv_key->get_key(), mu)));
 
          // Note: nonce (as requested by `polyvecl_uniform_gamma1`) is actually just uint16_t
          //       but to avoid an integer overflow, we use uint32_t as the loop variable.
          for(uint32_t nonce = 0; nonce <= std::numeric_limits<uint16_t>::max(); ++nonce) {
             /* Sample intermediate vector y */
-            Dilithium::PolynomialVector y(mode.l());
-
-            y.polyvecl_uniform_gamma1(rhoprime, static_cast<uint16_t>(nonce), mode);
-
-            auto z = y;
-            z.ntt();
+            auto y = expand_mask(m_mode, rhoprime, static_cast<uint16_t>(nonce));
+            auto z = ntt(y);
 
             /* Matrix-vector multiplication */
             auto w1 = Dilithium::PolynomialVector::generate_polyvec_matrix_pointwise_montgomery(
-               m_matrix.get_matrix(), z, mode);
+               m_matrix.get_matrix(), z, m_mode);
 
             w1.reduce();
             w1.invntt_tomont();
-
-            /* Decompose w and call the random oracle */
             w1.cadd_q();
 
-            auto w1_w0 = w1.polyvec_decompose(mode);
+            auto w1_w0 = w1.polyvec_decompose(m_mode);
 
-            auto packed_w1 = std::get<0>(w1_w0).polyvec_pack_w1(mode);
+            auto packed_w1 = std::get<0>(w1_w0).polyvec_pack_w1(m_mode);
 
             SHAKE_256 shake256_variable(DilithiumModeConstants::SEEDBYTES * 8);
             shake256_variable.update(mu.data(), DilithiumModeConstants::CRHBYTES);
             shake256_variable.update(packed_w1.data(), packed_w1.size());
             auto sm = shake256_variable.final();
 
-            auto cp = Dilithium::Polynomial::poly_challenge(sm.data(), mode);
+            auto cp = Dilithium::Polynomial::poly_challenge(sm.data(), m_mode);
             cp.ntt();
 
             /* Compute z, reject if it reveals secret */
+            auto s1 = m_s1_hat;  // TODO: perhaps avoid copy?
             s1.polyvec_pointwise_poly_montgomery(z, cp);
 
             z.invntt_tomont();
             z.add_polyvec(y);
 
             z.reduce();
-            if(z.polyvec_chknorm(mode.gamma1() - mode.beta())) {
+            if(z.polyvec_chknorm(m_mode.gamma1() - m_mode.beta())) {
                continue;
             }
 
             /* Check that subtracting cs2 does not change high bits of w and low bits
             * do not reveal secret information */
-            Dilithium::PolynomialVector h(mode.k());
+            Dilithium::PolynomialVector h(m_mode.k());
+            auto s2 = m_s2_hat;  // TODO: perhaps avoid copy?
             s2.polyvec_pointwise_poly_montgomery(h, cp);
             h.invntt_tomont();
             std::get<1>(w1_w0) -= h;
             std::get<1>(w1_w0).reduce();
 
-            if(std::get<1>(w1_w0).polyvec_chknorm(mode.gamma2() - mode.beta())) {
+            if(std::get<1>(w1_w0).polyvec_chknorm(m_mode.gamma2() - m_mode.beta())) {
                continue;
             }
 
             /* Compute hints for w1 */
+            auto t0 = m_t0_hat;  // TODO: perhaps avoid copy?
             t0.polyvec_pointwise_poly_montgomery(h, cp);
             h.invntt_tomont();
             h.reduce();
-            if(h.polyvec_chknorm(mode.gamma2())) {
+            if(h.polyvec_chknorm(m_mode.gamma2())) {
                continue;
             }
 
@@ -375,8 +388,8 @@ class Dilithium_Signature_Operation final : public PK_Ops::Signature {
             std::get<1>(w1_w0).cadd_q();
 
             auto n =
-               Dilithium::PolynomialVector::generate_hint_polyvec(h, std::get<1>(w1_w0), std::get<0>(w1_w0), mode);
-            if(n > mode.omega()) {
+               Dilithium::PolynomialVector::generate_hint_polyvec(h, std::get<1>(w1_w0), std::get<0>(w1_w0), m_mode);
+            if(n > m_mode.omega()) {
                continue;
             }
 
@@ -387,14 +400,14 @@ class Dilithium_Signature_Operation final : public PK_Ops::Signature {
          throw Internal_Error("Dilithium signature loop did not terminate");
       }
 
-      size_t signature_length() const override {
-         const auto& dilithium_math = m_priv_key.m_private->mode();
-         return dilithium_math.crypto_bytes();
+      size_t signature_length() const override { return m_priv_key->mode().crypto_bytes(); }
+
+      AlgorithmIdentifier algorithm_identifier() const override {
+         // TODO: move this into the DilithiumMode class to satisfy the DRY principle
+         return AlgorithmIdentifier(m_priv_key->mode().oid(), AlgorithmIdentifier::USE_EMPTY_PARAM);
       }
 
-      AlgorithmIdentifier algorithm_identifier() const override;
-
-      std::string hash_function() const override { return "SHAKE-256(512)"; }
+      std::string hash_function() const override { return m_h.name(); }
 
    private:
       // Bit-pack signature sig = (c, z, h).
@@ -403,44 +416,44 @@ class Dilithium_Signature_Operation final : public PK_Ops::Signature {
                                       const Dilithium::PolynomialVector& h) {
          BOTAN_ASSERT_NOMSG(c.size() == DilithiumModeConstants::SEEDBYTES);
          size_t position = 0;
-         const auto& mode = m_priv_key.m_private->mode();
-         secure_vector<uint8_t> sig(mode.crypto_bytes());
+         secure_vector<uint8_t> sig(m_mode.crypto_bytes());
 
          std::copy(c.begin(), c.end(), sig.begin());
          position += DilithiumModeConstants::SEEDBYTES;
 
-         for(size_t i = 0; i < mode.l(); ++i) {
-            z.m_vec[i].polyz_pack(&sig[position + i * mode.polyz_packedbytes()], mode);
+         for(size_t i = 0; i < m_mode.l(); ++i) {
+            z.m_vec[i].polyz_pack(&sig[position + i * m_mode.polyz_packedbytes()], m_mode);
          }
-         position += mode.l() * mode.polyz_packedbytes();
+         position += m_mode.l() * m_mode.polyz_packedbytes();
 
          /* Encode h */
-         for(size_t i = 0; i < mode.omega() + mode.k(); ++i) {
+         for(size_t i = 0; i < m_mode.omega() + m_mode.k(); ++i) {
             sig[i + position] = 0;
          }
 
          size_t k = 0;
-         for(size_t i = 0; i < mode.k(); ++i) {
+         for(size_t i = 0; i < m_mode.k(); ++i) {
             for(size_t j = 0; j < DilithiumModeConstants::N; ++j) {
                if(h.m_vec[i].m_coeffs[j] != 0) {
                   sig[position + k] = static_cast<uint8_t>(j);
                   k++;
                }
             }
-            sig[position + mode.omega() + i] = static_cast<uint8_t>(k);
+            sig[position + m_mode.omega() + i] = static_cast<uint8_t>(k);
          }
          return sig;
       }
 
-      const Dilithium_PrivateKey m_priv_key;
-      const Dilithium::PolynomialMatrix m_matrix;
-      SHAKE_256 m_shake;
+      std::shared_ptr<Dilithium_PrivateKeyInternal> m_priv_key;
+      const DilithiumModeConstants& m_mode;
       bool m_randomized;
-};
 
-AlgorithmIdentifier Dilithium_Signature_Operation::algorithm_identifier() const {
-   return m_priv_key.algorithm_identifier();
-}
+      const Dilithium::PolynomialVector m_s1_hat;
+      const Dilithium::PolynomialVector m_s2_hat;
+      const Dilithium::PolynomialVector m_t0_hat;
+      const Dilithium::PolynomialMatrix m_matrix;
+      DilithiumMessageHash m_h;
+};
 
 class Dilithium_Verification_Operation final : public PK_Ops::Verification {
    public:
@@ -461,7 +474,6 @@ class Dilithium_Verification_Operation final : public PK_Ops::Verification {
 
       /*
       * Perform a verification operation
-      * @param rng a random number generator
       */
       bool is_valid_signature(const uint8_t* sig, size_t sig_len) override {
          /* Compute CRH(H(rho, t1), msg) */
@@ -658,9 +670,11 @@ std::unique_ptr<PK_Ops::Signature> Dilithium_PrivateKey::create_signature_op(Ran
    BOTAN_ARG_CHECK(params.empty() || params == "Deterministic" || params == "Randomized",
                    "Unexpected parameters for signing with Dilithium");
 
+   // TODO: ML-KEM uses the randomized (hedged) variant by default.
+   //       We might even drop support for the deterministic variant.
    const bool randomized = (params == "Randomized");
    if(provider.empty() || provider == "base") {
-      return std::make_unique<Dilithium_Signature_Operation>(*this, randomized);
+      return std::make_unique<Dilithium_Signature_Operation>(m_private, randomized);
    }
    throw Provider_Not_Found(algo_name(), provider);
 }

@@ -23,6 +23,37 @@
 namespace Botan {
 
 /**
+ * Wrapper type for the H() function calculating the message representative for
+ * the Dilithium signature scheme. This wrapper may be used multiple times.
+ *
+ * Namely: mu = H(tr || M)
+ */
+class DilithiumMessageHash {
+   public:
+      DilithiumMessageHash(DilithiumTR tr) : m_tr(std::move(tr)), m_shake(512 /* TODO: named constant */) { clear(); }
+
+      std::string name() const { return m_shake.name(); }
+
+      void update(std::span<const uint8_t> data) { m_shake.update(data); }
+
+      DilithiumMessageRepresentative final() {
+         auto result = m_shake.final<DilithiumMessageRepresentative>();
+         clear();
+         return result;
+      }
+
+   private:
+      void clear() {
+         m_shake.clear();
+         m_shake.update(m_tr);
+      }
+
+   private:
+      DilithiumTR m_tr;
+      SHAKE_256 m_shake;
+};
+
+/**
 * Adapter class that uses polymorphy to distinguish
 * Dilithium "common" from Dilithium "AES" modes.
 */
@@ -65,6 +96,8 @@ class Dilithium_Symmetric_Primitives {
       secure_vector<uint8_t> H(std::span<const uint8_t> seed, size_t out_len) const {
          return SHAKE_256(out_len * 8).process(seed.data(), seed.size());
       }
+
+      DilithiumMessageHash get_H(DilithiumTR tr) const { return DilithiumMessageHash(std::move(tr)); }
 
       // CRH is same for all modes
       secure_vector<uint8_t> CRH(std::span<const uint8_t> in, size_t out_len) const {
@@ -203,7 +236,7 @@ class DilithiumModeConstants {
          return this->m_symmetric_primitives->XOF(Dilithium_Symmetric_Primitives::XofType::k256, seed, nonce);
       }
 
-      secure_vector<uint8_t> ExpandMask(const secure_vector<uint8_t>& seed, uint16_t nonce) const {
+      secure_vector<uint8_t> ExpandMask(std::span<const uint8_t> seed, uint16_t nonce) const {
          return this->m_symmetric_primitives->ExpandMask(
             seed, nonce, poly_uniform_gamma1_nblocks() * stream256_blockbytes());
       }
