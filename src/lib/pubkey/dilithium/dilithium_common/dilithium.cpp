@@ -457,51 +457,42 @@ class Dilithium_Signature_Operation final : public PK_Ops::Signature {
 
 class Dilithium_Verification_Operation final : public PK_Ops::Verification {
    public:
-      Dilithium_Verification_Operation(const Dilithium_PublicKey& pub_dilithium) :
-            m_pub_key(pub_dilithium.m_public),
-            m_matrix(Dilithium::PolynomialMatrix::generate_matrix(m_pub_key->rho(), m_pub_key->mode())),
-            m_pk_hash(m_pub_key->raw_pk_shake256()),
-            m_shake(DilithiumModeConstants::CRHBYTES * 8) {
-         m_shake.update(m_pk_hash);
-      }
+      Dilithium_Verification_Operation(std::shared_ptr<Dilithium_PublicKeyInternal> pubkey) :
+            m_pub_key(std::move(pubkey)),
+            m_mode(m_pub_key->mode()),
+            m_matrix(
+               expand_A(m_mode, StrongSpan<const DilithiumSeedRho>(m_pub_key->rho() /* TOD: remove disambiguation */))),
+            m_h(m_mode.symmetric_primitives().get_H(
+               DilithiumTR(m_pub_key->raw_pk_shake256()) /* TODO: remove disambiguation eventually */)) {}
 
       /*
       * Add more data to the message currently being signed
       * @param msg the message
       * @param msg_len the length of msg in bytes
       */
-      void update(const uint8_t msg[], size_t msg_len) override { m_shake.update(msg, msg_len); }
+      void update(const uint8_t msg[], size_t msg_len) override { m_h.update({msg, msg_len}); }
 
-      /*
-      * Perform a verification operation
-      */
       bool is_valid_signature(const uint8_t* sig, size_t sig_len) override {
-         /* Compute CRH(H(rho, t1), msg) */
-         const auto mu = m_shake.final_stdvec();
+         const auto mu = m_h.final();
 
-         // Reset the SHAKE context for the next message
-         m_shake.update(m_pk_hash);
-
-         const auto& mode = m_pub_key->mode();
-
-         if(sig_len != mode.crypto_bytes()) {
+         if(sig_len != m_mode.crypto_bytes()) {
             return false;
          }
 
-         Dilithium::PolynomialVector z(mode.l());
-         Dilithium::PolynomialVector h(mode.k());
+         Dilithium::PolynomialVector z(m_mode.l());
+         Dilithium::PolynomialVector h(m_mode.k());
          std::vector<uint8_t> signature(sig, sig + sig_len);
          std::array<uint8_t, DilithiumModeConstants::SEEDBYTES> c;
-         if(Dilithium::PolynomialVector::unpack_sig(c, z, h, signature, mode)) {
+         if(Dilithium::PolynomialVector::unpack_sig(c, z, h, signature, m_mode)) {
             return false;
          }
 
-         if(z.polyvec_chknorm(mode.gamma1() - mode.beta())) {
+         if(z.polyvec_chknorm(m_mode.gamma1() - m_mode.beta())) {
             return false;
          }
 
          /* Matrix-vector multiplication; compute Az - c2^dt1 */
-         auto cp = Dilithium::Polynomial::poly_challenge(c.data(), mode);
+         auto cp = Dilithium::Polynomial::poly_challenge(c.data(), m_mode);
          cp.ntt();
 
          Dilithium::PolynomialVector t1 = m_pub_key->t1();
@@ -512,13 +503,13 @@ class Dilithium_Verification_Operation final : public PK_Ops::Verification {
          z.ntt();
 
          auto w1 =
-            Dilithium::PolynomialVector::generate_polyvec_matrix_pointwise_montgomery(m_matrix.get_matrix(), z, mode);
+            Dilithium::PolynomialVector::generate_polyvec_matrix_pointwise_montgomery(m_matrix.get_matrix(), z, m_mode);
          w1 -= t1;
          w1.reduce();
          w1.invntt_tomont();
          w1.cadd_q();
-         w1.polyvec_use_hint(w1, h, mode);
-         auto packed_w1 = w1.polyvec_pack_w1(mode);
+         w1.polyvec_use_hint(w1, h, m_mode);
+         auto packed_w1 = w1.polyvec_pack_w1(m_mode);
 
          /* Call random oracle and verify challenge */
          SHAKE_256 shake256_variable(DilithiumModeConstants::SEEDBYTES * 8);
@@ -534,9 +525,9 @@ class Dilithium_Verification_Operation final : public PK_Ops::Verification {
 
    private:
       std::shared_ptr<Dilithium_PublicKeyInternal> m_pub_key;
-      const Dilithium::PolynomialMatrix m_matrix;
-      const std::vector<uint8_t> m_pk_hash;
-      SHAKE_256 m_shake;
+      const DilithiumModeConstants& m_mode;
+      Dilithium::PolynomialMatrix m_matrix;
+      DilithiumMessageHash m_h;
 };
 
 Dilithium_PublicKey::Dilithium_PublicKey(const AlgorithmIdentifier& alg_id, std::span<const uint8_t> pk) :
@@ -587,7 +578,7 @@ std::unique_ptr<PK_Ops::Verification> Dilithium_PublicKey::create_verification_o
                                                                                   std::string_view provider) const {
    BOTAN_ARG_CHECK(params.empty() || params == "Pure", "Unexpected parameters for verifying with Dilithium");
    if(provider.empty() || provider == "base") {
-      return std::make_unique<Dilithium_Verification_Operation>(*this);
+      return std::make_unique<Dilithium_Verification_Operation>(m_public);
    }
    throw Provider_Not_Found(algo_name(), provider);
 }
@@ -598,7 +589,7 @@ std::unique_ptr<PK_Ops::Verification> Dilithium_PublicKey::create_x509_verificat
       if(alg_id != this->algorithm_identifier()) {
          throw Decoding_Error("Unexpected AlgorithmIdentifier for Dilithium X.509 signature");
       }
-      return std::make_unique<Dilithium_Verification_Operation>(*this);
+      return std::make_unique<Dilithium_Verification_Operation>(m_public);
    }
    throw Provider_Not_Found(algo_name(), provider);
 }
