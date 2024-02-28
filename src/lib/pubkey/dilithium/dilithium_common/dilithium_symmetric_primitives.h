@@ -30,7 +30,9 @@ namespace Botan {
  */
 class DilithiumMessageHash {
    public:
-      DilithiumMessageHash(DilithiumTR tr) : m_tr(std::move(tr)), m_shake(512 /* TODO: named constant */) { clear(); }
+      DilithiumMessageHash(DilithiumHashedPublicKey tr) : m_tr(std::move(tr)), m_shake(512 /* TODO: named constant */) {
+         clear();
+      }
 
       std::string name() const { return m_shake.name(); }
 
@@ -49,7 +51,7 @@ class DilithiumMessageHash {
       }
 
    private:
-      DilithiumTR m_tr;
+      DilithiumHashedPublicKey m_tr;
       SHAKE_256 m_shake;
 };
 
@@ -62,7 +64,7 @@ class Dilithium_Symmetric_Primitives {
       enum class XofType { k128, k256 };
 
    protected:
-      Dilithium_Symmetric_Primitives() : m_h(XOF::create_or_throw("SHAKE-256")) {}
+      Dilithium_Symmetric_Primitives() : m_xof(XOF::create_or_throw("SHAKE-256")) {}
 
    public:
       static std::unique_ptr<Dilithium_Symmetric_Primitives> create(DilithiumMode mode);
@@ -74,22 +76,16 @@ class Dilithium_Symmetric_Primitives {
          auto result = std::make_tuple(DilithiumSeedRho(32 /* TODO: SEEDBYTES*/),
                                        DilithiumSeedRhoPrime(64 /* TODO: CRHBYTES*/),
                                        DilithiumSeedK(32 /* TODO: SEEDBYTES*/));
-         m_h->update(seed);
-         m_h->output(std::get<0>(result));
-         m_h->output(std::get<1>(result));
-         m_h->output(std::get<2>(result));
-         m_h->clear();
+         m_xof->update(seed);
+         m_xof->output(std::get<0>(result));
+         m_xof->output(std::get<1>(result));
+         m_xof->output(std::get<2>(result));
+         m_xof->clear();
          return result;
       }
 
-      DilithiumTR H(StrongSpan<const DilithiumSerializedPublicKey> pk, size_t outlen) const {
-         m_h->update(pk);
-
-         // TODO: Once Dilithium-R3.1 is removed, this can be simplified to
-         //       a hard-coded outlen of 32 instead of requiring it as a parameter.
-         auto result = m_h->output<DilithiumTR>(outlen);
-         m_h->clear();
-         return result;
+      DilithiumHashedPublicKey H(StrongSpan<const DilithiumSerializedPublicKey> pk) const {
+         return SHAKE_256(32 /* TODO: TRBYTES */ * 8).process<DilithiumHashedPublicKey>(pk);
       }
 
       // H is same for all modes
@@ -97,7 +93,9 @@ class Dilithium_Symmetric_Primitives {
          return SHAKE_256(out_len * 8).process(seed.data(), seed.size());
       }
 
-      DilithiumMessageHash get_H(DilithiumTR tr) const { return DilithiumMessageHash(std::move(tr)); }
+      DilithiumMessageHash get_message_hash(DilithiumHashedPublicKey tr) const {
+         return DilithiumMessageHash(std::move(tr));
+      }
 
       // CRH is same for all modes
       secure_vector<uint8_t> CRH(std::span<const uint8_t> in, size_t out_len) const {
@@ -113,7 +111,7 @@ class Dilithium_Symmetric_Primitives {
       virtual std::unique_ptr<Botan::XOF> XOF(XofType type, std::span<const uint8_t> seed, uint16_t nonce) const = 0;
 
    private:
-      std::unique_ptr<Botan::XOF> m_h;
+      std::unique_ptr<Botan::XOF> m_xof;
 };
 
 enum DilithiumEta : uint32_t { Eta2 = 2, Eta4 = 4 };
