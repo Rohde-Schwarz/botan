@@ -71,11 +71,11 @@ class Dilithium_Symmetric_Primitives {
 
       virtual ~Dilithium_Symmetric_Primitives() = default;
 
-      std::tuple<DilithiumSeedRho, DilithiumSeedRhoPrime, DilithiumSeedK> H(
+      std::tuple<DilithiumSeedRho, DilithiumSeedRhoPrime, DilithiumSigningSeedK> H(
          StrongSpan<const DilithiumSeedRandomness> seed) const {
          auto result = std::make_tuple(DilithiumSeedRho(32 /* TODO: SEEDBYTES*/),
                                        DilithiumSeedRhoPrime(64 /* TODO: CRHBYTES*/),
-                                       DilithiumSeedK(32 /* TODO: SEEDBYTES*/));
+                                       DilithiumSigningSeedK(32 /* TODO: SEEDBYTES*/));
          m_xof->update(seed);
          m_xof->output(std::get<0>(result));
          m_xof->output(std::get<1>(result));
@@ -85,21 +85,15 @@ class Dilithium_Symmetric_Primitives {
       }
 
       DilithiumHashedPublicKey H(StrongSpan<const DilithiumSerializedPublicKey> pk) const {
-         return SHAKE_256(32 /* TODO: TRBYTES */ * 8).process<DilithiumHashedPublicKey>(pk);
+         return H<DilithiumHashedPublicKey>(32 /* TODO: TRBYTES */, pk);
       }
 
-      // H is same for all modes
-      secure_vector<uint8_t> H(std::span<const uint8_t> seed, size_t out_len) const {
-         return SHAKE_256(out_len * 8).process(seed.data(), seed.size());
+      DilithiumSeedRhoPrime H(DilithiumSigningSeedK k, DilithiumMessageRepresentative mu) const {
+         return H<DilithiumSeedRhoPrime>(64 /* TODO: CRHBYTES */, k, mu);
       }
 
       DilithiumMessageHash get_message_hash(DilithiumHashedPublicKey tr) const {
          return DilithiumMessageHash(std::move(tr));
-      }
-
-      // CRH is same for all modes
-      secure_vector<uint8_t> CRH(std::span<const uint8_t> in, size_t out_len) const {
-         return SHAKE_256(out_len * 8).process(in.data(), in.size());
       }
 
       // ExpandMatrix always uses the 256 version of the XOF
@@ -109,6 +103,15 @@ class Dilithium_Symmetric_Primitives {
 
       // Mode dependent function
       virtual std::unique_ptr<Botan::XOF> XOF(XofType type, std::span<const uint8_t> seed, uint16_t nonce) const = 0;
+
+   private:
+      template <concepts::resizable_byte_buffer OutT, ranges::spanable_range... InTs>
+      OutT H(size_t outbytes, InTs&&... ins) const {
+         (m_xof->update(ins), ...);
+         auto out = m_xof->output<OutT>(outbytes);
+         m_xof->clear();
+         return out;
+      }
 
    private:
       std::unique_ptr<Botan::XOF> m_xof;
@@ -216,15 +219,6 @@ class DilithiumModeConstants {
       size_t nist_security_strength() const { return m_nist_security_strength; }
 
       Dilithium_Symmetric_Primitives& symmetric_primitives() const { return *m_symmetric_primitives; }
-
-      // Wrapper
-      decltype(auto) H(std::span<const uint8_t> seed, size_t out_len) const {
-         return m_symmetric_primitives->H(seed, out_len);
-      }
-
-      secure_vector<uint8_t> CRH(const std::span<const uint8_t> in) const {
-         return m_symmetric_primitives->CRH(in, DilithiumModeConstants::CRHBYTES);
-      }
 
       std::unique_ptr<Botan::XOF> XOF_128(std::span<const uint8_t> seed, uint16_t nonce) const {
          return this->m_symmetric_primitives->XOF(Dilithium_Symmetric_Primitives::XofType::k128, seed, nonce);

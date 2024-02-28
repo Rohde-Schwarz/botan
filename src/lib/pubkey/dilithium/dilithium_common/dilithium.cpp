@@ -38,7 +38,7 @@ namespace {
 
 std::pair<Dilithium::PolynomialVector, Dilithium::PolynomialVector> calculate_t0_and_t1(
    const DilithiumModeConstants& mode,
-   const std::vector<uint8_t>& rho,
+   StrongSpan<const DilithiumSeedRho> rho,
    Dilithium::PolynomialVector s1,
    const Dilithium::PolynomialVector& s2) {
    /* Generate matrix */
@@ -171,16 +171,16 @@ class Dilithium_PublicKeyInternal {
          BOTAN_ASSERT_NOMSG(s.remaining() == 0);
          BOTAN_STATE_CHECK(m_t1.m_vec.size() == m_mode.k());
 
-         m_tr = m_mode.symmetric_primitives().H(this->raw_pk());
+         m_tr = m_mode.symmetric_primitives().H(raw_pk);
       }
 
       Dilithium_PublicKeyInternal(DilithiumModeConstants mode,
-                                  std::vector<uint8_t> rho,
+                                  DilithiumSeedRho rho,
                                   const Dilithium::PolynomialVector& s1,
                                   const Dilithium::PolynomialVector& s2) :
             m_mode(std::move(mode)),
             m_rho(std::move(rho)),
-            m_t1([&] { return calculate_t0_and_t1(m_mode, m_rho.get() /* TODO: fixme */, s1, s2).second; }()) {
+            m_t1([&] { return calculate_t0_and_t1(m_mode, m_rho, s1, s2).second; }()) {
          BOTAN_ASSERT_NOMSG(!m_rho.empty());
          BOTAN_ASSERT_NOMSG(!m_t1.m_vec.empty());
          m_tr = m_mode.symmetric_primitives().H(raw_pk());
@@ -205,14 +205,11 @@ class Dilithium_PublicKeyInternal {
             concat_as<DilithiumSerializedPublicKey::wrapped_type>(m_rho, m_t1.polyvec_pack_t1()));
       }
 
-      const DilithiumHashedPublicKey& tr() const {
-         BOTAN_ASSERT_NOMSG(!m_tr.empty());
-         return m_tr;
-      }
+      const DilithiumHashedPublicKey& tr() const { return m_tr; }
 
       const Dilithium::PolynomialVector& t1() const { return m_t1; }
 
-      const std::vector<uint8_t>& rho() const { return m_rho.get(); /* TODO: fixme */ }
+      const DilithiumSeedRho& rho() const { return m_rho; }
 
       const DilithiumModeConstants& mode() const { return m_mode; }
 
@@ -230,7 +227,7 @@ class Dilithium_PrivateKeyInternal {
       Dilithium_PrivateKeyInternal(DilithiumModeConstants mode,
                                    DilithiumSeedRho rho,
                                    DilithiumHashedPublicKey tr,
-                                   DilithiumSeedK key,
+                                   DilithiumSigningSeedK key,
                                    Dilithium::PolynomialVector s1,
                                    Dilithium::PolynomialVector s2,
                                    Dilithium::PolynomialVector t0) :
@@ -248,7 +245,7 @@ class Dilithium_PrivateKeyInternal {
 
          BufferSlicer s(sk);
          m_rho = s.copy<DilithiumSeedRho>(DilithiumModeConstants::SEEDBYTES);
-         m_key = s.copy<DilithiumSeedK>(DilithiumModeConstants::SEEDBYTES);
+         m_key = s.copy<DilithiumSigningSeedK>(DilithiumModeConstants::SEEDBYTES);
          m_tr = s.copy<DilithiumHashedPublicKey>(DilithiumModeConstants::SEEDBYTES);
          m_s1 = Dilithium::PolynomialVector::unpack_eta(
             s.take(m_mode.l() * m_mode.polyeta_packedbytes()), m_mode.l(), m_mode);
@@ -265,9 +262,9 @@ class Dilithium_PrivateKeyInternal {
 
       const DilithiumModeConstants& mode() const { return m_mode; }
 
-      const std::vector<uint8_t>& rho() const { return m_rho.get(); /* TODO: fixme */ }
+      const DilithiumSeedRho& rho() const { return m_rho; }
 
-      const secure_vector<uint8_t>& get_key() const { return m_key.get(); /* TODO: fixme */ }
+      const DilithiumSigningSeedK& get_key() const { return m_key; }
 
       const DilithiumHashedPublicKey& tr() const { return m_tr; }
 
@@ -281,7 +278,7 @@ class Dilithium_PrivateKeyInternal {
       const DilithiumModeConstants m_mode;
       DilithiumSeedRho m_rho;
       DilithiumHashedPublicKey m_tr;
-      DilithiumSeedK m_key;
+      DilithiumSigningSeedK m_key;
       Dilithium::PolynomialVector m_t0, m_s1, m_s2;
 };
 
@@ -312,8 +309,8 @@ class Dilithium_Signature_Operation final : public PK_Ops::Signature {
 
          // TODO: ML-DSA generates rhoprime differently, namely
          //       rhoprime = H(K, rnd, mu) with rnd being 32 random bytes or 32 zero bytes
-         const auto rhoprime = DilithiumSeedRhoPrime((m_randomized) ? rng.random_vec(DilithiumModeConstants::CRHBYTES)
-                                                                    : m_mode.CRH(concat(m_priv_key->get_key(), mu)));
+         const auto rhoprime = (m_randomized) ? rng.random_vec<DilithiumSeedRhoPrime>(DilithiumModeConstants::CRHBYTES)
+                                              : m_mode.symmetric_primitives().H(m_priv_key->get_key(), mu);
 
          // Note: nonce (as requested by `polyvecl_uniform_gamma1`) is actually just uint16_t
          //       but to avoid an integer overflow, we use uint32_t as the loop variable.

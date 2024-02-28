@@ -29,8 +29,7 @@ using DilithiumSeedRho = Strong<std::vector<uint8_t>, struct DilithiumPublicSeed
 using DilithiumSeedRhoPrime = Strong<secure_vector<uint8_t>, struct DilithiumSeedRhoPrime_>;
 
 /// Private seed K used during signing
-/// TODO: perhaps find a better name later
-using DilithiumSeedK = Strong<secure_vector<uint8_t>, struct DilithiumSeedK_>;
+using DilithiumSigningSeedK = Strong<secure_vector<uint8_t>, struct DilithiumSeedK_>;
 
 /// Serialized public key data (result of pkEncode(pk))
 using DilithiumSerializedPublicKey = Strong<std::vector<uint8_t>, struct DilithiumSerializedPublicKey_>;
