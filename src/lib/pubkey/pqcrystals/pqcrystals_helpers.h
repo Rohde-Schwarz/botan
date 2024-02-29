@@ -20,8 +20,8 @@ namespace Botan {
 
 template <std::integral T>
    requires(sizeof(T) <= 4)
-using next_longer_uint_t =
-   std::conditional_t<sizeof(T) == 1, uint16_t, std::conditional_t<sizeof(T) == 2, uint32_t, uint64_t>>;
+using next_longer_int_t =
+   std::conditional_t<sizeof(T) == 1, int16_t, std::conditional_t<sizeof(T) == 2, int32_t, int64_t>>;
 
 /**
  * Result structure for the extended Euclidean algorithm
@@ -61,7 +61,7 @@ constexpr eea_result<T> extended_euclidean_algorithm(T a, T b) {
  * By default, this assumes m to be 2^bitlength of T for application in a
  * Montgomery reduction.
  */
-template <std::integral T, std::integral T2 = next_longer_uint_t<T>>
+template <std::integral T, std::integral T2 = next_longer_int_t<T>>
    requires(sizeof(T) <= 4)
 constexpr T modular_inverse(T q, T2 m = T2(1) << sizeof(T) * 8) {
    return static_cast<T>(extended_euclidean_algorithm<T2>(q, m).u);

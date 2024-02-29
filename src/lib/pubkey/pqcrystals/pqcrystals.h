@@ -12,8 +12,8 @@
  * Botan is released under the Simplified BSD License (see license.txt)
  */
 
-#ifndef BOTAN_PQ_CRYSTALS_H_
-#define BOTAN_PQ_CRYSTALS_H_
+#ifndef BOTAN_PQ_H_
+#define BOTAN_PQ_H_
 
 #include <array>
 #include <concepts>
@@ -21,16 +21,16 @@
 #include <span>
 #include <vector>
 
-#include <botan/internal/pqcrystals_helpers.h>
+#include <botan/internal/pqhelpers.h>
 
-namespace Botan {
+namespace Botan::CRYSTALS {
 
-enum class Crystals_Domain { Normal, NTT, Montgomery };
+enum class Domain { Normal, NTT, Montgomery };
 
 // clang-format off
 
 template <typename Consts>
-concept crystals_constants =
+concept constants =
    std::integral<typename Consts::T> &&
    sizeof(typename Consts::T) <= 4 &&
    Consts::N % 2 == 0 &&
@@ -41,38 +41,37 @@ concept crystals_constants =
 
 // clang-format on
 
-template <crystals_constants Consts>
-class Crystals_Polynomial {
-   private:
-      using ThisPolynomial = Crystals_Polynomial<Consts>;
+template <constants Consts>
+struct constants_trait {
       using T = typename Consts::T;
-      using T2 = next_longer_uint_t<T>;
+      using T2 = Botan::next_longer_int_t<T>;
 
       constexpr static auto N = Consts::N;
       constexpr static auto Q = Consts::Q;
       constexpr static auto Q_inverse = modular_inverse(Consts::Q);
+}
+
+template <constants Consts, Domain D = Domain::Normal>
+class Polynomial {
+   private:
+      using ThisPolynomial = Polynomial<Consts, D>;
+
+      using T = typename Consts::T;
 
    private:
-      std::array<T, N> m_coeffs;
-      Crystals_Domain m_domain;
+      std::array<T, Consts::N> m_coeffs;
 
    public:
-      Crystals_Polynomial(Crystals_Domain domain = Crystals_Domain::Normal) : m_coeffs({0}), m_domain(domain) {}
+      Polynomial() : m_coeffs({0}) {}
 
       // TODO: reconsider, in case there are no more virtual methods
-      Crystals_Polynomial(const ThisPolynomial&) = default;
-      Crystals_Polynomial(ThisPolynomial&&) noexcept = default;
+      Polynomial(const ThisPolynomial&) = default;
+      Polynomial(ThisPolynomial&&) noexcept = default;
       ThisPolynomial& operator=(const ThisPolynomial&) = default;
       ThisPolynomial& operator=(ThisPolynomial&&) noexcept = default;
-      virtual ~Crystals_Polynomial() = default;
+      virtual ~Polynomial() = default;
 
       auto size() const { return m_coeffs.size(); }
-
-      Crystals_Domain domain() const { return m_domain; }
-
-      std::array<T, N>& coefficients() { return m_coeffs; }
-
-      const std::array<T, N>& coefficients() const { return m_coeffs; }
 
       T& operator[](size_t i) { return m_coeffs[i]; }
 
@@ -83,7 +82,6 @@ class Crystals_Polynomial {
        * Therefore this operation might cause an integer overflow.
        */
       decltype(auto) operator+=(const ThisPolynomial& other) {
-         BOTAN_DEBUG_ASSERT(domain() == other.domain());
          for(size_t i = 0; i < this->size(); ++i) {
             this->m_coeffs[i] = this->m_coeffs[i] + other.m_coeffs[i];
          }
@@ -95,7 +93,6 @@ class Crystals_Polynomial {
        * Therefore this operation might cause an integer underflow.
        */
       decltype(auto) operator-=(const ThisPolynomial& other) {
-         BOTAN_DEBUG_ASSERT(domain() == other.domain());
          for(size_t i = 0; i < this->size(); ++i) {
             this->m_coeffs[i] = other.m_coeffs[i] - this->m_coeffs[i];
          }
@@ -109,24 +106,6 @@ class Crystals_Polynomial {
       // TODO: reconsider...
       //       Perhaps using CRTP or a delegate in the Consts
       virtual T reduce(T x) const = 0;
-
-      void to_ntt() {
-         BOTAN_STATE_CHECK(domain() == Crystals_Domain::Normal);
-
-         for(size_t len = size() / 2, k = 0; len >= 2; len /= 2) {
-            for(size_t start = 0, j = 0; start < size(); start = j + len) {
-               const auto zeta = Consts::zetas[++k];
-               for(j = start; j < start + len; ++j) {
-                  const auto t = reduce(static_cast<T2>(zeta) * m_coeffs[j + len]);
-                  m_coeffs[j + len] = m_coeffs[j] - t;
-                  m_coeffs[j] = m_coeffs[j] + t;
-               }
-            }
-         }
-
-         reduce();
-         m_domain = Crystals_Domain::NTT;
-      }
 
       void to_invntt_montgomery() {
          for(size_t len = 2, k = 0; len <= size() / 2; len *= 2) {
@@ -150,8 +129,6 @@ class Crystals_Polynomial {
          for(size_t i = 0; i < size(); ++i) {
             m_coeffs[i] = montgomery_reduce(static_cast<T2>(m_coeffs[i]) * f);
          }
-
-         m_domain = Crystals_Domain::Montgomery;
       }
 
    protected:
@@ -166,16 +143,16 @@ class Crystals_Polynomial {
       static T fqmul(T a, T b) { return montgomery_reduce(static_cast<T2>(a) * b); }
 };
 
-template <crystals_constants Consts>
-class Crystals_PolynomialVector {
+template <constants Consts, Domain D = Domain::Normal>
+class PolynomialVector {
    private:
-      using ThisPolynomialVector = Crystals_PolynomialVector<Consts>;
+      using ThisPolynomialVector = PolynomialVector<Consts, D>;
 
    private:
-      std::vector<Crystals_Polynomial<Consts>> m_vec;
+      std::vector<Polynomial<Consts>> m_vec;
 
    public:
-      Crystals_PolynomialVector(std::vector<Crystals_Polynomial<Consts>> vec) : m_vec(std::move(vec)) {}
+      PolynomialVector(std::vector<Polynomial<Consts>> vec) : m_vec(std::move(vec)) {}
 
       ThisPolynomialVector& operator+=(const ThisPolynomialVector& other) {
          BOTAN_ASSERT(m_vec.size() == other.m_vec.size(), "cannot add polynomial vectors of differing lengths");
@@ -208,18 +185,40 @@ class Crystals_PolynomialVector {
       }
 };
 
-template <crystals_constants Consts>
-class Crystals_PolynomialMatrix {
+template <constants Consts>
+class PolynomialMatrix {
    private:
-      using ThisPolynomialMatrix = Crystals_PolynomialMatrix<Consts>;
+      using ThisPolynomialMatrix = PolynomialMatrix<Consts>;
 
    private:
-      std::vector<Crystals_PolynomialVector<Consts>> m_mat;
+      std::vector<PolynomialVector<Consts>> m_mat;
 
    public:
-      Crystals_PolynomialMatrix(std::vector<Crystals_PolynomialVector<Consts>> mat) : m_mat(std::move(mat)) {}
+      PolynomialMatrix(std::vector<PolynomialVector<Consts>> mat) : m_mat(std::move(mat)) {}
 };
 
-}  // namespace Botan
+template <constants Consts>
+Polynomial<Consts, Domain::NTT> ntt(Polynomial<Consts, Domain::Normal> p) {
+   Polynomial<Consts, Domain::NTT> p_ntt;
+
+   using Trait = constants_trait<Consts>;
+
+   for(size_t len = p.size() / 2, k = 0; len >= 2; len /= 2) {
+      for(size_t start = 0, j = 0; start < p.size(); start = j + len) {
+         const auto zeta = Consts::zetas[++k];
+         for(j = start; j < start + len; ++j) {
+            const auto t = reduce(static_cast<typename Trait::T2>(zeta) * p[j + len]);
+            p_ntt[j + len] = p[j] - t;
+            p_ntt[j] = p[j] + t;
+         }
+      }
+   }
+
+   p_ntt.reduce();
+
+   return p_ntt;
+}
+
+}  // namespace Botan::CRYSTALS
 
 #endif
