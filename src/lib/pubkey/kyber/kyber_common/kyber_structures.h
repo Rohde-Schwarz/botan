@@ -22,6 +22,7 @@
 #include <botan/internal/kyber_symmetric_primitives.h>
 #include <botan/internal/kyber_types.h>
 #include <botan/internal/loadstor.h>
+#include <botan/internal/pqcrystals.h>
 #include <botan/internal/stl_util.h>
 
 #include <span>
@@ -46,15 +47,37 @@ inline uint16_t ct_int_div_kyber_q(uint32_t a) {
 
 }  // namespace detail
 
-class Polynomial {
-   public:
-      Polynomial() : m_coeffs({0}) {}
+struct Kyber_Poly_Consts {
+      using T = int16_t;
+      static constexpr T N = KyberConstants::N;
+      static constexpr T Q = KyberConstants::Q;
+      static constexpr std::array<T, N / 2> zetas = {
+         2285, 2571, 2970, 1812, 1493, 1422, 287,  202,  3158, 622,  1577, 182,  962,  2127, 1855, 1468,
+         573,  2004, 264,  383,  2500, 1458, 1727, 3199, 2648, 1017, 732,  608,  1787, 411,  3124, 1758,
+         1223, 652,  2777, 1015, 2036, 1491, 3047, 1785, 516,  3321, 3009, 2663, 1711, 2167, 126,  1469,
+         2476, 3239, 3058, 830,  107,  1908, 3082, 2378, 2931, 961,  1821, 2604, 448,  2264, 677,  2054,
+         2226, 430,  555,  843,  2078, 871,  1550, 105,  422,  587,  177,  3094, 3038, 2869, 1574, 1653,
+         3083, 778,  1159, 3182, 2552, 1483, 2727, 1119, 1739, 644,  2457, 349,  418,  329,  3173, 3254,
+         817,  1097, 603,  610,  1322, 2044, 1864, 384,  2114, 3193, 1218, 1994, 2455, 220,  2142, 1670,
+         2144, 1799, 2051, 794,  1819, 2475, 2459, 478,  3221, 3021, 996,  991,  958,  1869, 1522, 1628};
+      static constexpr std::array<T, N / 2> zetas_inverse = {
+         1701, 1807, 1460, 2371, 2338, 2333, 308,  108,  2851, 870,  854,  1510, 2535, 1278, 1530, 1185,
+         1659, 1187, 3109, 874,  1335, 2111, 136,  1215, 2945, 1465, 1285, 2007, 2719, 2726, 2232, 2512,
+         75,   156,  3000, 2911, 2980, 872,  2685, 1590, 2210, 602,  1846, 777,  147,  2170, 2551, 246,
+         1676, 1755, 460,  291,  235,  3152, 2742, 2907, 3224, 1779, 2458, 1251, 2486, 2774, 2899, 1103,
+         1275, 2652, 1065, 2881, 725,  1508, 2368, 398,  951,  247,  1421, 3222, 2499, 271,  90,   853,
+         1860, 3203, 1162, 1618, 666,  320,  8,    2813, 1544, 282,  1838, 1293, 2314, 552,  2677, 2106,
+         1571, 205,  2918, 1542, 2721, 2597, 2312, 681,  130,  1602, 1871, 829,  2946, 3065, 1325, 2756,
+         1861, 1474, 1202, 2367, 3147, 1752, 2707, 171,  3127, 3042, 1907, 1836, 1517, 359,  758,  1441};
+};
 
+class Polynomial : public Crystals_Polynomial<Kyber_Poly_Consts> {
+   public:
       /**
        * Applies conditional subtraction of q to each coefficient of the polynomial.
        */
       void csubq() {
-         for(auto& coeff : m_coeffs) {
+         for(auto& coeff : coefficients()) {
             coeff -= KyberConstants::Q;
             coeff += (coeff >> 15) & KyberConstants::Q;
          }
@@ -63,19 +86,31 @@ class Polynomial {
       /**
        * Applies Barrett reduction to all coefficients of the polynomial
        */
-      void reduce() {
-         for(auto& c : m_coeffs) {
-            c = barrett_reduce(c);
+      void reduce() override {
+         for(auto& c : coefficients()) {
+            c = reduce(c);
          }
+      }
+
+      /**
+       * Barrett reduction; given a 16-bit integer a, computes 16-bit integer congruent
+       * to a mod q in {0,...,q}.
+       */
+      int16_t reduce(int16_t a) const override {
+         constexpr int32_t v = ((1U << 26) + KyberConstants::Q / 2) / KyberConstants::Q;
+         const int16_t t = (v * a >> 26) * KyberConstants::Q;
+         return a - t;
       }
 
       void to_bytes(std::span<uint8_t> out) {
          this->csubq();
 
+         auto& coeffs = coefficients();
+
          BufferStuffer bs(out);
          for(size_t i = 0; i < size() / 2; ++i) {
-            const uint16_t t0 = m_coeffs[2 * i];
-            const uint16_t t1 = m_coeffs[2 * i + 1];
+            const uint16_t t0 = coeffs[2 * i];
+            const uint16_t t1 = coeffs[2 * i + 1];
             auto buf = bs.next<3>();
             buf[0] = static_cast<uint8_t>(t0 >> 0);
             buf[1] = static_cast<uint8_t>((t0 >> 8) | (t1 << 4));
@@ -93,6 +128,8 @@ class Polynomial {
 
          BOTAN_ASSERT(buf.size() == (2 * r.size() / 4), "wrong input buffer size for cbd2");
 
+         auto& coeffs = r.coefficients();
+
          BufferSlicer bs(buf);
          for(size_t i = 0; i < r.size() / 8; ++i) {
             uint32_t t = load_le(bs.take<4>());
@@ -102,7 +139,7 @@ class Polynomial {
             for(size_t j = 0; j < 8; ++j) {
                int16_t a = (d >> (4 * j + 0)) & 0x3;
                int16_t b = (d >> (4 * j + 2)) & 0x3;
-               r.m_coeffs[8 * i + j] = a - b;
+               coeffs[8 * i + j] = a - b;
             }
          }
          BOTAN_ASSERT_NOMSG(bs.empty());
@@ -124,6 +161,8 @@ class Polynomial {
          // Note: load_le<> does not support loading a 3-byte value
          const auto load_le = [](std::span<const uint8_t, 3> in) { return make_uint32(0, in[2], in[1], in[0]); };
 
+         auto& coeffs = r.coefficients();
+
          BufferSlicer bs(buf);
          for(size_t i = 0; i < r.size() / 4; ++i) {
             uint32_t t = load_le(bs.take<3>());
@@ -134,7 +173,7 @@ class Polynomial {
             for(size_t j = 0; j < 4; ++j) {
                int16_t a = (d >> (6 * j + 0)) & 0x7;
                int16_t b = (d >> (6 * j + 3)) & 0x7;
-               r.m_coeffs[4 * i + j] = a - b;
+               coeffs[4 * i + j] = a - b;
             }
          }
          BOTAN_ASSERT_NOMSG(bs.empty());
@@ -173,9 +212,10 @@ class Polynomial {
 
       static Polynomial from_bytes(std::span<const uint8_t> a) {
          Polynomial r;
+         auto& coeffs = r.coefficients();
          for(size_t i = 0; i < r.size() / 2; ++i) {
-            r.m_coeffs[2 * i] = ((a[3 * i + 0] >> 0) | (static_cast<uint16_t>(a[3 * i + 1]) << 8)) & 0xFFF;
-            r.m_coeffs[2 * i + 1] = ((a[3 * i + 1] >> 4) | (static_cast<uint16_t>(a[3 * i + 2]) << 4)) & 0xFFF;
+            coeffs[2 * i] = ((a[3 * i + 0] >> 0) | (static_cast<uint16_t>(a[3 * i + 1]) << 8)) & 0xFFF;
+            coeffs[2 * i + 1] = ((a[3 * i + 1] >> 4) | (static_cast<uint16_t>(a[3 * i + 2]) << 4)) & 0xFFF;
          }
          return r;
       }
@@ -184,10 +224,11 @@ class Polynomial {
          BOTAN_ASSERT(msg.size() == KyberConstants::N / 8, "message length must be Kyber_N/8 bytes");
 
          Polynomial r;
+         auto& coeffs = r.coefficients();
          for(size_t i = 0; i < r.size() / 8; ++i) {
             for(size_t j = 0; j < 8; ++j) {
                const auto mask = -static_cast<int16_t>((msg[i] >> j) & 1);
-               r.m_coeffs[8 * i + j] = mask & ((KyberConstants::Q + 1) / 2);
+               coeffs[8 * i + j] = mask & ((KyberConstants::Q + 1) / 2);
             }
          }
          return r;
@@ -198,42 +239,17 @@ class Polynomial {
 
          this->csubq();
 
+         const auto& coeffs = coefficients();
+
          for(size_t i = 0; i < size() / 8; ++i) {
             result[i] = 0;
             for(size_t j = 0; j < 8; ++j) {
-               const uint16_t t = detail::ct_int_div_kyber_q((static_cast<uint16_t>(this->m_coeffs[8 * i + j]) << 1) +
-                                                             KyberConstants::Q / 2);
+               const uint16_t t = detail::ct_int_div_kyber_q((coeffs[8 * i + j] << 1) + KyberConstants::Q / 2);
                result[i] |= (t & 1) << j;
             }
          }
 
          return result;
-      }
-
-      /**
-       * Adds two polynomials element-wise. Does not perform a reduction after the addition.
-       * Therefore this operation might cause an integer overflow.
-       */
-      Polynomial& operator+=(const Polynomial& other) {
-         for(size_t i = 0; i < this->size(); ++i) {
-            BOTAN_DEBUG_ASSERT(static_cast<int32_t>(this->m_coeffs[i]) + other.m_coeffs[i] <=
-                               std::numeric_limits<int16_t>::max());
-            this->m_coeffs[i] = this->m_coeffs[i] + other.m_coeffs[i];
-         }
-         return *this;
-      }
-
-      /**
-       * Subtracts two polynomials element-wise. Does not perform a reduction after the subtraction.
-       * Therefore this operation might cause an integer underflow.
-       */
-      Polynomial& operator-=(const Polynomial& other) {
-         for(size_t i = 0; i < this->size(); ++i) {
-            BOTAN_DEBUG_ASSERT(static_cast<int32_t>(other.m_coeffs[i]) - this->m_coeffs[i] >=
-                               std::numeric_limits<int16_t>::min());
-            this->m_coeffs[i] = other.m_coeffs[i] - this->m_coeffs[i];
-         }
-         return *this;
       }
 
       /**
@@ -256,9 +272,14 @@ class Polynomial {
          Polynomial r;
 
          for(size_t i = 0; i < r.size() / 4; ++i) {
-            basemul(&r.m_coeffs[4 * i], &a.m_coeffs[4 * i], &b.m_coeffs[4 * i], KyberConstants::zetas[64 + i]);
-            basemul(
-               &r.m_coeffs[4 * i + 2], &a.m_coeffs[4 * i + 2], &b.m_coeffs[4 * i + 2], -KyberConstants::zetas[64 + i]);
+            basemul(&r.coefficients().data()[4 * i],
+                    &a.coefficients().data()[4 * i],
+                    &b.coefficients().data()[4 * i],
+                    KyberConstants::zetas[64 + i]);
+            basemul(&r.coefficients().data()[4 * i + 2],
+                    &a.coefficients().data()[4 * i + 2],
+                    &b.coefficients().data()[4 * i + 2],
+                    -KyberConstants::zetas[64 + i]);
          }
 
          return r;
@@ -271,6 +292,8 @@ class Polynomial {
       static Polynomial sample_rej_uniform(std::unique_ptr<XOF> xof) {
          Polynomial p;
 
+         auto& coeffs = p.coefficients();
+
          size_t count = 0;
          while(count < p.size()) {
             std::array<uint8_t, 3> buf;
@@ -280,10 +303,10 @@ class Polynomial {
             const uint16_t val1 = ((buf[1] >> 4) | (static_cast<uint16_t>(buf[2]) << 4)) & 0xFFF;
 
             if(val0 < KyberConstants::Q) {
-               p.m_coeffs[count++] = val0;
+               coeffs[count++] = val0;
             }
             if(count < p.size() && val1 < KyberConstants::Q) {
-               p.m_coeffs[count++] = val1;
+               coeffs[count++] = val1;
             }
          }
 
@@ -296,7 +319,7 @@ class Polynomial {
        */
       void tomont() {
          constexpr int16_t f = (1ULL << 32) % KyberConstants::Q;
-         for(auto& c : m_coeffs) {
+         for(auto& c : coefficients()) {
             c = montgomery_reduce(static_cast<int32_t>(c) * f);
          }
       }
@@ -306,13 +329,15 @@ class Polynomial {
        * inputs assumed to be in normal order, output in bitreversed order.
        */
       void ntt() {
+         auto& coeffs = coefficients();
+
          for(size_t len = size() / 2, k = 0; len >= 2; len /= 2) {
             for(size_t start = 0, j = 0; start < size(); start = j + len) {
                const auto zeta = KyberConstants::zetas[++k];
                for(j = start; j < start + len; ++j) {
-                  const auto t = fqmul(zeta, m_coeffs[j + len]);
-                  m_coeffs[j + len] = m_coeffs[j] - t;
-                  m_coeffs[j] = m_coeffs[j] + t;
+                  const auto t = fqmul(zeta, coeffs[j + len]);
+                  coeffs[j + len] = coeffs[j] - t;
+                  coeffs[j] = coeffs[j] + t;
                }
             }
          }
@@ -325,57 +350,23 @@ class Polynomial {
        * in place; inputs assumed to be in bitreversed order, output in normal order.
        */
       void invntt_tomont() {
+         auto& coeffs = coefficients();
+
          for(size_t len = 2, k = 0; len <= size() / 2; len *= 2) {
             for(size_t start = 0, j = 0; start < size(); start = j + len) {
                const auto zeta = KyberConstants::zetas_inv[k++];
                for(j = start; j < start + len; ++j) {
-                  const auto t = m_coeffs[j];
-                  m_coeffs[j] = barrett_reduce(t + m_coeffs[j + len]);
-                  m_coeffs[j + len] = fqmul(zeta, t - m_coeffs[j + len]);
+                  const auto t = coeffs[j];
+                  coeffs[j] = reduce(t + coeffs[j + len]);
+                  coeffs[j + len] = fqmul(zeta, t - coeffs[j + len]);
                }
             }
          }
 
-         for(auto& c : m_coeffs) {
+         for(auto& c : coeffs) {
             c = fqmul(c, KyberConstants::zetas_inv[127]);
          }
       }
-
-      size_t size() const { return m_coeffs.size(); }
-
-      int16_t operator[](size_t idx) const { return m_coeffs[idx]; }
-
-      int16_t& operator[](size_t idx) { return m_coeffs[idx]; }
-
-   private:
-      /**
-       * Barrett reduction; given a 16-bit integer a, computes 16-bit integer congruent
-       * to a mod q in {0,...,q}.
-       */
-      static int16_t barrett_reduce(int16_t a) {
-         constexpr int32_t v = ((1U << 26) + KyberConstants::Q / 2) / KyberConstants::Q;
-         const int16_t t = (v * a >> 26) * KyberConstants::Q;
-         return a - t;
-      }
-
-      /**
-       * Multiplication followed by Montgomery reduction.
-       */
-      static int16_t fqmul(int16_t a, int16_t b) { return montgomery_reduce(static_cast<int32_t>(a) * b); }
-
-      /**
-       * Montgomery reduction; given a 32-bit integer a, computes 16-bit integer
-       * congruent to a * R^-1 mod q, where R=2^16
-       */
-      static int16_t montgomery_reduce(int32_t a) {
-         const int16_t u = static_cast<int16_t>(a * KyberConstants::Q_Inv);
-         int32_t t = static_cast<int32_t>(u) * KyberConstants::Q;
-         t = a - t;
-         t >>= 16;
-         return static_cast<int16_t>(t);
-      }
-
-      std::array<int16_t, KyberConstants::N> m_coeffs;
 };
 
 class PolynomialVector {
