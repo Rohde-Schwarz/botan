@@ -21,7 +21,7 @@
 #include <span>
 #include <vector>
 
-#include <botan/internal/pqhelpers.h>
+#include <botan/internal/pqcrystals_helpers.h>
 
 namespace Botan::CRYSTALS {
 
@@ -42,14 +42,25 @@ concept constants =
 // clang-format on
 
 template <constants Consts>
-struct constants_trait {
+class constants_trait {
+   public:
       using T = typename Consts::T;
       using T2 = Botan::next_longer_int_t<T>;
 
       constexpr static auto N = Consts::N;
       constexpr static auto Q = Consts::Q;
       constexpr static auto Q_inverse = modular_inverse(Consts::Q);
-}
+
+      constexpr static T montgomery_reduce(T2 a) {
+         const auto u = static_cast<T>(a * Q_inverse);
+         auto t = static_cast<T2>(u) * Q;
+         t = a - t;
+         t >>= sizeof(T) * 8;
+         return static_cast<T>(t);
+      }
+
+      constexpr static T fqmul(T a, T b) { return montgomery_reduce(static_cast<T2>(a) * b); }
+};
 
 template <constants Consts, Domain D = Domain::Normal>
 class Polynomial {
@@ -107,40 +118,29 @@ class Polynomial {
       //       Perhaps using CRTP or a delegate in the Consts
       virtual T reduce(T x) const = 0;
 
-      void to_invntt_montgomery() {
-         for(size_t len = 2, k = 0; len <= size() / 2; len *= 2) {
-            for(size_t start = 0, j = 0; start < size(); start = j + len) {
-               const auto zeta = Consts::zetas_inverse[k++];
-               for(j = start; j < start + len; ++j) {
-                  const auto t = m_coeffs[j];
-                  m_coeffs[j] = reduce(t + m_coeffs[j + len]);
-                  m_coeffs[j + len] = fqmul(zeta, t - m_coeffs[j + len]);
-               }
-            }
-         }
+      // void to_invntt_montgomery() {
+      //    for(size_t len = 2, k = 0; len <= size() / 2; len *= 2) {
+      //       for(size_t start = 0, j = 0; start < size(); start = j + len) {
+      //          const auto zeta = Consts::zetas_inverse[k++];
+      //          for(j = start; j < start + len; ++j) {
+      //             const auto t = m_coeffs[j];
+      //             m_coeffs[j] = reduce(t + m_coeffs[j + len]);
+      //             m_coeffs[j + len] = fqmul(zeta, t - m_coeffs[j + len]);
+      //          }
+      //       }
+      //    }
 
-         for(auto& c : m_coeffs) {
-            c = fqmul(c, Consts::zetas_inv[127]);
-         }
-      }
+      //    for(auto& c : m_coeffs) {
+      //       c = fqmul(c, Consts::zetas_inv[127]);
+      //    }
+      // }
 
-      void to_montgomery() {
-         constexpr auto f = static_cast<T>((uint64_t(1) << (sizeof(T2) * 8)) % Q);
-         for(size_t i = 0; i < size(); ++i) {
-            m_coeffs[i] = montgomery_reduce(static_cast<T2>(m_coeffs[i]) * f);
-         }
-      }
-
-   protected:
-      static T montgomery_reduce(T2 a) {
-         const auto u = static_cast<T>(a * Q_inverse);
-         auto t = static_cast<T2>(u) * Q;
-         t = a - t;
-         t >>= sizeof(T) * 8;
-         return static_cast<T>(t);
-      }
-
-      static T fqmul(T a, T b) { return montgomery_reduce(static_cast<T2>(a) * b); }
+      // void to_montgomery() {
+      //    constexpr auto f = static_cast<T>((uint64_t(1) << (sizeof(T2) * 8)) % Q);
+      //    for(size_t i = 0; i < size(); ++i) {
+      //       m_coeffs[i] = montgomery_reduce(static_cast<T2>(m_coeffs[i]) * f);
+      //    }
+      // }
 };
 
 template <constants Consts, Domain D = Domain::Normal>

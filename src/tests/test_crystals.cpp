@@ -64,7 +64,7 @@ struct Test_Consts {
 };
 
 std::vector<Test::Result> test_polynomials() {
-   using Kyberish_Poly = Botan::Crystals_Polynomial<Test_Consts>;
+   // using Kyberish_Poly = Botan::Crystals_Polynomial<Test_Consts>;
 
    return {
       // TODO
