@@ -16,6 +16,7 @@
 #define BOTAN_PQ_H_
 
 #include <array>
+#include <bit>
 #include <concepts>
 #include <cstdint>
 #include <span>
@@ -59,6 +60,13 @@ class constants_trait {
          return static_cast<T>(t);
       }
 
+      constexpr static T barrett_reduce(T a) {
+         BOTAN_ASSERT(Q == 3329, "Only implemented for Kyber, at the moment");
+         constexpr int32_t v = ((1U << 26) + Q / 2) / Q;
+         const int16_t t = (v * a >> 26) * Q;
+         return a - t;
+      }
+
       constexpr static T fqmul(T a, T b) { return montgomery_reduce(static_cast<T2>(a) * b); }
 };
 
@@ -75,18 +83,19 @@ class Polynomial {
    public:
       Polynomial() : m_coeffs({0}) {}
 
-      // TODO: reconsider, in case there are no more virtual methods
-      Polynomial(const ThisPolynomial&) = default;
-      Polynomial(ThisPolynomial&&) noexcept = default;
-      ThisPolynomial& operator=(const ThisPolynomial&) = default;
-      ThisPolynomial& operator=(ThisPolynomial&&) noexcept = default;
-      virtual ~Polynomial() = default;
-
-      auto size() const { return m_coeffs.size(); }
+      constexpr size_t size() const { return m_coeffs.size(); }
 
       T& operator[](size_t i) { return m_coeffs[i]; }
 
       const T& operator[](size_t i) const { return m_coeffs[i]; }
+
+      decltype(auto) begin() { return m_coeffs.begin(); }
+
+      decltype(auto) begin() const { return m_coeffs.begin(); }
+
+      decltype(auto) end() { return m_coeffs.end(); }
+
+      decltype(auto) end() const { return m_coeffs.end(); }
 
       /**
        * Adds two polynomials element-wise. Does not perform a reduction after the addition.
@@ -109,14 +118,6 @@ class Polynomial {
          }
          return *this;
       }
-
-      // TODO: reconsider...
-      //       Perhaps using CRTP or a delegate in the Consts
-      virtual void reduce() = 0;
-
-      // TODO: reconsider...
-      //       Perhaps using CRTP or a delegate in the Consts
-      virtual T reduce(T x) const = 0;
 
       // void to_invntt_montgomery() {
       //    for(size_t len = 2, k = 0; len <= size() / 2; len *= 2) {
@@ -149,10 +150,12 @@ class PolynomialVector {
       using ThisPolynomialVector = PolynomialVector<Consts, D>;
 
    private:
-      std::vector<Polynomial<Consts>> m_vec;
+      std::vector<Polynomial<Consts, D>> m_vec;
 
    public:
-      PolynomialVector(std::vector<Polynomial<Consts>> vec) : m_vec(std::move(vec)) {}
+      PolynomialVector(size_t size) : m_vec(size) {}
+
+      size_t size() const { return m_vec.size(); }
 
       ThisPolynomialVector& operator+=(const ThisPolynomialVector& other) {
          BOTAN_ASSERT(m_vec.size() == other.m_vec.size(), "cannot add polynomial vectors of differing lengths");
@@ -183,6 +186,18 @@ class PolynomialVector {
             v.to_ntt();
          }
       }
+
+      Polynomial<Consts, D>& operator[](size_t i) { return m_vec[i]; }
+
+      const Polynomial<Consts, D>& operator[](size_t i) const { return m_vec[i]; }
+
+      decltype(auto) begin() { return m_vec.begin(); }
+
+      decltype(auto) begin() const { return m_vec.begin(); }
+
+      decltype(auto) end() { return m_vec.end(); }
+
+      decltype(auto) end() const { return m_vec.end(); }
 };
 
 template <constants Consts>
@@ -191,32 +206,65 @@ class PolynomialMatrix {
       using ThisPolynomialMatrix = PolynomialMatrix<Consts>;
 
    private:
-      std::vector<PolynomialVector<Consts>> m_mat;
+      std::vector<PolynomialVector<Consts, Domain::NTT>> m_mat;
 
    public:
       PolynomialMatrix(std::vector<PolynomialVector<Consts>> mat) : m_mat(std::move(mat)) {}
+
+      size_t size() const { return m_mat.size(); }
+
+      PolynomialMatrix(size_t rows, size_t cols) : m_mat(rows, PolynomialVector<Consts, Domain::NTT>(cols)) {}
+
+      PolynomialVector<Consts, Domain::NTT>& operator[](size_t i) { return m_mat[i]; }
+
+      const PolynomialVector<Consts, Domain::NTT>& operator[](size_t i) const { return m_mat[i]; }
 };
 
-template <constants Consts>
-Polynomial<Consts, Domain::NTT> ntt(Polynomial<Consts, Domain::Normal> p) {
-   Polynomial<Consts, Domain::NTT> p_ntt;
+namespace detail {
 
+template <constants Consts>
+void ntt(Polynomial<Consts, Domain::NTT>& p_ntt) {
    using Trait = constants_trait<Consts>;
 
-   for(size_t len = p.size() / 2, k = 0; len >= 2; len /= 2) {
-      for(size_t start = 0, j = 0; start < p.size(); start = j + len) {
+   for(size_t len = p_ntt.size() / 2, k = 0; len >= 2; len /= 2) {
+      for(size_t start = 0, j = 0; start < p_ntt.size(); start = j + len) {
          const auto zeta = Consts::zetas[++k];
          for(j = start; j < start + len; ++j) {
-            const auto t = reduce(static_cast<typename Trait::T2>(zeta) * p[j + len]);
-            p_ntt[j + len] = p[j] - t;
-            p_ntt[j] = p[j] + t;
+            const auto t = Trait::fqmul(zeta, p_ntt[j + len]);
+            p_ntt[j + len] = p_ntt[j] - t;
+            p_ntt[j] = p_ntt[j] + t;
          }
       }
    }
 
-   p_ntt.reduce();
+   for(auto& c : p_ntt) {
+      c = Trait::barrett_reduce(c);
+   }
+}
 
+}  // namespace detail
+
+template <constants Consts>
+Polynomial<Consts, Domain::NTT> ntt(Polynomial<Consts, Domain::Normal> p) {
+   // TODO: Is there a way to avoid this copy? p goes out of scope anyway,
+   //       can we somehow instruct the compiler to just reuse the memory?
+   auto p_ntt = std::bit_cast<Polynomial<Consts, Domain::NTT>>(p);
+   detail::ntt(p_ntt);
    return p_ntt;
+}
+
+// TODO: This has to copy the data from polyvec to polyvec_ntt. Can we avoid
+//       this? The only difference is the Domain annotation which does not
+//       change the data structure itself. Is there a way to let vector scavenge
+//       the data from polyvec, but still annotate it as Domain::NTT?
+template <constants Consts>
+PolynomialVector<Consts, Domain::NTT> ntt(PolynomialVector<Consts, Domain::Normal> polyvec) {
+   PolynomialVector<Consts, Domain::NTT> polyvec_ntt(polyvec.size());
+   for(size_t i = 0; i < polyvec.size(); ++i) {
+      polyvec_ntt[i] = std::bit_cast<Polynomial<Consts, Domain::NTT>>(polyvec[i]);
+      detail::ntt(polyvec_ntt[i]);
+   }
+   return polyvec_ntt;
 }
 
 }  // namespace Botan::CRYSTALS

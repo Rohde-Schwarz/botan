@@ -20,6 +20,7 @@
 #include <botan/secmem.h>
 
 #include <botan/internal/fmt.h>
+#include <botan/internal/kyber_algos.h>
 #include <botan/internal/kyber_constants.h>
 #include <botan/internal/kyber_keys.h>
 #include <botan/internal/kyber_symmetric_primitives.h>
@@ -203,13 +204,15 @@ Kyber_PrivateKey::Kyber_PrivateKey(RandomNumberGenerator& rng, KyberMode m) {
 
    const auto d = rng.random_vec<KyberSeedRandomness>(KyberConstants::kSymBytes);
    auto [rho, sigma] = mode.symmetric_primitives().G(d);
+   PolynomialSampler ps(std::move(sigma), mode);
 
-   auto a = PolynomialMatrix::generate(rho, false /* not transposed */, mode);
-   auto s = PolynomialVector::getnoise_eta1(sigma, 0 /* N */, mode);
-   auto e = PolynomialVector::getnoise_eta1(sigma, mode.k() /* N */, mode);
+   const auto A = sample_matrix(rho, false /* not transposed */, mode);
+   const auto new_s = ntt(ps.sample_vector_eta1());
+   const auto new_e = ntt(ps.sample_vector_eta1());
 
-   s.ntt();
-   e.ntt();
+   PolynomialMatrix a(A);
+   PolynomialVector s(new_s);
+   PolynomialVector e(new_e);
 
    auto t = a.pointwise_acc_montgomery(s, true);
    t += e;

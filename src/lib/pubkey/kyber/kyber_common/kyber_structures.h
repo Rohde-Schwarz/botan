@@ -18,6 +18,7 @@
 #include <botan/exceptn.h>
 #include <botan/xof.h>
 
+#include <botan/internal/kyber_algos.h>
 #include <botan/internal/kyber_constants.h>
 #include <botan/internal/kyber_symmetric_primitives.h>
 #include <botan/internal/kyber_types.h>
@@ -49,6 +50,13 @@ inline uint16_t ct_int_div_kyber_q(uint32_t a) {
 class Polynomial {
    public:
       Polynomial() : m_coeffs({0}) {}
+
+      template <typename T, CRYSTALS::Domain D>
+      Polynomial(const CRYSTALS::Polynomial<T, D>& poly) {
+         for(size_t i = 0; i < poly.size(); ++i) {
+            m_coeffs[i] = poly[i];
+         }
+      }
 
       /**
        * Applies conditional subtraction of q to each coefficient of the polynomial.
@@ -384,6 +392,14 @@ class PolynomialVector {
 
       explicit PolynomialVector(const size_t k) : m_vec(k) {}
 
+      template <typename T, CRYSTALS::Domain D>
+      PolynomialVector(const CRYSTALS::PolynomialVector<T, D>& vec) {
+         m_vec.reserve(vec.size());
+         for(size_t i = 0; i < vec.size(); ++i) {
+            m_vec.emplace_back(vec[i]);
+         }
+      }
+
    public:
       static PolynomialVector from_bytes(std::span<const uint8_t> a, const KyberConstants& mode) {
          BOTAN_ASSERT(a.size() == mode.polynomial_vector_byte_length(), "wrong byte length for frombytes");
@@ -503,6 +519,14 @@ class PolynomialVector {
 class PolynomialMatrix {
    public:
       PolynomialMatrix() = delete;
+
+      // Adapter to the new structure
+      PolynomialMatrix(const PolyMat& mat) {
+         m_mat.reserve(mat.size());
+         for(size_t i = 0; i < mat.size(); ++i) {
+            m_mat.emplace_back(mat[i]);
+         }
+      }
 
       static PolynomialMatrix generate(StrongSpan<const KyberSeedRho> seed,
                                        const bool transposed,
