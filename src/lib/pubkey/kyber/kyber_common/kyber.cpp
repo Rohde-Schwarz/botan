@@ -207,22 +207,16 @@ Kyber_PrivateKey::Kyber_PrivateKey(RandomNumberGenerator& rng, KyberMode m) {
    PolynomialSampler ps(std::move(sigma), mode);
 
    const auto A = sample_matrix(rho, false /* not transposed */, mode);
-   const auto new_s = ntt(ps.sample_vector_eta1());
-   const auto new_e = ntt(ps.sample_vector_eta1());
+   const auto s = ntt(ps.sample_vector_eta1());
+   const auto e = ntt(ps.sample_vector_eta1());
 
-   PolynomialMatrix a(A);
-   PolynomialVector s(new_s);
-   PolynomialVector e(new_e);
-
-   auto t = a.pointwise_acc_montgomery(s, true);
-   t += e;
-   t.reduce();
+   const auto t = (montgomery(A * s) + e).reduce();
 
    // End Algorithm 12 ---------------------------
 
-   m_public = std::make_shared<Kyber_PublicKeyInternal>(mode, std::move(t), std::move(rho));
+   m_public = std::make_shared<Kyber_PublicKeyInternal>(mode, PolynomialVector(t), std::move(rho));
    m_private = std::make_shared<Kyber_PrivateKeyInternal>(
-      std::move(mode), std::move(s), rng.random_vec<KyberImplicitRejectionValue>(KyberConstants::kZLength));
+      std::move(mode), PolynomialVector(s), rng.random_vec<KyberImplicitRejectionValue>(KyberConstants::kZLength));
 }
 
 Kyber_PrivateKey::Kyber_PrivateKey(const AlgorithmIdentifier& alg_id, std::span<const uint8_t> key_bits) :

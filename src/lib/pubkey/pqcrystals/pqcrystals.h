@@ -26,7 +26,7 @@
 
 namespace Botan::CRYSTALS {
 
-enum class Domain { Normal, NTT, Montgomery };
+enum class Domain { Normal, NTT };
 
 // clang-format off
 
@@ -47,10 +47,14 @@ class constants_trait {
    public:
       using T = typename Consts::T;
       using T2 = Botan::next_longer_int_t<T>;
+      using T4 = Botan::next_longer_int_t<T2>;
 
       constexpr static auto N = Consts::N;
       constexpr static auto Q = Consts::Q;
       constexpr static auto Q_inverse = modular_inverse(Consts::Q);
+
+      // TODO: For T > 16bit we have to calculate that differently
+      constexpr static T MONTGOMERY_F = (T4(1) << (sizeof(T2) * 8)) % Q;
 
       constexpr static T montgomery_reduce(T2 a) {
          const auto u = static_cast<T>(a * Q_inverse);
@@ -68,6 +72,8 @@ class constants_trait {
       }
 
       constexpr static T fqmul(T a, T b) { return montgomery_reduce(static_cast<T2>(a) * b); }
+
+      constexpr static T to_montgomery(T a) { return fqmul(a, MONTGOMERY_F); }
 };
 
 template <constants Consts, Domain D = Domain::Normal>
@@ -97,6 +103,13 @@ class Polynomial {
 
       decltype(auto) end() const { return m_coeffs.end(); }
 
+      ThisPolynomial& reduce() {
+         for(auto& c : m_coeffs) {
+            c = constants_trait<Consts>::barrett_reduce(c);
+         }
+         return *this;
+      }
+
       /**
        * Adds two polynomials element-wise. Does not perform a reduction after the addition.
        * Therefore this operation might cause an integer overflow.
@@ -118,30 +131,6 @@ class Polynomial {
          }
          return *this;
       }
-
-      // void to_invntt_montgomery() {
-      //    for(size_t len = 2, k = 0; len <= size() / 2; len *= 2) {
-      //       for(size_t start = 0, j = 0; start < size(); start = j + len) {
-      //          const auto zeta = Consts::zetas_inverse[k++];
-      //          for(j = start; j < start + len; ++j) {
-      //             const auto t = m_coeffs[j];
-      //             m_coeffs[j] = reduce(t + m_coeffs[j + len]);
-      //             m_coeffs[j + len] = fqmul(zeta, t - m_coeffs[j + len]);
-      //          }
-      //       }
-      //    }
-
-      //    for(auto& c : m_coeffs) {
-      //       c = fqmul(c, Consts::zetas_inv[127]);
-      //    }
-      // }
-
-      // void to_montgomery() {
-      //    constexpr auto f = static_cast<T>((uint64_t(1) << (sizeof(T2) * 8)) % Q);
-      //    for(size_t i = 0; i < size(); ++i) {
-      //       m_coeffs[i] = montgomery_reduce(static_cast<T2>(m_coeffs[i]) * f);
-      //    }
-      // }
 };
 
 template <constants Consts, Domain D = Domain::Normal>
@@ -175,16 +164,11 @@ class PolynomialVector {
          return *this;
       }
 
-      void reduce() {
+      ThisPolynomialVector& reduce() {
          for(auto& v : m_vec) {
             v.reduce();
          }
-      }
-
-      void to_ntt() {
-         for(auto& v : m_vec) {
-            v.to_ntt();
-         }
+         return *this;
       }
 
       Polynomial<Consts, D>& operator[](size_t i) { return m_vec[i]; }
@@ -237,9 +221,7 @@ void ntt(Polynomial<Consts, Domain::NTT>& p_ntt) {
       }
    }
 
-   for(auto& c : p_ntt) {
-      c = Trait::barrett_reduce(c);
-   }
+   p_ntt.reduce();
 }
 
 }  // namespace detail
@@ -265,6 +247,86 @@ PolynomialVector<Consts, Domain::NTT> ntt(PolynomialVector<Consts, Domain::Norma
       detail::ntt(polyvec_ntt[i]);
    }
    return polyvec_ntt;
+}
+
+template <constants Consts, Domain D>
+Polynomial<Consts, D> montgomery(Polynomial<Consts, D> p) {
+   using Trait = constants_trait<Consts>;
+   for(auto& c : p) {
+      c = Trait::to_montgomery(c);
+   }
+   return p;
+}
+
+template <constants Consts, Domain D>
+PolynomialVector<Consts, D> montgomery(PolynomialVector<Consts, D> polyvec) {
+   for(auto& p : polyvec) {
+      p = montgomery(std::move(p));
+   }
+   return polyvec;
+}
+
+template <constants Consts>
+PolynomialVector<Consts, Domain::NTT> operator*(const PolynomialMatrix<Consts>& mat,
+                                                const PolynomialVector<Consts, Domain::NTT>& vec) {
+   PolynomialVector<Consts, Domain::NTT> result(mat.size());
+
+   for(size_t i = 0; i < mat.size(); ++i) {
+      result[i] = mat[i] * vec;
+   }
+
+   return result;
+}
+
+template <constants Consts>
+Polynomial<Consts, Domain::NTT> operator*(const PolynomialVector<Consts, Domain::NTT>& a,
+                                          const PolynomialVector<Consts, Domain::NTT>& b) {
+   BOTAN_ASSERT(a.size() == b.size(), "Pointwise vector multiplication requires equally sized PolynomialVectors");
+
+   Polynomial<Consts, Domain::NTT> result;
+   for(size_t i = 0; i < a.size(); ++i) {
+      result += a[i] * b[i];
+   }
+
+   return result.reduce();
+}
+
+template <constants Consts>
+Polynomial<Consts, Domain::NTT> operator*(const Polynomial<Consts, Domain::NTT>& a,
+                                          const Polynomial<Consts, Domain::NTT>& b) {
+   using Trait = constants_trait<Consts>;
+
+   auto basemul = [](int16_t r[2], const int16_t s[2], const int16_t t[2], const int16_t zeta) {
+      r[0] = Trait::fqmul(s[1], t[1]);
+      r[0] = Trait::fqmul(r[0], zeta);
+      r[0] += Trait::fqmul(s[0], t[0]);
+
+      r[1] = Trait::fqmul(s[0], t[1]);
+      r[1] += Trait::fqmul(s[1], t[0]);
+   };
+
+   Polynomial<Consts, Domain::NTT> result;
+
+   for(size_t i = 0; i < result.size() / 4; ++i) {
+      basemul(&result[4 * i], &a[4 * i], &b[4 * i], Consts::zetas[64 + i]);
+      basemul(&result[4 * i + 2], &a[4 * i + 2], &b[4 * i + 2], -Consts::zetas[64 + i]);
+   }
+
+   return result;
+}
+
+template <constants Consts, Domain D>
+Polynomial<Consts, D> operator+(const Polynomial<Consts, D>& a, const Polynomial<Consts, D>& b) {
+   auto result = a;
+   result += b;
+   return result;
+}
+
+template <constants Consts, Domain D>
+PolynomialVector<Consts, D> operator+(const PolynomialVector<Consts, D>& a, const PolynomialVector<Consts, D>& b) {
+   auto result = a;
+   result += b;
+   return result;
 }
 
 }  // namespace Botan::CRYSTALS
