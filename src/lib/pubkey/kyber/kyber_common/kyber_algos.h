@@ -23,17 +23,17 @@
 
 namespace Botan {
 
-using PolyNTT = CRYSTALS::Polynomial<New_Kyber_Constants, CRYSTALS::Domain::NTT>;
-using PolyVecNTT = CRYSTALS::PolynomialVector<New_Kyber_Constants, CRYSTALS::Domain::NTT>;
-using PolyMat = CRYSTALS::PolynomialMatrix<New_Kyber_Constants>;
+using KyberPolyNTT = CRYSTALS::Polynomial<New_Kyber_Constants, CRYSTALS::Domain::NTT>;
+using KyberPolyVecNTT = CRYSTALS::PolynomialVector<New_Kyber_Constants, CRYSTALS::Domain::NTT>;
+using KyberPolyMat = CRYSTALS::PolynomialMatrix<New_Kyber_Constants>;
 
-using Poly = CRYSTALS::Polynomial<New_Kyber_Constants, CRYSTALS::Domain::Normal>;
-using PolyVec = CRYSTALS::PolynomialVector<New_Kyber_Constants, CRYSTALS::Domain::Normal>;
+using KyberPoly = CRYSTALS::Polynomial<New_Kyber_Constants, CRYSTALS::Domain::Normal>;
+using KyberPolyVec = CRYSTALS::PolynomialVector<New_Kyber_Constants, CRYSTALS::Domain::Normal>;
 
 /**
  * NIST FIPS 203 IPD, Algorithm 6 (SampleNTT)
  */
-inline void sample_ntt_uniform(PolyNTT& p, std::unique_ptr<XOF> xof) {
+inline void sample_ntt_uniform(KyberPolyNTT& p, std::unique_ptr<XOF> xof) {
    size_t count = 0;
    while(count < p.size()) {
       std::array<uint8_t, 3> buf;
@@ -51,10 +51,12 @@ inline void sample_ntt_uniform(PolyNTT& p, std::unique_ptr<XOF> xof) {
    }
 }
 
-inline PolyMat sample_matrix(StrongSpan<const KyberSeedRho> seed, const bool transposed, const KyberConstants& mode) {
+inline KyberPolyMat sample_matrix(StrongSpan<const KyberSeedRho> seed,
+                                  const bool transposed,
+                                  const KyberConstants& mode) {
    BOTAN_ASSERT(seed.size() == KyberConstants::kSymBytes, "unexpected seed size");
 
-   PolyMat mat(mode.k(), mode.k());
+   KyberPolyMat mat(mode.k(), mode.k());
 
    for(uint8_t i = 0; i < mode.k(); ++i) {
       for(uint8_t j = 0; j < mode.k(); ++j) {
@@ -75,8 +77,8 @@ class PolynomialSampler {
       PolynomialSampler(KyberSeedSigma seed, const KyberConstants& mode) :
             m_seed(std::move(seed)), m_mode(mode), m_nonce(0) {}
 
-      PolyVec sample_vector_eta1() {
-         PolyVec vec(m_mode.k());
+      KyberPolyVec sample_vector_eta1() {
+         KyberPolyVec vec(m_mode.k());
          for(auto& poly : vec) {
             sample_poly_eta1(poly);
          }
@@ -89,7 +91,7 @@ class PolynomialSampler {
       /**
        * NIST FIPS 203 IPD, Algorithm 7 (SamplePolyCBD)
        */
-      void sample_poly_eta1(Poly& poly) {
+      void sample_poly_eta1(KyberPoly& poly) {
          const auto eta1 = m_mode.eta1();
 
          if(eta1 == 2) {
@@ -101,8 +103,8 @@ class PolynomialSampler {
          }
       }
 
-      void cbd2(Poly& poly);
-      void cbd3(Poly& poly);
+      void cbd2(KyberPoly& poly);
+      void cbd3(KyberPoly& poly);
 
    private:
       KyberSeedSigma m_seed;

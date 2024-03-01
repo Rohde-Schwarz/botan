@@ -17,7 +17,7 @@
 
 namespace Botan {
 
-void PolynomialSampler::cbd2(Poly& poly) {
+void PolynomialSampler::cbd2(KyberPoly& poly) {
    const auto randomness = prf(2 * poly.size() / 4);
 
    BufferSlicer bs(randomness);
@@ -45,7 +45,7 @@ uint32_t load_le(std::span<const uint8_t, 3> in) {
 
 }  // namespace
 
-void PolynomialSampler::cbd3(Poly& poly) {
+void PolynomialSampler::cbd3(KyberPoly& poly) {
    const auto randomness = prf(3 * poly.size() / 4);
 
    BufferSlicer bs(randomness);
