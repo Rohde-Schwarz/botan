@@ -21,14 +21,14 @@ namespace Botan {
 
 class Kyber_PublicKeyInternal {
    public:
-      Kyber_PublicKeyInternal(KyberConstants mode, PolynomialVector polynomials, KyberSeedRho seed);
+      Kyber_PublicKeyInternal(KyberConstants mode, Kyber::PolyVecNTT polynomials, KyberSeedRho seed);
 
       Kyber_PublicKeyInternal(const KyberConstants& mode, std::span<const uint8_t> polynomials, KyberSeedRho seed) :
-            Kyber_PublicKeyInternal(mode, PolynomialVector::from_bytes(polynomials, mode), std::move(seed)) {}
+            Kyber_PublicKeyInternal(mode, Kyber::polyvec_from_bytes(polynomials, mode), std::move(seed)) {}
 
       Ciphertext indcpa_encrypt(StrongSpan<const KyberMessage> m, StrongSpan<const KyberEncryptionRandomness> r) const;
 
-      const PolynomialVector& t() const { return m_t; }
+      const Kyber::PolyVecNTT& t() const { return m_t; }
 
       const KyberSeedRho& rho() const { return m_rho; }
 
@@ -42,7 +42,7 @@ class Kyber_PublicKeyInternal {
 
    private:
       const KyberConstants m_mode;
-      PolynomialVector m_t;
+      Kyber::PolyVecNTT m_t;
       const KyberSeedRho m_rho;
       const KyberSerializedPublicKey m_public_key_bits_raw;
       const KyberHashedPublicKey m_H_public_key_bits_raw;

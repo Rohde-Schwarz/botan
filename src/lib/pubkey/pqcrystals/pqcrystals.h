@@ -224,6 +224,26 @@ void ntt(Polynomial<Consts, Domain::NTT>& p_ntt) {
    p_ntt.reduce();
 }
 
+template <constants Consts>
+void inverse_ntt(Polynomial<Consts, Domain::Normal>& p) {
+   using Trait = constants_trait<Consts>;
+
+   for(size_t len = 2, k = 0; len <= p.size() / 2; len *= 2) {
+      for(size_t start = 0, j = 0; start < p.size(); start = j + len) {
+         const auto zeta = Consts::zetas_inverse[k++];
+         for(j = start; j < start + len; ++j) {
+            const auto t = p[j];
+            p[j] = Trait::barrett_reduce(t + p[j + len]);
+            p[j + len] = Trait::fqmul(zeta, t - p[j + len]);
+         }
+      }
+   }
+
+   for(auto& c : p) {
+      c = Trait::fqmul(c, Consts::zetas_inverse[127]);
+   }
+}
+
 }  // namespace detail
 
 template <constants Consts>
@@ -233,6 +253,14 @@ Polynomial<Consts, Domain::NTT> ntt(Polynomial<Consts, Domain::Normal> p) {
    auto p_ntt = std::bit_cast<Polynomial<Consts, Domain::NTT>>(p);
    detail::ntt(p_ntt);
    return p_ntt;
+}
+
+template <constants Consts>
+Polynomial<Consts, Domain::Normal> inverse_ntt(Polynomial<Consts, Domain::NTT> p_ntt) {
+   // TODO: See if we can avoid this copy. p_ntt goes out of scope anyway.
+   auto p = std::bit_cast<Polynomial<Consts, Domain::Normal>>(p_ntt);
+   detail::inverse_ntt(p);
+   return p;
 }
 
 // TODO: This has to copy the data from polyvec to polyvec_ntt. Can we avoid
@@ -247,6 +275,20 @@ PolynomialVector<Consts, Domain::NTT> ntt(PolynomialVector<Consts, Domain::Norma
       detail::ntt(polyvec_ntt[i]);
    }
    return polyvec_ntt;
+}
+
+// TODO: This has to copy the data from polyvec to polyvec_ntt. Can we avoid
+//       this? The only difference is the Domain annotation which does not
+//       change the data structure itself. Is there a way to let vector scavenge
+//       the data from polyvec, but still annotate it as Domain::NTT?
+template <constants Consts>
+PolynomialVector<Consts, Domain::Normal> inverse_ntt(PolynomialVector<Consts, Domain::NTT> polyvec_ntt) {
+   PolynomialVector<Consts, Domain::Normal> polyvec(polyvec_ntt.size());
+   for(size_t i = 0; i < polyvec_ntt.size(); ++i) {
+      polyvec[i] = std::bit_cast<Polynomial<Consts, Domain::Normal>>(polyvec_ntt[i]);
+      detail::inverse_ntt(polyvec[i]);
+   }
+   return polyvec;
 }
 
 template <constants Consts, Domain D>

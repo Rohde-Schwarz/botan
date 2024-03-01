@@ -204,7 +204,7 @@ Kyber_PrivateKey::Kyber_PrivateKey(RandomNumberGenerator& rng, KyberMode m) {
 
    const auto d = rng.random_vec<KyberSeedRandomness>(KyberConstants::kSymBytes);
    auto [rho, sigma] = mode.symmetric_primitives().G(d);
-   Kyber::PolynomialSampler ps(std::move(sigma), mode);
+   Kyber::PolynomialSampler ps(sigma, mode);
 
    const auto A = Kyber::sample_matrix(rho, false /* not transposed */, mode);
    auto s = ntt(ps.sample_vector_eta1());

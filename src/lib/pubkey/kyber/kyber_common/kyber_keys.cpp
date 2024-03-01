@@ -16,11 +16,11 @@
 
 namespace Botan {
 
-Kyber_PublicKeyInternal::Kyber_PublicKeyInternal(KyberConstants mode, PolynomialVector t, KyberSeedRho rho) :
+Kyber_PublicKeyInternal::Kyber_PublicKeyInternal(KyberConstants mode, Kyber::PolyVecNTT t, KyberSeedRho rho) :
       m_mode(std::move(mode)),
       m_t(std::move(t)),
       m_rho(std::move(rho)),
-      m_public_key_bits_raw(concat(m_t.to_bytes(), m_rho)),
+      m_public_key_bits_raw(concat(Kyber::to_bytes<std::vector<uint8_t>>(m_t), m_rho)),
       m_H_public_key_bits_raw(m_mode.symmetric_primitives().H(m_public_key_bits_raw)) {}
 
 /**
@@ -28,27 +28,20 @@ Kyber_PublicKeyInternal::Kyber_PublicKeyInternal(KyberConstants mode, Polynomial
  */
 Ciphertext Kyber_PublicKeyInternal::indcpa_encrypt(StrongSpan<const KyberMessage> m,
                                                    StrongSpan<const KyberEncryptionRandomness> r) const {
-   auto at = PolynomialMatrix::generate(m_rho, true /* transposed */, m_mode);
+   const auto At = Kyber::sample_matrix(m_rho, true /* transposed */, m_mode);
 
-   auto rv = PolynomialVector::getnoise_eta1(r, 0, m_mode);
-   auto e1 = PolynomialVector::getnoise_eta2(r, m_mode.k(), m_mode);
-   auto e2 = Polynomial::getnoise_eta2(r, 2 * m_mode.k(), m_mode);
+   Kyber::PolynomialSampler ps(r, m_mode);
 
-   rv.ntt();
+   const auto rv = ntt(ps.sample_vector_eta1());
+   const auto e1 = ps.sample_vector_eta2();
+   const auto e2 = ps.sample_poly_eta2();
 
-   auto u = at.pointwise_acc_montgomery(rv);
-   u.invntt_tomont();
-   u += e1;
-   u.reduce();
+   auto u = (inverse_ntt(At * rv) + e1).reduce();
 
-   auto mu = Polynomial::from_message(m);
-   auto v = PolynomialVector::pointwise_acc_montgomery(m_t, rv);
-   v.invntt_tomont();
-   v += e2;
-   v += mu;
-   v.reduce();
+   const auto mu = Kyber::from_message(m);
+   auto v = (inverse_ntt(m_t * rv) + e2 + mu).reduce();
 
-   return Ciphertext(std::move(u), v, m_mode);
+   return Ciphertext(std::move(u), std::move(v), m_mode);
 }
 
 /**
