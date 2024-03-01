@@ -15,9 +15,9 @@
 #include <botan/internal/kyber_algos.h>
 #include <botan/internal/loadstor.h>
 
-namespace Botan {
+namespace Botan::Kyber {
 
-void PolynomialSampler::cbd2(KyberPoly& poly) {
+void PolynomialSampler::cbd2(Poly& poly) {
    const auto randomness = prf(2 * poly.size() / 4);
 
    BufferSlicer bs(randomness);
@@ -45,7 +45,7 @@ uint32_t load_le(std::span<const uint8_t, 3> in) {
 
 }  // namespace
 
-void PolynomialSampler::cbd3(KyberPoly& poly) {
+void PolynomialSampler::cbd3(Poly& poly) {
    const auto randomness = prf(3 * poly.size() / 4);
 
    BufferSlicer bs(randomness);
@@ -66,4 +66,4 @@ void PolynomialSampler::cbd3(KyberPoly& poly) {
    BOTAN_ASSERT_NOMSG(bs.empty());
 }
 
-}  // namespace Botan
+}  // namespace Botan::Kyber

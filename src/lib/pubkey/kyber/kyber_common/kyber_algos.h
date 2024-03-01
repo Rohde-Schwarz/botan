@@ -21,19 +21,19 @@
 #include <botan/internal/kyber_symmetric_primitives.h>
 #include <botan/internal/pqcrystals.h>
 
-namespace Botan {
+namespace Botan::Kyber {
 
-using KyberPolyNTT = CRYSTALS::Polynomial<New_Kyber_Constants, CRYSTALS::Domain::NTT>;
-using KyberPolyVecNTT = CRYSTALS::PolynomialVector<New_Kyber_Constants, CRYSTALS::Domain::NTT>;
-using KyberPolyMat = CRYSTALS::PolynomialMatrix<New_Kyber_Constants>;
+using PolyNTT = Botan::CRYSTALS::Polynomial<New_Kyber_Constants, Botan::CRYSTALS::Domain::NTT>;
+using PolyVecNTT = Botan::CRYSTALS::PolynomialVector<New_Kyber_Constants, Botan::CRYSTALS::Domain::NTT>;
+using PolyMat = Botan::CRYSTALS::PolynomialMatrix<New_Kyber_Constants>;
 
-using KyberPoly = CRYSTALS::Polynomial<New_Kyber_Constants, CRYSTALS::Domain::Normal>;
-using KyberPolyVec = CRYSTALS::PolynomialVector<New_Kyber_Constants, CRYSTALS::Domain::Normal>;
+using Poly = Botan::CRYSTALS::Polynomial<New_Kyber_Constants, Botan::CRYSTALS::Domain::Normal>;
+using PolyVec = Botan::CRYSTALS::PolynomialVector<New_Kyber_Constants, Botan::CRYSTALS::Domain::Normal>;
 
 /**
  * NIST FIPS 203 IPD, Algorithm 6 (SampleNTT)
  */
-inline void sample_ntt_uniform(KyberPolyNTT& p, std::unique_ptr<XOF> xof) {
+inline void sample_ntt_uniform(PolyNTT& p, std::unique_ptr<XOF> xof) {
    size_t count = 0;
    while(count < p.size()) {
       std::array<uint8_t, 3> buf;
@@ -51,12 +51,10 @@ inline void sample_ntt_uniform(KyberPolyNTT& p, std::unique_ptr<XOF> xof) {
    }
 }
 
-inline KyberPolyMat sample_matrix(StrongSpan<const KyberSeedRho> seed,
-                                  const bool transposed,
-                                  const KyberConstants& mode) {
+inline PolyMat sample_matrix(StrongSpan<const KyberSeedRho> seed, const bool transposed, const KyberConstants& mode) {
    BOTAN_ASSERT(seed.size() == KyberConstants::kSymBytes, "unexpected seed size");
 
-   KyberPolyMat mat(mode.k(), mode.k());
+   PolyMat mat(mode.k(), mode.k());
 
    for(uint8_t i = 0; i < mode.k(); ++i) {
       for(uint8_t j = 0; j < mode.k(); ++j) {
@@ -77,8 +75,8 @@ class PolynomialSampler {
       PolynomialSampler(KyberSeedSigma seed, const KyberConstants& mode) :
             m_seed(std::move(seed)), m_mode(mode), m_nonce(0) {}
 
-      KyberPolyVec sample_vector_eta1() {
-         KyberPolyVec vec(m_mode.k());
+      PolyVec sample_vector_eta1() {
+         PolyVec vec(m_mode.k());
          for(auto& poly : vec) {
             sample_poly_eta1(poly);
          }
@@ -91,7 +89,7 @@ class PolynomialSampler {
       /**
        * NIST FIPS 203 IPD, Algorithm 7 (SamplePolyCBD)
        */
-      void sample_poly_eta1(KyberPoly& poly) {
+      void sample_poly_eta1(Poly& poly) {
          const auto eta1 = m_mode.eta1();
 
          if(eta1 == 2) {
@@ -103,8 +101,8 @@ class PolynomialSampler {
          }
       }
 
-      void cbd2(KyberPoly& poly);
-      void cbd3(KyberPoly& poly);
+      void cbd2(Poly& poly);
+      void cbd3(Poly& poly);
 
    private:
       KyberSeedSigma m_seed;
@@ -112,6 +110,59 @@ class PolynomialSampler {
       uint8_t m_nonce;
 };
 
-}  // namespace Botan
+/**
+ * NIST FIPS 203 IPD, Algorithm 4 (ByteEncode) for d == 12
+ */
+inline void to_bytes(std::span<uint8_t> out, const PolyNTT& p) {
+   BufferStuffer bs(out);
+   for(size_t i = 0; i < p.size() / 2; ++i) {
+      const uint16_t t0 = p[2 * i];
+      const uint16_t t1 = p[2 * i + 1];
+      auto buf = bs.next<3>();
+      buf[0] = static_cast<uint8_t>(t0 >> 0);
+      buf[1] = static_cast<uint8_t>((t0 >> 8) | (t1 << 4));
+      buf[2] = static_cast<uint8_t>(t1 >> 4);
+   }
+   BOTAN_ASSERT_NOMSG(bs.full());
+}
+
+template <concepts::resizable_byte_buffer T = secure_vector<uint8_t>>
+T to_bytes(const PolyVecNTT& vec) {
+   T r(vec.size() * KyberConstants::kSerializedPolynomialByteLength);
+
+   BufferStuffer bs(r);
+   for(auto& v : vec) {
+      to_bytes(bs.next(KyberConstants::kSerializedPolynomialByteLength), v);
+   }
+   BOTAN_ASSERT_NOMSG(bs.full());
+
+   return r;
+}
+
+/**
+ * NIST FIPS 203 IPD, Algorithm 4 (ByteDecode) for d == 12
+ */
+inline void poly_from_bytes(PolyNTT& p, std::span<const uint8_t> a) {
+   for(size_t i = 0; i < p.size() / 2; ++i) {
+      p[2 * i] = ((a[3 * i + 0] >> 0) | (static_cast<uint16_t>(a[3 * i + 1]) << 8)) & 0xFFF;
+      p[2 * i + 1] = ((a[3 * i + 1] >> 4) | (static_cast<uint16_t>(a[3 * i + 2]) << 4)) & 0xFFF;
+   }
+}
+
+inline PolyVecNTT polyvec_from_bytes(std::span<const uint8_t> a, const KyberConstants& mode) {
+   BOTAN_ASSERT(a.size() == mode.polynomial_vector_byte_length(), "wrong byte length for frombytes");
+
+   PolyVecNTT r(mode.k());
+
+   BufferSlicer bs(a);
+   for(size_t i = 0; i < mode.k(); ++i) {
+      poly_from_bytes(r[i], bs.take(KyberConstants::kSerializedPolynomialByteLength));
+   }
+   BOTAN_ASSERT_NOMSG(bs.empty());
+
+   return r;
+}
+
+}  // namespace Botan::Kyber
 
 #endif

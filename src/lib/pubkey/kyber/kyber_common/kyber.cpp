@@ -204,9 +204,9 @@ Kyber_PrivateKey::Kyber_PrivateKey(RandomNumberGenerator& rng, KyberMode m) {
 
    const auto d = rng.random_vec<KyberSeedRandomness>(KyberConstants::kSymBytes);
    auto [rho, sigma] = mode.symmetric_primitives().G(d);
-   PolynomialSampler ps(std::move(sigma), mode);
+   Kyber::PolynomialSampler ps(std::move(sigma), mode);
 
-   const auto A = sample_matrix(rho, false /* not transposed */, mode);
+   const auto A = Kyber::sample_matrix(rho, false /* not transposed */, mode);
    auto s = ntt(ps.sample_vector_eta1());
    const auto e = ntt(ps.sample_vector_eta1());
 
@@ -232,7 +232,7 @@ Kyber_PrivateKey::Kyber_PrivateKey(std::span<const uint8_t> sk, KyberMode m) {
 
    BufferSlicer s(sk);
 
-   auto skpv = PolynomialVector::from_bytes(s.take(mode.polynomial_vector_byte_length()), mode);
+   auto skpv = Kyber::polyvec_from_bytes(s.take(mode.polynomial_vector_byte_length()), mode);
    auto pub_key = s.take<KyberSerializedPublicKey>(mode.public_key_byte_length());
    auto puk_key_hash = s.take<KyberHashedPublicKey>(KyberConstants::kPublicKeyHashLength);
    auto z = s.copy<KyberImplicitRejectionValue>(KyberConstants::kZLength);
@@ -258,7 +258,8 @@ secure_vector<uint8_t> Kyber_PrivateKey::raw_private_key_bits() const {
 }
 
 secure_vector<uint8_t> Kyber_PrivateKey::private_key_bits() const {
-   return concat(m_private->s().to_bytes<secure_vector<uint8_t>>(),
+   return concat(Kyber::to_bytes<secure_vector<uint8_t>>(
+                    m_private->s().reduce() /* TODO: should that reduction really be needed here? */),
                  m_public->public_key_bits_raw(),
                  m_public->H_public_key_bits_raw(),
                  m_private->z());

@@ -521,7 +521,7 @@ class PolynomialMatrix {
       PolynomialMatrix() = delete;
 
       // Adapter to the new structure
-      PolynomialMatrix(const KyberPolyMat& mat) {
+      PolynomialMatrix(const Kyber::PolyMat& mat) {
          m_mat.reserve(mat.size());
          for(size_t i = 0; i < mat.size(); ++i) {
             m_mat.emplace_back(mat[i]);

@@ -12,6 +12,7 @@
 #ifndef BOTAN_KYBER_INTERNAL_KEYS_H_
 #define BOTAN_KYBER_INTERNAL_KEYS_H_
 
+#include <botan/internal/kyber_algos.h>
 #include <botan/internal/kyber_constants.h>
 #include <botan/internal/kyber_structures.h>
 #include <botan/internal/kyber_types.h>
@@ -49,14 +50,14 @@ class Kyber_PublicKeyInternal {
 
 class Kyber_PrivateKeyInternal {
    public:
-      Kyber_PrivateKeyInternal(KyberConstants mode, PolynomialVector s, KyberImplicitRejectionValue z) :
+      Kyber_PrivateKeyInternal(KyberConstants mode, Kyber::PolyVecNTT s, KyberImplicitRejectionValue z) :
             m_mode(std::move(mode)), m_s(std::move(s)), m_z(std::move(z)) {}
 
       KyberMessage indcpa_decrypt(Ciphertext ct) const;
 
-      PolynomialVector& s() { return m_s; }
+      Kyber::PolyVecNTT& s() { return m_s; }
 
-      const PolynomialVector& s() const { return m_s; }
+      const Kyber::PolyVecNTT& s() const { return m_s; }
 
       const KyberImplicitRejectionValue& z() const { return m_z; }
 
@@ -66,7 +67,7 @@ class Kyber_PrivateKeyInternal {
 
    private:
       KyberConstants m_mode;
-      PolynomialVector m_s;
+      Kyber::PolyVecNTT m_s;
       KyberImplicitRejectionValue m_z;
 };
 
