@@ -1,0 +1,19 @@
+<defines>
+CURVE_448 -> 20240219
+</defines>
+
+<module_info>
+name -> "Curve448"
+</module_info>
+
+<requires>
+curve448_utils
+</requires>
+
+<header:public>
+curve448.h
+</header:public>
+
+<header:internal>
+curve448_internal.h
+</header:internal>
