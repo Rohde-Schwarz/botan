@@ -1,0 +1,12 @@
+<defines>
+CURVE_448_UTILS -> 20240301
+</defines>
+
+<module_info>
+name -> "Curve25519_Utils"
+</module_info>
+
+<header:internal>
+curve448_gf.h
+curve448_scalar.h
+</header:internal>
