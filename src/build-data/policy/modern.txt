@@ -29,7 +29,9 @@ bcrypt
 pbes2
 
 ed25519
+ed448
 curve25519
+curve448
 ecdh
 ecdsa
 rsa
@@ -48,6 +50,7 @@ ffi
 tls
 prf_tls
 ed25519
+ed448
 
 ghash_cpu
 ghash_vperm

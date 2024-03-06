@@ -1500,7 +1500,7 @@ std::vector<std::string> get_sig_paddings(const std::string& sig_algo, const std
    } else if(sig_algo == "DSA" || sig_algo == "ECDSA" || sig_algo == "ECGDSA" || sig_algo == "ECKCDSA" ||
              sig_algo == "GOST-34.10") {
       return {hash};
-   } else if(sig_algo == "Ed25519") {
+   } else if(sig_algo == "Ed25519" || sig_algo == "Ed448") {
       return {"Pure"};
    } else if(sig_algo == "Dilithium") {
       return {"Randomized"};
@@ -1515,7 +1515,7 @@ class X509_Cert_Unit_Tests final : public Test {
          std::vector<Test::Result> results;
 
          const std::string sig_algos[]{
-            "RSA", "DSA", "ECDSA", "ECGDSA", "ECKCDSA", "GOST-34.10", "Ed25519", "Dilithium"};
+            "RSA", "DSA", "ECDSA", "ECGDSA", "ECKCDSA", "GOST-34.10", "Ed25519", "Ed448", "Dilithium"};
 
          for(const std::string& algo : sig_algos) {
    #if !defined(BOTAN_HAS_EMSA_PKCS1)
@@ -1527,6 +1527,9 @@ class X509_Cert_Unit_Tests final : public Test {
 
             if(algo == "Ed25519") {
                hash = "SHA-512";
+            }
+            if(algo == "Ed448") {
+               hash = "SHAKE-256(912)";
             }
             if(algo == "Dilithium") {
                hash = "SHAKE-256(512)";
