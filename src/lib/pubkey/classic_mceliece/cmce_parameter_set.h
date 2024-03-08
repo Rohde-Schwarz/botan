@@ -44,6 +44,17 @@ enum class Classic_McEliece_Parameter_Set {
    mceliece8192128f,    // ISO + NIST
    mceliece8192128pc,   // ISO
    mceliece8192128pcf,  // ISO
+
+   /// Reduced instances for side channel analysis (Self-created test instance with
+   /// m=8, n=128, t=8, f(z)=z^8+z^7+z^2+z+1, F(y)=y^8+y^4+y^3+y^2+1)
+   /// Minimal instance without semi-systematic matrix creation and no plaintext confirmation
+   test,
+   /// Minimal instance with semi-systematic matrix creation and no plaintext confirmation
+   testf,
+   /// Minimal instance without semi-systematic matrix creation and with plaintext confirmation
+   testpc,
+   /// Minimal instance with semi-systematic matrix creation and with plaintext confirmation
+   testpcf
 };
 
 /**

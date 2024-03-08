@@ -59,6 +59,19 @@ Classic_McEliece_Parameter_Set cmce_param_set_from_str(std::string_view param_na
    if(param_name == "mceliece8192128pcf") {
       return Classic_McEliece_Parameter_Set::mceliece8192128pcf;
    }
+   // TODO: Remove on final PR
+   if(param_name == "test") {
+      return Classic_McEliece_Parameter_Set::test;
+   }
+   if(param_name == "testf") {
+      return Classic_McEliece_Parameter_Set::testf;
+   }
+   if(param_name == "testpc") {
+      return Classic_McEliece_Parameter_Set::testpc;
+   }
+   if(param_name == "testpcf") {
+      return Classic_McEliece_Parameter_Set::testpcf;
+   }
 
    throw Decoding_Error("Cannot convert string to CMCE parameter set");
 }
@@ -97,6 +110,17 @@ std::string cmce_str_from_param_set(Classic_McEliece_Parameter_Set param) {
          return "mceliece8192128pc";
       case Classic_McEliece_Parameter_Set::mceliece8192128pcf:
          return "mceliece8192128pcf";
+      // TODO: Remove on final PR
+      case Classic_McEliece_Parameter_Set::test:
+         return "test";
+      case Classic_McEliece_Parameter_Set::testf:
+         return "testf";
+      case Classic_McEliece_Parameter_Set::testpc:
+         return "testpc";
+      case Classic_McEliece_Parameter_Set::testpcf:
+         return "testpcf";
+      default:
+         throw Decoding_Error("Parameter set not supported");
    }
    BOTAN_ASSERT_UNREACHABLE();
 }

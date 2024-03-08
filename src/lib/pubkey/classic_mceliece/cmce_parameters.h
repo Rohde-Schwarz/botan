@@ -13,6 +13,7 @@
 #include <botan/cmce_parameter_set.h>
 #include <botan/hash.h>
 #include <botan/xof.h>
+#include <botan/internal/bitvector.h>
 #include <botan/internal/cmce_gf.h>
 #include <botan/internal/cmce_poly.h>
 
@@ -70,7 +71,8 @@ class BOTAN_TEST_API Classic_McEliece_Parameters final {
                 (m_set == Classic_McEliece_Parameter_Set::mceliece6960119pc) ||
                 (m_set == Classic_McEliece_Parameter_Set::mceliece6960119pcf) ||
                 (m_set == Classic_McEliece_Parameter_Set::mceliece8192128pc) ||
-                (m_set == Classic_McEliece_Parameter_Set::mceliece8192128pcf);
+                (m_set == Classic_McEliece_Parameter_Set::mceliece8192128pcf) ||
+                (m_set == Classic_McEliece_Parameter_Set::testpc);
       }
 
       /**
@@ -85,7 +87,8 @@ class BOTAN_TEST_API Classic_McEliece_Parameters final {
                 (m_set == Classic_McEliece_Parameter_Set::mceliece6960119f) ||
                 (m_set == Classic_McEliece_Parameter_Set::mceliece6960119pcf) ||
                 (m_set == Classic_McEliece_Parameter_Set::mceliece8192128f) ||
-                (m_set == Classic_McEliece_Parameter_Set::mceliece8192128pcf);
+                (m_set == Classic_McEliece_Parameter_Set::mceliece8192128pcf) ||
+                (m_set == Classic_McEliece_Parameter_Set::testf);
       }
 
       /**

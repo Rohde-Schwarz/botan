@@ -35,6 +35,13 @@ CmceGfMod determine_poly_f(Classic_McEliece_Parameter_Set param_set) {
       case Classic_McEliece_Parameter_Set::mceliece8192128pcf:
          // z^12 + z^3 + 1
          return CmceGfMod(0b0010000000011011);
+      // TODO: Remove on final PR
+      case Botan::Classic_McEliece_Parameter_Set::test:
+      case Botan::Classic_McEliece_Parameter_Set::testf:
+      case Botan::Classic_McEliece_Parameter_Set::testpc:
+      case Botan::Classic_McEliece_Parameter_Set::testpcf:
+         // z^8 + z^7 + z^2 + z + 1 (test instance)
+         return CmceGfMod(0b0000000110000111);
    }
    BOTAN_ASSERT_UNREACHABLE();
 }
@@ -43,6 +50,18 @@ Classic_McEliece_Polynomial_Ring determine_poly_ring(Classic_McEliece_Parameter_
    CmceGfMod poly_f = determine_poly_f(param_set);
 
    switch(param_set) {
+      // TODO: Remove test instance on final PR
+      case Botan::Classic_McEliece_Parameter_Set::test:
+      case Botan::Classic_McEliece_Parameter_Set::testf:
+      case Botan::Classic_McEliece_Parameter_Set::testpc:
+      case Botan::Classic_McEliece_Parameter_Set::testpcf:
+         // y^8 + y^4 + y^3 + y^2 + 1 (test instances)
+         return {{{0, Classic_McEliece_GF(CmceGfElem(1), poly_f)},
+                  {2, Classic_McEliece_GF(CmceGfElem(1), poly_f)},
+                  {3, Classic_McEliece_GF(CmceGfElem(1), poly_f)},
+                  {4, Classic_McEliece_GF(CmceGfElem(1), poly_f)}},
+                 poly_f,
+                 8};
       case Classic_McEliece_Parameter_Set::mceliece348864:
       case Classic_McEliece_Parameter_Set::mceliece348864f:
          // y^64 + y^3 + y + z
@@ -121,6 +140,13 @@ Classic_McEliece_Parameters Classic_McEliece_Parameters::create(Classic_McEliece
       case Classic_McEliece_Parameter_Set::mceliece8192128pc:
       case Classic_McEliece_Parameter_Set::mceliece8192128pcf:
          return Classic_McEliece_Parameters(set, 13, 8192, std::move(poly_ring));
+
+      // TODO: Remove on final PR
+      case Botan::Classic_McEliece_Parameter_Set::test:
+      case Botan::Classic_McEliece_Parameter_Set::testf:
+      case Botan::Classic_McEliece_Parameter_Set::testpc:
+      case Botan::Classic_McEliece_Parameter_Set::testpcf:
+         return Classic_McEliece_Parameters(set, 8, 128, std::move(poly_ring));
    }
    BOTAN_ASSERT_UNREACHABLE();
 }
@@ -172,6 +198,12 @@ size_t Classic_McEliece_Parameters::estimated_strength() const {
       case Botan::Classic_McEliece_Parameter_Set::mceliece8192128pc:
       case Botan::Classic_McEliece_Parameter_Set::mceliece8192128pcf:
          return 256;  // 275 in the document. Capped at 256 because of the seed length.
+      // TODO: Remove on final PR
+      case Botan::Classic_McEliece_Parameter_Set::test:
+      case Botan::Classic_McEliece_Parameter_Set::testf:
+      case Botan::Classic_McEliece_Parameter_Set::testpc:
+      case Botan::Classic_McEliece_Parameter_Set::testpcf:
+         return 0;
    }
    BOTAN_ASSERT_UNREACHABLE();
 }
