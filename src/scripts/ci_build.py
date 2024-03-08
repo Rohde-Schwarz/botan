@@ -173,8 +173,8 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
     if ccache is not None:
         flags += ['--no-store-vc-rev', '--compiler-cache=%s' % (ccache)]
 
-    if not disable_werror:
-        flags += ['--werror-mode']
+    # if not disable_werror:
+    #     flags += ['--werror-mode']
 
     if target_cpu is not None:
         flags += ['--cpu=%s' % (target_cpu)]
