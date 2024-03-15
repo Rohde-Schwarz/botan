@@ -12,7 +12,7 @@ permissions:
 
 on:
   push:
-    branches: [ master ]
+    branches: [ ci/check ]
   pull_request:
     branches: [ master ]
 
