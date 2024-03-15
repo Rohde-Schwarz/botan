@@ -727,8 +727,7 @@ int botan_privkey_load_ed448(botan_privkey_t* key, const uint8_t privkey[57]) {
 #if defined(BOTAN_HAS_ED448)
    *key = nullptr;
    return ffi_guard_thunk(__func__, [=]() -> int {
-      const Botan::secure_vector<uint8_t> privkey_vec(privkey, privkey + 57);
-      auto ed448 = std::make_unique<Botan::Ed448_PrivateKey>(privkey_vec);
+      auto ed448 = std::make_unique<Botan::Ed448_PrivateKey>(std::span(privkey, 57));
       *key = new botan_privkey_struct(std::move(ed448));
       return BOTAN_FFI_SUCCESS;
    });
@@ -742,8 +741,7 @@ int botan_pubkey_load_ed448(botan_pubkey_t* key, const uint8_t pubkey[57]) {
 #if defined(BOTAN_HAS_ED448)
    *key = nullptr;
    return ffi_guard_thunk(__func__, [=]() -> int {
-      const std::vector<uint8_t> pubkey_vec(pubkey, pubkey + 57);
-      auto ed448 = std::make_unique<Botan::Ed448_PublicKey>(pubkey_vec);
+      auto ed448 = std::make_unique<Botan::Ed448_PublicKey>(std::span(pubkey, 57));
       *key = new botan_pubkey_struct(std::move(ed448));
       return BOTAN_FFI_SUCCESS;
    });
@@ -758,9 +756,7 @@ int botan_privkey_ed448_get_privkey(botan_privkey_t key, uint8_t output[57]) {
    return BOTAN_FFI_VISIT(key, [=](const auto& k) {
       if(auto ed = dynamic_cast<const Botan::Ed448_PrivateKey*>(&k)) {
          const auto ed_key = ed->raw_private_key_bits();
-         if(ed_key.size() != 57)
-            return BOTAN_FFI_ERROR_INSUFFICIENT_BUFFER_SPACE;
-         Botan::copy_mem(output, ed_key.data(), ed_key.size());
+         Botan::copy_mem(std::span(output, 57), ed_key);
          return BOTAN_FFI_SUCCESS;
       } else {
          return BOTAN_FFI_ERROR_BAD_PARAMETER;
@@ -777,9 +773,7 @@ int botan_pubkey_ed448_get_pubkey(botan_pubkey_t key, uint8_t output[57]) {
    return BOTAN_FFI_VISIT(key, [=](const auto& k) {
       if(auto ed = dynamic_cast<const Botan::Ed448_PublicKey*>(&k)) {
          const auto ed_key = ed->public_key_bits();
-         if(ed_key.size() != 57)
-            return BOTAN_FFI_ERROR_INSUFFICIENT_BUFFER_SPACE;
-         Botan::copy_mem(output, ed_key.data(), ed_key.size());
+         Botan::copy_mem(std::span(output, 57), ed_key);
          return BOTAN_FFI_SUCCESS;
       } else {
          return BOTAN_FFI_ERROR_BAD_PARAMETER;
@@ -867,8 +861,7 @@ int botan_privkey_load_x448(botan_privkey_t* key, const uint8_t privkey[56]) {
 #if defined(BOTAN_HAS_CURVE_448)
    *key = nullptr;
    return ffi_guard_thunk(__func__, [=]() -> int {
-      const Botan::secure_vector<uint8_t> privkey_vec(privkey, privkey + 56);
-      auto x448 = std::make_unique<Botan::Curve448_PrivateKey>(privkey_vec);
+      auto x448 = std::make_unique<Botan::Curve448_PrivateKey>(std::span(privkey, 56));
       *key = new botan_privkey_struct(std::move(x448));
       return BOTAN_FFI_SUCCESS;
    });
@@ -882,8 +875,7 @@ int botan_pubkey_load_x448(botan_pubkey_t* key, const uint8_t pubkey[56]) {
 #if defined(BOTAN_HAS_CURVE_448)
    *key = nullptr;
    return ffi_guard_thunk(__func__, [=]() -> int {
-      const std::vector<uint8_t> pubkey_vec(pubkey, pubkey + 56);
-      auto x448 = std::make_unique<Botan::Curve448_PublicKey>(pubkey_vec);
+      auto x448 = std::make_unique<Botan::Curve448_PublicKey>(std::span(pubkey, 56));
       *key = new botan_pubkey_struct(std::move(x448));
       return BOTAN_FFI_SUCCESS;
    });
@@ -898,9 +890,7 @@ int botan_privkey_x448_get_privkey(botan_privkey_t key, uint8_t output[56]) {
    return BOTAN_FFI_VISIT(key, [=](const auto& k) {
       if(auto x448 = dynamic_cast<const Botan::Curve448_PrivateKey*>(&k)) {
          const auto x448_key = x448->raw_private_key_bits();
-         if(x448_key.size() != 56)
-            return BOTAN_FFI_ERROR_INSUFFICIENT_BUFFER_SPACE;
-         Botan::copy_mem(output, x448_key.data(), x448_key.size());
+         Botan::copy_mem(std::span(output, 56), x448_key);
          return BOTAN_FFI_SUCCESS;
       } else {
          return BOTAN_FFI_ERROR_BAD_PARAMETER;
@@ -917,9 +907,7 @@ int botan_pubkey_x448_get_pubkey(botan_pubkey_t key, uint8_t output[56]) {
    return BOTAN_FFI_VISIT(key, [=](const auto& k) {
       if(auto x448 = dynamic_cast<const Botan::Curve448_PublicKey*>(&k)) {
          const std::vector<uint8_t>& x448_key = x448->public_value();
-         if(x448_key.size() != 56)
-            return BOTAN_FFI_ERROR_INSUFFICIENT_BUFFER_SPACE;
-         Botan::copy_mem(output, x448_key.data(), x448_key.size());
+         Botan::copy_mem(std::span(output, 56), x448_key);
          return BOTAN_FFI_SUCCESS;
       } else {
          return BOTAN_FFI_ERROR_BAD_PARAMETER;

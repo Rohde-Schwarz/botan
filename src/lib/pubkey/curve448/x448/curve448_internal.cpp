@@ -23,16 +23,16 @@ secure_vector<uint8_t> encode_point(const Point448& p) {
 }
 
 Point448 decode_point(std::span<const uint8_t> p_bytes) {
-   BOTAN_ARG_CHECK(p_bytes.size() == CURVE448_OBJ_LEN, "Invalid size for Curve448 point");
-   Point448 buf;
-   copy_mem(buf.get(), p_bytes);
-   return buf;
+   BOTAN_ARG_CHECK(p_bytes.size() == X448_LEN, "Invalid size for Curve448 point");
+   // Point448 buf;
+   // copy_mem(buf.get(), p_bytes);
+   // typecast_copy<Point448>(p_bytes);
+   return typecast_copy<Point448>(p_bytes);
 }
 
 ScalarX448 decode_scalar(std::span<const uint8_t> scalar_bytes) {
-   BOTAN_ARG_CHECK(scalar_bytes.size() == CURVE448_OBJ_LEN, "Invalid size for Curve448 scalar");
-   ScalarX448 buf;
-   copy_mem(buf.get(), scalar_bytes);
+   BOTAN_ARG_CHECK(scalar_bytes.size() == X448_LEN, "Invalid size for Curve448 scalar");
+   auto buf = typecast_copy<ScalarX448>(scalar_bytes);
 
    buf[0] &= 0xfc;
    buf[55] |= 0x80;
@@ -40,6 +40,7 @@ ScalarX448 decode_scalar(std::span<const uint8_t> scalar_bytes) {
    return buf;
 }
 
+/// Multiply a scalar with the base group element (5)
 Point448 x448_basepoint(const ScalarX448& k) {
    const Point448 u({5});
    return x448(k, u);

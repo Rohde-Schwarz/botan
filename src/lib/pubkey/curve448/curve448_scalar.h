@@ -10,6 +10,7 @@
 
 #include <botan/strong_type.h>
 #include <botan/types.h>
+#include <botan/internal/bit_ops.h>
 #include <botan/internal/loadstor.h>
 
 namespace Botan {
@@ -20,7 +21,7 @@ constexpr size_t words_for_bits(size_t x) {
 }
 
 constexpr size_t WORDS_446 = words_for_bits(446);
-constexpr size_t BYTES_446 = 56;
+constexpr size_t BYTES_446 = ceil_tobytes(446);
 
 /**
  * @brief Representation of a scalar for Curve448.
@@ -39,7 +40,7 @@ class BOTAN_TEST_API Scalar448 {
       Scalar448(std::span<const uint8_t> x);
 
       /// @brief Convert the scalar to bytes in little endian.
-      template <size_t S>
+      template <size_t S = BYTES_446>
       std::array<uint8_t, S> to_bytes() const
          requires(S >= BYTES_446)
       {
@@ -61,7 +62,7 @@ class BOTAN_TEST_API Scalar448 {
       static bool bytes_are_reduced(std::span<const uint8_t> x);
 
    private:
-      Scalar448(const std::array<word, WORDS_446>& scalar_words) : m_scalar_words(scalar_words) {}
+      Scalar448(std::span<const word, WORDS_446> scalar_words) { copy_mem(m_scalar_words, scalar_words); }
 
       std::array<word, WORDS_446> m_scalar_words;
 };

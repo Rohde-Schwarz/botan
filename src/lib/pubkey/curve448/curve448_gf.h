@@ -10,11 +10,16 @@
 
 #include <botan/mem_ops.h>
 #include <botan/types.h>
+#include <botan/internal/bit_ops.h>
 
 #include <array>
 #include <span>
 
 namespace Botan {
+
+constexpr size_t BYTES_448 = ceil_tobytes(448);
+/* uint64_t words to store a 448 bit value */
+constexpr size_t WORDS_448 = 7;
 
 /**
  * This class represents a GF element in the field GF(2^448 - 2^224 - 1). Computations are
@@ -33,13 +38,13 @@ class Gf448Elem {
        * @brief Construct a GF element from a 448-bit integer gives as 56 bytes @p x in
        * little-endian order.
        */
-      Gf448Elem(std::span<const uint8_t, 56> x);
+      Gf448Elem(std::span<const uint8_t, BYTES_448> x);
 
       /**
        * @brief Construct a GF element from a 448-bit integer gives as 7 uint64_t words @p x in
        * little-endian order.
        */
-      Gf448Elem(std::span<const uint64_t, 7> data) { copy_mem(m_x, data); }
+      Gf448Elem(std::span<const uint64_t, WORDS_448> data) { copy_mem(m_x, data); }
 
       /**
        * @brief Construct a GF element by passing the least significant 64 bits as a word.
@@ -53,13 +58,13 @@ class Gf448Elem {
        *
        * @param out The 56 byte output buffer.
        */
-      void to_bytes(std::span<uint8_t, 56> out) const;
+      void to_bytes(std::span<uint8_t, BYTES_448> out) const;
 
       /**
        * @brief Return the canonical representation of the GF element as 56 bytes in little-endian
        * order.
        */
-      std::array<uint8_t, 56> to_bytes() const;
+      std::array<uint8_t, BYTES_448> to_bytes() const;
 
       /**
        * @brief Swap this and other if b == true. Constant time for any b.
@@ -98,7 +103,7 @@ class Gf448Elem {
 
       bool operator==(const Gf448Elem& other) const;
 
-      bool operator!=(const Gf448Elem& other) const { return !(*this == other); }
+      bool operator!=(const Gf448Elem& other) const = default;
 
       /**
        * @brief Return true iff this element is zero. Constant time.
@@ -116,7 +121,7 @@ class Gf448Elem {
        * Note that the internal representation is not necessarily canonical, i.e.
        * the value might be larger than the prime modulus.
        */
-      std::array<uint64_t, 7>& words() { return m_x; }
+      std::span<uint64_t, WORDS_448> words() { return m_x; }
 
       /**
        * @brief Constant accessor to the internal words of the GF element.
@@ -124,16 +129,16 @@ class Gf448Elem {
        * Note that the internal representation is not necessarily canonical, i.e.
        * the value might be larger than the prime modulus.
        */
-      const std::array<uint64_t, 7>& const_words() const { return m_x; }
+      std::span<const uint64_t, WORDS_448> words() const { return m_x; }
 
       /**
        * @brief Given 56 bytes, checks that the (little endian) number from this
        * bytes is a valid GF element, i.e. is smaller than the prime modulus.
        */
-      static bool bytes_are_canonical_representation(std::span<const uint8_t, 56> x);
+      static bool bytes_are_canonical_representation(std::span<const uint8_t, BYTES_448> x);
 
    private:
-      std::array<uint64_t, 7> m_x;
+      std::array<uint64_t, WORDS_448> m_x;
 };
 
 }  // namespace Botan

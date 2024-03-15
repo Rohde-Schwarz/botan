@@ -13,15 +13,15 @@
 
 namespace Botan {
 
-using Point448 = Strong<std::array<uint8_t, 56>, struct Point448_>;
+constexpr size_t X448_LEN = 56;
+
+using Point448 = Strong<std::array<uint8_t, X448_LEN>, struct Point448_>;
 
 // Note that we do not use the scalar of curve448_scalar.h since the x448 algorithm
 // requires a scalar that is even. When reducing (modulo the group order) the scalar using
 // this class, the computation becomes invalid. Since we do not need to reduce, we
 // simply work on bytes for x448 */
-using ScalarX448 = Strong<std::array<uint8_t, 56>, struct Scalar448_>;
-
-constexpr size_t CURVE448_OBJ_LEN = 56;
+using ScalarX448 = Strong<std::array<uint8_t, X448_LEN>, struct Scalar448_>;
 
 /**
  * @brief Multiply a scalar with the standard group element (5)

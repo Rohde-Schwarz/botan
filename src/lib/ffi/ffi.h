@@ -1437,25 +1437,25 @@ BOTAN_FFI_EXPORT(3, 4) int botan_pubkey_ed448_get_pubkey(botan_pubkey_t key, uin
 * Algorithm specific key operations: X25519
 */
 
-BOTAN_FFI_EXPORT(3, 4) int botan_privkey_load_x25519(botan_privkey_t* key, const uint8_t privkey[32]);
+BOTAN_FFI_EXPORT(2, 8) int botan_privkey_load_x25519(botan_privkey_t* key, const uint8_t privkey[32]);
 
-BOTAN_FFI_EXPORT(3, 4) int botan_pubkey_load_x25519(botan_pubkey_t* key, const uint8_t pubkey[32]);
+BOTAN_FFI_EXPORT(2, 8) int botan_pubkey_load_x25519(botan_pubkey_t* key, const uint8_t pubkey[32]);
 
-BOTAN_FFI_EXPORT(3, 4) int botan_privkey_x25519_get_privkey(botan_privkey_t key, uint8_t output[32]);
+BOTAN_FFI_EXPORT(2, 8) int botan_privkey_x25519_get_privkey(botan_privkey_t key, uint8_t output[32]);
 
-BOTAN_FFI_EXPORT(3, 4) int botan_pubkey_x25519_get_pubkey(botan_pubkey_t key, uint8_t pubkey[32]);
+BOTAN_FFI_EXPORT(2, 8) int botan_pubkey_x25519_get_pubkey(botan_pubkey_t key, uint8_t pubkey[32]);
 
 /*
 * Algorithm specific key operations: X448
 */
 
-BOTAN_FFI_EXPORT(2, 8) int botan_privkey_load_x448(botan_privkey_t* key, const uint8_t privkey[56]);
+BOTAN_FFI_EXPORT(3, 4) int botan_privkey_load_x448(botan_privkey_t* key, const uint8_t privkey[56]);
 
-BOTAN_FFI_EXPORT(2, 8) int botan_pubkey_load_x448(botan_pubkey_t* key, const uint8_t pubkey[56]);
+BOTAN_FFI_EXPORT(3, 4) int botan_pubkey_load_x448(botan_pubkey_t* key, const uint8_t pubkey[56]);
 
-BOTAN_FFI_EXPORT(2, 8) int botan_privkey_x448_get_privkey(botan_privkey_t key, uint8_t output[56]);
+BOTAN_FFI_EXPORT(3, 4) int botan_privkey_x448_get_privkey(botan_privkey_t key, uint8_t output[56]);
 
-BOTAN_FFI_EXPORT(2, 8) int botan_pubkey_x448_get_pubkey(botan_pubkey_t key, uint8_t pubkey[56]);
+BOTAN_FFI_EXPORT(3, 4) int botan_pubkey_x448_get_pubkey(botan_pubkey_t key, uint8_t pubkey[56]);
 
 /*
 * Algorithm specific key operations: Kyber

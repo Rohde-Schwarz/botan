@@ -64,7 +64,7 @@ inline uint64_t u64_sub_with_borrow(uint64_t a, uint64_t b, bool* borrow) {
  * @param h_3 Output
  * @param h_1 Input
  */
-void reduce_after_add(std::span<uint64_t, 7> h_3, std::span<const uint64_t, 8> h_1) {
+void reduce_after_add(std::span<uint64_t, WORDS_448> h_3, std::span<const uint64_t, 8> h_1) {
    std::array<uint64_t, 8> h_2;
    bool carry;
 
@@ -101,7 +101,7 @@ void reduce_after_add(std::span<uint64_t, 7> h_3, std::span<const uint64_t, 8> h
  *
  * Algorithm 1 of paper "Reduction Modulo 2^448 - 2^224 - 1".
  */
-void reduce_after_mul(std::span<uint64_t, 7> out, std::span<const uint64_t, 14> in) {
+void reduce_after_mul(std::span<uint64_t, WORDS_448> out, std::span<const uint64_t, 14> in) {
    std::array<uint64_t, 8> r;
    std::array<uint64_t, 8> s;
    std::array<uint64_t, 8> t_0;
@@ -149,8 +149,11 @@ void reduce_after_mul(std::span<uint64_t, 7> out, std::span<const uint64_t, 14> 
 }
 
 constexpr size_t words_per_uint64 = 8 / sizeof(word);
+static_assert(8 % sizeof(word) == 0);  // Greetings to the future
 
-void gf_mul(std::span<uint64_t, 7> out, std::span<const uint64_t, 7> a, std::span<const uint64_t, 7> b) {
+void gf_mul(std::span<uint64_t, WORDS_448> out,
+            std::span<const uint64_t, WORDS_448> a,
+            std::span<const uint64_t, WORDS_448> b) {
    std::array<uint64_t, 14> ws;
    if constexpr(std::same_as<uint64_t, word>) {
       // Reinterpret cast to itself to prevent compiler errors on non 64-bit systems
@@ -158,8 +161,8 @@ void gf_mul(std::span<uint64_t, 7> out, std::span<const uint64_t, 7> a, std::spa
                         reinterpret_cast<const word*>(a.data()),
                         reinterpret_cast<const word*>(b.data()));
    } else {
-      const auto a_arr = load_le<std::array<word, words_per_uint64 * 7>>(store_le(a));
-      const auto b_arr = load_le<std::array<word, words_per_uint64 * 7>>(store_le(b));
+      const auto a_arr = load_le<std::array<word, words_per_uint64 * WORDS_448>>(store_le(a));
+      const auto b_arr = load_le<std::array<word, words_per_uint64 * WORDS_448>>(store_le(b));
       auto ws_arr = std::array<word, words_per_uint64 * 14>{};
 
       bigint_mul(ws_arr.data(),
@@ -178,14 +181,14 @@ void gf_mul(std::span<uint64_t, 7> out, std::span<const uint64_t, 7> a, std::spa
    reduce_after_mul(out, ws);
 }
 
-void gf_square(std::span<uint64_t, 7> out, std::span<const uint64_t, 7> a) {
+void gf_square(std::span<uint64_t, WORDS_448> out, std::span<const uint64_t, WORDS_448> a) {
    std::array<uint64_t, 14> ws;
 
    if constexpr(std::same_as<uint64_t, word>) {
       // Reinterpret cast to itself to prevent compiler errors on non 64-bit systems
       bigint_comba_sqr7(reinterpret_cast<word*>(ws.data()), reinterpret_cast<const word*>(a.data()));
    } else {
-      const auto a_arr = load_le<std::array<word, words_per_uint64 * 7>>(store_le(a));
+      const auto a_arr = load_le<std::array<word, words_per_uint64 * WORDS_448>>(store_le(a));
       auto ws_arr = std::array<word, words_per_uint64 * 14>{};
       bigint_sqr(ws_arr.data(), ws_arr.size(), a_arr.data(), a_arr.size(), a_arr.size(), nullptr, 0);
       load_le(ws, store_le(ws_arr));
@@ -193,18 +196,18 @@ void gf_square(std::span<uint64_t, 7> out, std::span<const uint64_t, 7> a) {
    reduce_after_mul(out, ws);
 }
 
-void gf_add(std::span<uint64_t, 7> out, std::span<const uint64_t, 7> a, std::span<const uint64_t, 7> b) {
-   std::array<uint64_t, 8> ws;
-   for(size_t i = 0; i < 7; ++i) {
-      ws[i] = a[i];
-   }
-   ws[7] = 0;
+void gf_add(std::span<uint64_t, WORDS_448> out,
+            std::span<const uint64_t, WORDS_448> a,
+            std::span<const uint64_t, WORDS_448> b) {
+   std::array<uint64_t, WORDS_448 + 1> ws;
+   copy_mem(std::span(ws).first<WORDS_448>(), a);
+   ws[WORDS_448] = 0;
 
    bool carry = false;
-   for(size_t i = 0; i < 7; ++i) {
+   for(size_t i = 0; i < WORDS_448; ++i) {
       ws[i] = u64_add_with_carry(a[i], b[i], &carry);
    }
-   ws[7] = carry;
+   ws[WORDS_448] = carry;
 
    reduce_after_add(out, ws);
 }
@@ -214,12 +217,14 @@ void gf_add(std::span<uint64_t, 7> out, std::span<const uint64_t, 7> a, std::spa
  *
  * Algorithm 2 of paper: "Reduction Modulo 2^448 - 2^224 - 1"
  */
-void gf_sub(std::span<uint64_t, 7> out, std::span<const uint64_t, 7> a, std::span<const uint64_t, 7> b) {
-   std::array<uint64_t, 7> h_0;
-   std::array<uint64_t, 7> h_1;
+void gf_sub(std::span<uint64_t, WORDS_448> out,
+            std::span<const uint64_t, WORDS_448> a,
+            std::span<const uint64_t, WORDS_448> b) {
+   std::array<uint64_t, WORDS_448> h_0;
+   std::array<uint64_t, WORDS_448> h_1;
 
    bool borrow = false;
-   for(size_t i = 0; i < 7; ++i) {
+   for(size_t i = 0; i < WORDS_448; ++i) {
       h_0[i] = u64_sub_with_borrow(a[i], b[i], &borrow);
    }
    uint64_t delta = borrow;
@@ -251,7 +256,7 @@ void gf_sub(std::span<uint64_t, 7> out, std::span<const uint64_t, 7> a, std::spa
  * @brief Inversion in GF(P) using Fermat's little theorem:
  * x^-1 = x^(P-2) mod P
  */
-void gf_inv(std::span<uint64_t, 7> out, std::span<const uint64_t, 7> a) {
+void gf_inv(std::span<uint64_t, WORDS_448> out, std::span<const uint64_t, WORDS_448> a) {
    clear_mem(out);
    out[0] = 1;
    // Square and multiply
@@ -270,29 +275,29 @@ void gf_inv(std::span<uint64_t, 7> out, std::span<const uint64_t, 7> a) {
  * I.e. if the number is greater than P, subtract P. The number cannot be >= 2P
  * since 2*P > 2^(7*64).
  */
-std::array<uint64_t, 7> to_canonical(std::span<const uint64_t, 7> in) {
-   std::array<uint64_t, 7> p = {0xffffffffffffffff,
-                                0xffffffffffffffff,
-                                0xffffffffffffffff,
-                                0xfffffffeffffffff,
-                                0xffffffffffffffff,
-                                0xffffffffffffffff,
-                                0xffffffffffffffff};
+std::array<uint64_t, WORDS_448> to_canonical(std::span<const uint64_t, WORDS_448> in) {
+   const std::array<uint64_t, WORDS_448> p = {0xffffffffffffffff,
+                                              0xffffffffffffffff,
+                                              0xffffffffffffffff,
+                                              0xfffffffeffffffff,
+                                              0xffffffffffffffff,
+                                              0xffffffffffffffff,
+                                              0xffffffffffffffff};
 
-   std::array<uint64_t, 7> in_minus_p;
+   std::array<uint64_t, WORDS_448> in_minus_p;
    bool borrow = false;
-   for(int i = 0; i < 7; ++i) {
+   for(size_t i = 0; i < WORDS_448; ++i) {
       in_minus_p[i] = u64_sub_with_borrow(in[i], p[i], &borrow);
    }
-   std::array<uint64_t, 7> out;
-   CT::Mask<uint64_t>::expand(borrow).select_n(out.data(), in.data(), in_minus_p.data(), 7);
+   std::array<uint64_t, WORDS_448> out;
+   CT::Mask<uint64_t>::expand(borrow).select_n(out.data(), in.data(), in_minus_p.data(), WORDS_448);
    return out;
 }
 
 }  // namespace
 
-Gf448Elem::Gf448Elem(std::span<const uint8_t, 56> x) {
-   load_le(m_x.data(), x.data(), m_x.size());
+Gf448Elem::Gf448Elem(std::span<const uint8_t, BYTES_448> x) {
+   load_le(m_x, x);
 }
 
 Gf448Elem::Gf448Elem(uint64_t least_sig_word) {
@@ -300,25 +305,24 @@ Gf448Elem::Gf448Elem(uint64_t least_sig_word) {
    m_x[0] = least_sig_word;
 }
 
-void Gf448Elem::to_bytes(std::span<uint8_t, 56> out) const {
-   const auto canonical_form = to_canonical(m_x);
-   copy_out_le(out.data(), out.size(), canonical_form.data());
+void Gf448Elem::to_bytes(std::span<uint8_t, BYTES_448> out) const {
+   store_le(out, to_canonical(m_x));
 }
 
-std::array<uint8_t, 56> Gf448Elem::to_bytes() const {
-   std::array<uint8_t, 56> bytes;
+std::array<uint8_t, BYTES_448> Gf448Elem::to_bytes() const {
+   std::array<uint8_t, BYTES_448> bytes;
    to_bytes(bytes);
    return bytes;
 }
 
 void Gf448Elem::ct_cond_swap(bool b, Gf448Elem& other) {
-   for(size_t i = 0; i < 7; ++i) {
+   for(size_t i = 0; i < WORDS_448; ++i) {
       CT::conditional_swap(b, m_x[i], other.m_x[i]);
    }
 }
 
 void Gf448Elem::ct_cond_assign(bool b, const Gf448Elem& other) {
-   CT::conditional_assign_mem(static_cast<uint64_t>(b), m_x.data(), other.m_x.data(), 7);
+   CT::conditional_assign_mem(static_cast<uint64_t>(b), m_x.data(), other.m_x.data(), WORDS_448);
 }
 
 Gf448Elem Gf448Elem::operator+(const Gf448Elem& other) const {
@@ -375,25 +379,24 @@ Gf448Elem Gf448Elem::root() const {
 bool Gf448Elem::operator==(const Gf448Elem& other) const {
    const auto canonical_form_this = to_canonical(m_x);
    const auto canonical_form_other = to_canonical(other.m_x);
-   return CT::is_equal(canonical_form_this.data(), canonical_form_other.data(), 7).as_bool();
+   return CT::is_equal(canonical_form_this.data(), canonical_form_other.data(), WORDS_448).as_bool();
 }
 
 bool Gf448Elem::is_zero() const {
    const auto canonical_form = to_canonical(m_x);
 
-   return CT::all_zeros(canonical_form.data(), 7).as_bool();
+   return CT::all_zeros(canonical_form.data(), WORDS_448).as_bool();
 }
 
 bool Gf448Elem::is_odd() const {
    const auto canonical_form = to_canonical(m_x);
-   return canonical_form[0] & 1;
+   return (canonical_form[0] & 1) == 1;
 }
 
-bool Gf448Elem::bytes_are_canonical_representation(std::span<const uint8_t, 56> x) {
-   std::array<uint64_t, 7> x_words;
-   load_le(x_words.data(), x.data(), x_words.size());
+bool Gf448Elem::bytes_are_canonical_representation(std::span<const uint8_t, BYTES_448> x) {
+   const auto x_words = load_le<std::array<uint64_t, WORDS_448>>(x);
    const auto x_words_canonical = to_canonical(x_words);
-   return CT::is_equal(x_words.data(), x_words_canonical.data(), 7).as_bool();
+   return CT::is_equal(x_words.data(), x_words_canonical.data(), WORDS_448).as_bool();
 }
 
 }  // namespace Botan

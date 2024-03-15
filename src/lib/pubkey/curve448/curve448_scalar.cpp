@@ -38,26 +38,13 @@ auto div_mod_2_446(std::span<const word, S> x) {
    }
 }
 
-template <size_t S>
-consteval std::array<word, S / sizeof(word)> load_words(const std::array<uint8_t, S>& bytes)
-   requires(S % sizeof(word) == 0)
-{
-   // Currently load_le does not work with constexpr. Therefore, we have to use this workaround.
-   std::array<word, S / sizeof(word)> res = {0};
-   for(size_t i = 0; i < bytes.size(); ++i) {
-      res[i / sizeof(word)] |= word(bytes[i]) << ((i % sizeof(word)) * 8);
-   }
-
-   return res;
-}
-
 /// @return a word array for c = 0x8335dc163bb124b65129c96fde933d8d723a70aadc873d6d54a7bb0d
 consteval std::array<word, WORDS_C> c_words() {
    // Currently load_le does not work with constexpr. Therefore, we have to use this workaround.
    const std::array<uint8_t, WORDS_C * sizeof(word)> c_bytes{0x0d, 0xbb, 0xa7, 0x54, 0x6d, 0x3d, 0x87, 0xdc, 0xaa, 0x70,
                                                              0x3a, 0x72, 0x8d, 0x3d, 0x93, 0xde, 0x6f, 0xc9, 0x29, 0x51,
                                                              0xb6, 0x24, 0xb1, 0x3b, 0x16, 0xdc, 0x35, 0x83};
-   return load_words(c_bytes);
+   return load_le<std::array<word, WORDS_C>>(c_bytes);
 }
 
 /// @return a word array for L = 2^446 - 0x8335dc163bb124b65129c96fde933d8d723a70aadc873d6d54a7bb0d
@@ -66,7 +53,7 @@ consteval std::array<word, WORDS_446> big_l_words() {
       0xf3, 0x44, 0x58, 0xab, 0x92, 0xc2, 0x78, 0x23, 0x55, 0x8f, 0xc5, 0x8d, 0x72, 0xc2, 0x6c, 0x21, 0x90, 0x36, 0xd6,
       0xae, 0x49, 0xdb, 0x4e, 0xc4, 0xe9, 0x23, 0xca, 0x7c, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
       0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3f};
-   return load_words(big_l_bytes);
+   return load_le<std::array<word, WORDS_446>>(big_l_bytes);
 }
 
 /// @return c*x, with c = 0x8335dc163bb124b65129c96fde933d8d723a70aadc873d6d54a7bb0d
@@ -110,19 +97,10 @@ bool ct_subtract_L_if_bigger(std::span<word, WORDS_446> x) {
 
 template <size_t S>
 std::array<word, words_for_bits(S * 8)> bytes_to_words(std::span<const uint8_t, S> x) {
-   std::array<uint8_t, words_for_bits(S * 8) * sizeof(word)> x_word_bytes = {0};
+   constexpr size_t words = words_for_bits(S * 8);
+   std::array<uint8_t, words * sizeof(word)> x_word_bytes = {0};
    copy_mem(std::span(x_word_bytes).template first<S>(), x);
-
-   std::array<word, words_for_bits(S * 8)> res;
-   load_le(res, x_word_bytes);
-   return res;
-}
-
-template <size_t S>
-std::array<uint8_t, S * sizeof(word)> words_to_bytes(std::span<const word, S> x) {
-   std::array<uint8_t, S * sizeof(word)> res;
-   store_le(res, x);
-   return res;
+   return load_le<std::array<word, words>>(x_word_bytes);
 }
 
 /**
@@ -141,17 +119,17 @@ std::array<word, WORDS_446> ct_reduce_mod_L(const std::array<word, WORDS_REDUCE_
    // i = 0:
    const auto q_0_c = mul_c(std::span(q_0));
    const auto [q_1, r_1] = div_mod_2_446(std::span(q_0_c));
-   r = add(std::span(r), std::span(r_1));
+   r = add(r, r_1);
 
    // i = 1
    const auto q_1_c = mul_c(std::span(q_1));
    const auto [q_2, r_2] = div_mod_2_446(std::span(q_1_c));
-   r = add(std::span(r), std::span(r_2));
+   r = add(r, r_2);
 
    // i = 2
    const auto q_2_c = mul_c(std::span(q_2));
    const auto [q_3, r_3] = div_mod_2_446(std::span(q_2_c));
-   r = add(std::span(r), std::span(r_3));
+   r = add(r, r_3);
 
    BOTAN_ASSERT_NOMSG(CT::all_zeros(q_3.data(), q_3.size()).as_bool());
 
@@ -159,7 +137,7 @@ std::array<word, WORDS_446> ct_reduce_mod_L(const std::array<word, WORDS_REDUCE_
    // Also, this means that subtracting L 4 times (at most) will bring r into the range [0, L), since
    // 4*(2^446 - 1) - 4*(2^446 - c) = 4*(c - 1) < L.
    for(size_t i = 0; i < 4; ++i) {
-      ct_subtract_L_if_bigger(std::span(r));
+      ct_subtract_L_if_bigger(r);
    }
 
    return r;
@@ -168,23 +146,23 @@ std::array<word, WORDS_446> ct_reduce_mod_L(const std::array<word, WORDS_REDUCE_
 }  // namespace
 
 Scalar448::Scalar448(std::span<const uint8_t> in_bytes) {
-   BOTAN_ARG_CHECK(in_bytes.size() <= 114, "Input must be maximal 114 bytes long");
+   BOTAN_ARG_CHECK(in_bytes.size() <= 114, "Input must be at most 114 bytes long");
    std::array<uint8_t, 114> max_bytes = {0};
-   std::copy(in_bytes.begin(), in_bytes.end(), max_bytes.begin());
+   copy_mem(std::span(max_bytes).first(in_bytes.size()), in_bytes);
 
    const auto x_words = bytes_to_words(std::span<const uint8_t, 114>(max_bytes));
    m_scalar_words = ct_reduce_mod_L(x_words);
 }
 
 bool Scalar448::get_bit(size_t bit_pos) const {
-   BOTAN_ASSERT(bit_pos < 446, "Bit position in range");
+   BOTAN_ARG_CHECK(bit_pos < 446, "Bit position out of range");
    constexpr size_t word_sz = sizeof(word) * 8;
    return (m_scalar_words[bit_pos / word_sz] >> (bit_pos % word_sz)) & 1;
 }
 
 Scalar448 Scalar448::operator+(const Scalar448& other) const {
-   auto sum = add(std::span(m_scalar_words), std::span(other.m_scalar_words));
-   ct_subtract_L_if_bigger(std::span(sum));
+   auto sum = add(m_scalar_words, other.m_scalar_words);
+   ct_subtract_L_if_bigger(sum);
    return Scalar448(sum);
 }
 
@@ -202,19 +180,17 @@ Scalar448 Scalar448::operator*(const Scalar448& other) const {
               ws.data(),
               ws.size());
 
-   const auto red_product_words = ct_reduce_mod_L(product);
-
-   return Scalar448(red_product_words);
+   return Scalar448(ct_reduce_mod_L(product));
 }
 
 bool Scalar448::bytes_are_reduced(std::span<const uint8_t> x) {
-   BOTAN_ASSERT(x.size() >= BYTES_446, "Input is at least 446 bits long");
-   const auto back_part = x.subspan(BYTES_446);
-   const auto back_part_is_zero = CT::all_zeros(back_part.data(), back_part.size());
+   BOTAN_ARG_CHECK(x.size() >= BYTES_446, "Input is not long enough (at least 446 bits)");
+   // remember: `x` contains a big int in little-endian
+   const auto leading_zeros = x.subspan(BYTES_446);
+   const auto leading_zeros_are_zero = CT::all_zeros(leading_zeros.data(), leading_zeros.size());
    auto x_sig_words = bytes_to_words(x.first<56>());
-   const auto least_56_bytes_smaller_L = CT::Mask<uint8_t>::expand(!ct_subtract_L_if_bigger(std::span(x_sig_words)));
-
-   return (back_part_is_zero & least_56_bytes_smaller_L).as_bool();
+   const auto least_56_bytes_smaller_L = CT::Mask<uint8_t>::expand(!ct_subtract_L_if_bigger(x_sig_words));
+   return (leading_zeros_are_zero & least_56_bytes_smaller_L).as_bool();
 }
 
 }  // namespace Botan

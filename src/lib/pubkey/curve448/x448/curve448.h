@@ -13,6 +13,9 @@
 #include <array>
 
 namespace Botan {
+/**
+ * @brief A public key for the X448 key agreement scheme according to RFC 7748.
+ */
 class BOTAN_PUBLIC_API(3, 4) Curve448_PublicKey : public virtual Public_Key {
    public:
       /**
@@ -54,6 +57,9 @@ class BOTAN_PUBLIC_API(3, 4) Curve448_PublicKey : public virtual Public_Key {
 BOTAN_DIAGNOSTIC_PUSH
 BOTAN_DIAGNOSTIC_IGNORE_INHERITED_VIA_DOMINANCE
 
+/**
+ * @brief A private key for the X448 key agreement scheme according to RFC 7748.
+ */
 class BOTAN_PUBLIC_API(3, 4) Curve448_PrivateKey final : public Curve448_PublicKey,
                                                          public virtual Private_Key,
                                                          public virtual PK_Key_Agreement_Key {
@@ -79,8 +85,6 @@ class BOTAN_PUBLIC_API(3, 4) Curve448_PrivateKey final : public Curve448_PublicK
 
       std::vector<uint8_t> public_value() const override { return Curve448_PublicKey::public_key_bits(); }
 
-      secure_vector<uint8_t> agree(std::span<const uint8_t> w) const;
-
       secure_vector<uint8_t> raw_private_key_bits() const override { return {m_private.begin(), m_private.end()}; }
 
       secure_vector<uint8_t> private_key_bits() const override;
@@ -94,7 +98,7 @@ class BOTAN_PUBLIC_API(3, 4) Curve448_PrivateKey final : public Curve448_PublicK
                                                                      std::string_view provider) const override;
 
    private:
-      std::array<uint8_t, 56> m_private;
+      secure_vector<uint8_t> m_private;
 };
 
 BOTAN_DIAGNOSTIC_POP

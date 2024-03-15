@@ -30,7 +30,7 @@ class BOTAN_PUBLIC_API(3, 4) Ed448_PublicKey : public virtual Public_Key {
 
       size_t estimated_strength() const override { return 224; }
 
-      size_t key_length() const override { return 456; }
+      size_t key_length() const override { return 448; }
 
       bool check_key(RandomNumberGenerator& rng, bool strong) const override;
 
@@ -115,7 +115,7 @@ class BOTAN_PUBLIC_API(3, 4) Ed448_PrivateKey final : public Ed448_PublicKey,
                                                              std::string_view provider) const override;
 
    private:
-      std::array<uint8_t, 57> m_private;
+      secure_vector<uint8_t> m_private;
 };
 
 BOTAN_DIAGNOSTIC_POP

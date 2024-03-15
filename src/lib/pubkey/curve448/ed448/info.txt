@@ -4,11 +4,11 @@ ED448 -> 20240223
 
 <module_info>
 name -> "Ed448"
+brief -> "Ed448 signature algorithm"
 </module_info>
 
 <requires>
 shake_xof
-curve448_utils
 </requires>
 
 <header:public>

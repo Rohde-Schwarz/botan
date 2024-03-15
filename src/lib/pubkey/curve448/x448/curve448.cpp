@@ -11,13 +11,14 @@
 #include <botan/ber_dec.h>
 #include <botan/der_enc.h>
 #include <botan/rng.h>
+#include <botan/internal/ct_utils.h>
 #include <botan/internal/curve448_internal.h>
 #include <botan/internal/pk_ops_impl.h>
 
 namespace Botan {
 
 namespace {
-void curve448_basepoint_from_data(std::span<uint8_t, 56> mypublic, std::span<const uint8_t, 56> secret) {
+void curve448_basepoint_from_data(std::span<uint8_t, X448_LEN> mypublic, std::span<const uint8_t, X448_LEN> secret) {
    auto bp = x448_basepoint(decode_scalar(secret));
    auto bp_bytes = encode_point(bp);
    copy_mem(mypublic, bp_bytes);
@@ -25,7 +26,8 @@ void curve448_basepoint_from_data(std::span<uint8_t, 56> mypublic, std::span<con
 
 secure_vector<uint8_t> ber_decode_sk(std::span<const uint8_t> key_bits) {
    secure_vector<uint8_t> decoded_bits;
-   BER_Decoder(key_bits).decode(decoded_bits, ASN1_Type::OctetString).discard_remaining();
+   BER_Decoder(key_bits).decode(decoded_bits, ASN1_Type::OctetString).verify_end();
+   BOTAN_ASSERT_NOMSG(decoded_bits.size() == X448_LEN);
    return decoded_bits;
 }
 
@@ -40,7 +42,7 @@ bool Curve448_PublicKey::check_key(RandomNumberGenerator& /*rng*/, bool /*strong
 }
 
 std::vector<uint8_t> Curve448_PublicKey::public_key_bits() const {
-   return {m_public.begin(), m_public.end()};
+   return public_value();
 }
 
 std::unique_ptr<Private_Key> Curve448_PublicKey::generate_another(RandomNumberGenerator& rng) const {
@@ -51,7 +53,7 @@ Curve448_PublicKey::Curve448_PublicKey(const AlgorithmIdentifier& /*alg_id*/, st
       Curve448_PublicKey(key_bits) {}
 
 Curve448_PublicKey::Curve448_PublicKey(std::span<const uint8_t> pub) {
-   BOTAN_ARG_CHECK(pub.size() == 56, "Invalid size for Curve448 public key");
+   BOTAN_ARG_CHECK(pub.size() == X448_LEN, "Invalid size for Curve448 public key");
    copy_mem(m_public, pub);
 }
 
@@ -59,14 +61,15 @@ Curve448_PrivateKey::Curve448_PrivateKey(const AlgorithmIdentifier& /*alg_id*/, 
       Curve448_PrivateKey(ber_decode_sk(key_bits)) {}
 
 Curve448_PrivateKey::Curve448_PrivateKey(std::span<const uint8_t> secret_key) {
-   BOTAN_ARG_CHECK(secret_key.size() == 56, "Invalid size for Curve448 private key");
-   copy_mem(m_private, secret_key);
-   curve448_basepoint_from_data(m_public, m_private);
+   BOTAN_ARG_CHECK(secret_key.size() == X448_LEN, "Invalid size for Curve448 private key");
+   m_private = {secret_key.begin(), secret_key.end()};
+   curve448_basepoint_from_data(m_public, std::span(m_private).first<X448_LEN>());
 }
 
 Curve448_PrivateKey::Curve448_PrivateKey(RandomNumberGenerator& rng) {
+   m_private.resize(X448_LEN);
    rng.randomize(m_private);
-   curve448_basepoint_from_data(m_public, m_private);
+   curve448_basepoint_from_data(m_public, std::span(m_private).first<X448_LEN>());
 }
 
 std::unique_ptr<Public_Key> Curve448_PrivateKey::public_key() const {
@@ -74,23 +77,14 @@ std::unique_ptr<Public_Key> Curve448_PrivateKey::public_key() const {
 }
 
 secure_vector<uint8_t> Curve448_PrivateKey::private_key_bits() const {
-   return DER_Encoder()
-      .encode(secure_vector<uint8_t>(m_private.begin(), m_private.end()), ASN1_Type::OctetString)
-      .get_contents();
+   return DER_Encoder().encode(m_private, ASN1_Type::OctetString).get_contents();
 }
 
 bool Curve448_PrivateKey::check_key(RandomNumberGenerator& /*rng*/, bool /*strong*/) const {
-   std::array<uint8_t, 56> public_point;
-   curve448_basepoint_from_data(public_point, m_private);
-   return public_point == m_public;
-}
-
-secure_vector<uint8_t> Curve448_PrivateKey::agree(std::span<const uint8_t> w) const {
-   BOTAN_ARG_CHECK(w.size() == 56, "Invalid size for Curve448 private key");
-   auto k = decode_scalar(m_private);
-   auto u = decode_point(w);
-
-   return encode_point(x448(k, u));
+   std::array<uint8_t, X448_LEN> public_point;
+   BOTAN_ASSERT_NOMSG(m_private.size() == X448_LEN);
+   curve448_basepoint_from_data(public_point, std::span(m_private).first<X448_LEN>());
+   return CT::is_equal(public_point.data(), m_public.data(), m_public.size()).as_bool();
 }
 
 namespace {
@@ -100,15 +94,25 @@ namespace {
 */
 class Curve448_KA_Operation final : public PK_Ops::Key_Agreement_with_KDF {
    public:
-      Curve448_KA_Operation(const Curve448_PrivateKey& key, std::string_view kdf) :
-            PK_Ops::Key_Agreement_with_KDF(kdf), m_key(key) {}
+      Curve448_KA_Operation(std::span<const uint8_t> sk, std::string_view kdf) :
+            PK_Ops::Key_Agreement_with_KDF(kdf), m_sk(sk.begin(), sk.end()) {
+         BOTAN_ARG_CHECK(sk.size() == X448_LEN, "Invalid size for Curve448 private key");
+      }
 
-      size_t agreed_value_size() const override { return 56; }
+      size_t agreed_value_size() const override { return X448_LEN; }
 
-      secure_vector<uint8_t> raw_agree(const uint8_t w[], size_t w_len) override { return m_key.agree({w, w_len}); }
+      secure_vector<uint8_t> raw_agree(const uint8_t w_data[], size_t w_len) override {
+         std::span<const uint8_t> w(w_data, w_len);
+         BOTAN_ARG_CHECK(w.size() == X448_LEN, "Invalid size for Curve448 private key");
+         BOTAN_ASSERT_NOMSG(m_sk.size() == X448_LEN);
+         const auto k = decode_scalar(m_sk);
+         const auto u = decode_point(w);
+
+         return encode_point(x448(k, u));
+      }
 
    private:
-      const Curve448_PrivateKey& m_key;
+      secure_vector<uint8_t> m_sk;
 };
 
 }  // namespace
@@ -117,7 +121,7 @@ std::unique_ptr<PK_Ops::Key_Agreement> Curve448_PrivateKey::create_key_agreement
                                                                                     std::string_view params,
                                                                                     std::string_view provider) const {
    if(provider == "base" || provider.empty()) {
-      return std::make_unique<Curve448_KA_Operation>(*this, params);
+      return std::make_unique<Curve448_KA_Operation>(m_private, params);
    }
    throw Provider_Not_Found(algo_name(), provider);
 }
