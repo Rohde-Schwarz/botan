@@ -40,7 +40,6 @@ auto div_mod_2_446(std::span<const word, S> x) {
 
 /// @return a word array for c = 0x8335dc163bb124b65129c96fde933d8d723a70aadc873d6d54a7bb0d
 consteval std::array<word, WORDS_C> c_words() {
-   // Currently load_le does not work with constexpr. Therefore, we have to use this workaround.
    const std::array<uint8_t, WORDS_C * sizeof(word)> c_bytes{0x0d, 0xbb, 0xa7, 0x54, 0x6d, 0x3d, 0x87, 0xdc, 0xaa, 0x70,
                                                              0x3a, 0x72, 0x8d, 0x3d, 0x93, 0xde, 0x6f, 0xc9, 0x29, 0x51,
                                                              0xb6, 0x24, 0xb1, 0x3b, 0x16, 0xdc, 0x35, 0x83};
