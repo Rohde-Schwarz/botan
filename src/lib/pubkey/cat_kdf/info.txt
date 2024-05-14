@@ -1,0 +1,23 @@
+<defines>
+CAT_KDF -> 20240514
+</defines>
+
+<module_info>
+name -> "CatKDF"
+</module_info>
+
+<header:public>
+cat_kdf.h
+cat_kdf_mode.h
+</header:public>
+
+<header:internal>
+cat_kdf_internal.h
+</header:internal>
+
+<requires>
+kex_to_kem_adapter
+hybrid_kem
+ecdh
+hkdf
+</requires>

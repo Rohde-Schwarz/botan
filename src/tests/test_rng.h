@@ -165,9 +165,13 @@ class SeedCapturing_RNG final : public Botan::RandomNumberGenerator {
 */
 class Request_Counting_RNG final : public Botan::RandomNumberGenerator {
    public:
-      Request_Counting_RNG() : m_randomize_count(0) {}
+      Request_Counting_RNG() : m_randomize_count(0), m_bytes_requested_count(0) {}
 
+      /// The count of requests made to this RNG
       size_t randomize_count() const { return m_randomize_count; }
+
+      /// The count bytes requested from this RNG
+      size_t bytes_requested_count() const { return m_bytes_requested_count; }
 
       bool accepts_input() const override { return false; }
 
@@ -188,11 +192,13 @@ class Request_Counting_RNG final : public Botan::RandomNumberGenerator {
          }
          if(!output.empty()) {
             m_randomize_count++;
+            m_bytes_requested_count += output.size();
          }
       }
 
    private:
       size_t m_randomize_count;
+      size_t m_bytes_requested_count;
 };
 
 #if defined(BOTAN_HAS_AES)
