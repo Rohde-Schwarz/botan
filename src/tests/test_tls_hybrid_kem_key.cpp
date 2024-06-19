@@ -123,6 +123,19 @@ size_t length_of_hybrid_public_value(Ts... kex_kem_fn) {
    return (f(*kex_kem_fn()) + ...);
 }
 
+/// Public_Key::key_length()
+template <typename... Ts>
+size_t key_length_of_hybrid_public_key(Ts... kex_kem_fn) {
+   std::vector<size_t> key_lengths = {kex_kem_fn()->key_length()...};
+   return *std::max_element(key_lengths.begin(), key_lengths.end());
+}
+
+template <typename... Ts>
+size_t estimated_strength_of_hybrid_public_key(Ts... kex_kem_fn) {
+   std::vector<size_t> strengths = {kex_kem_fn()->estimated_strength()...};
+   return *std::max_element(strengths.begin(), strengths.end());
+}
+
 template <typename... Ts>
 void roundtrip_test(Test::Result& result, Ts... kex_kem_fn) {
    Botan::TLS::Hybrid_KEM_PrivateKey hybrid_key(keys(kex_kem_fn()...));
@@ -136,6 +149,8 @@ void roundtrip_test(Test::Result& result, Ts... kex_kem_fn) {
    const auto expected_shared_secret_length = length_of_hybrid_shared_key(kex_kem_fn...);
    const auto expected_ciphertext_length = length_of_hybrid_ciphertext(kex_kem_fn...);
    const auto expected_public_key_length = length_of_hybrid_public_value(kex_kem_fn...);
+   const auto expected_key_length = key_length_of_hybrid_public_key(kex_kem_fn...);
+   const auto expected_strength = estimated_strength_of_hybrid_public_key(kex_kem_fn...);
 
    result.test_eq(
       "ciphertext has expected length", kem_result.encapsulated_shared_key().size(), expected_ciphertext_length);
@@ -155,6 +170,12 @@ void roundtrip_test(Test::Result& result, Ts... kex_kem_fn) {
    result.test_eq("public key bits is the sum of its parts",
                   hybrid_public_key.raw_public_key_bits().size(),
                   expected_public_key_length);
+
+   result.test_eq(
+      "Public_Key::key_length is the maximum of its parts", hybrid_public_key.key_length(), expected_key_length);
+   result.test_eq("Public_Key::estimated_strength is the maximum of its parts",
+                  hybrid_public_key.estimated_strength(),
+                  expected_strength);
 }
 
 std::vector<Test::Result> hybrid_kem_keypair() {

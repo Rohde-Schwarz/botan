@@ -16,7 +16,8 @@
 
 namespace Botan {
 
-Hybrid_PublicKey::Hybrid_PublicKey(std::vector<std::unique_ptr<Public_Key>> pks) : m_pks(std::move(pks)) {
+Hybrid_PublicKey::Hybrid_PublicKey(std::vector<std::unique_ptr<Public_Key>> pks) :
+      m_pks(std::move(pks)), m_key_length(0), m_estimated_strength(0) {
    BOTAN_ARG_CHECK(m_pks.size() >= 2, "List of public keys must include at least two keys");
    for(const auto& pk : m_pks) {
       BOTAN_ARG_CHECK(pk != nullptr, "List of public keys contains a nullptr");
