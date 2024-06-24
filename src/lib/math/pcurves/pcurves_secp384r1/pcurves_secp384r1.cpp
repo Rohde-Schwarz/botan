@@ -21,62 +21,24 @@ class Secp384r1Rep final {
       typedef typename Params::W W;
 
       constexpr static std::array<W, N> redc(const std::array<W, 2 * N>& z) {
-         const int64_t X00 = get_uint32(z.data(), 0);
-         const int64_t X01 = get_uint32(z.data(), 1);
-         const int64_t X02 = get_uint32(z.data(), 2);
-         const int64_t X03 = get_uint32(z.data(), 3);
-         const int64_t X04 = get_uint32(z.data(), 4);
-         const int64_t X05 = get_uint32(z.data(), 5);
-         const int64_t X06 = get_uint32(z.data(), 6);
-         const int64_t X07 = get_uint32(z.data(), 7);
-         const int64_t X08 = get_uint32(z.data(), 8);
-         const int64_t X09 = get_uint32(z.data(), 9);
-         const int64_t X10 = get_uint32(z.data(), 10);
-         const int64_t X11 = get_uint32(z.data(), 11);
-         const int64_t X12 = get_uint32(z.data(), 12);
-         const int64_t X13 = get_uint32(z.data(), 13);
-         const int64_t X14 = get_uint32(z.data(), 14);
-         const int64_t X15 = get_uint32(z.data(), 15);
-         const int64_t X16 = get_uint32(z.data(), 16);
-         const int64_t X17 = get_uint32(z.data(), 17);
-         const int64_t X18 = get_uint32(z.data(), 18);
-         const int64_t X19 = get_uint32(z.data(), 19);
-         const int64_t X20 = get_uint32(z.data(), 20);
-         const int64_t X21 = get_uint32(z.data(), 21);
-         const int64_t X22 = get_uint32(z.data(), 22);
-         const int64_t X23 = get_uint32(z.data(), 23);
+         const auto X = into_32bit_words<24>(z);
+         const auto P384 = into_32bit_words<12>(Params::P);
 
          // One copy of P-384 is added to prevent underflow
-         const int64_t S0 = 0xFFFFFFFF + X00 + X12 + X20 + X21 - X23;
-         const int64_t S1 = 0x00000000 + X01 + X13 + X22 + X23 - X12 - X20;
-         const int64_t S2 = 0x00000000 + X02 + X14 + X23 - X13 - X21;
-         const int64_t S3 = 0xFFFFFFFF + X03 + X12 + X15 + X20 + X21 - X14 - X22 - X23;
-         const int64_t S4 = 0xFFFFFFFE + X04 + X12 + X13 + X16 + X20 + X21 * 2 + X22 - X15 - X23 * 2;
-         const int64_t S5 = 0xFFFFFFFF + X05 + X13 + X14 + X17 + X21 + X22 * 2 + X23 - X16;
-         const int64_t S6 = 0xFFFFFFFF + X06 + X14 + X15 + X18 + X22 + X23 * 2 - X17;
-         const int64_t S7 = 0xFFFFFFFF + X07 + X15 + X16 + X19 + X23 - X18;
-         const int64_t S8 = 0xFFFFFFFF + X08 + X16 + X17 + X20 - X19;
-         const int64_t S9 = 0xFFFFFFFF + X09 + X17 + X18 + X21 - X20;
-         const int64_t SA = 0xFFFFFFFF + X10 + X18 + X19 + X22 - X21;
-         const int64_t SB = 0xFFFFFFFF + X11 + X19 + X20 + X23 - X22;
-
-         std::array<W, N> r = {};
-
-         SumAccum sum(r);
-
-         sum.accum(S0);
-         sum.accum(S1);
-         sum.accum(S2);
-         sum.accum(S3);
-         sum.accum(S4);
-         sum.accum(S5);
-         sum.accum(S6);
-         sum.accum(S7);
-         sum.accum(S8);
-         sum.accum(S9);
-         sum.accum(SA);
-         sum.accum(SB);
-         const auto S = sum.final_carry(0);
+         auto [r, S] = accumulate_with_carry<W, N>(
+            {P384[0] + X[0] + X[12] + X[20] + X[21] - X[23],
+             P384[1] + X[1] + X[13] + X[22] + X[23] - X[12] - X[20],
+             P384[2] + X[2] + X[14] + X[23] - X[13] - X[21],
+             P384[3] + X[3] + X[12] + X[15] + X[20] + X[21] - X[14] - X[22] - X[23],
+             P384[4] + X[4] + X[12] + X[13] + X[16] + X[20] + X[21] * 2 + X[22] - X[15] - X[23] * 2,
+             P384[5] + X[5] + X[13] + X[14] + X[17] + X[21] + X[22] * 2 + X[23] - X[16],
+             P384[6] + X[6] + X[14] + X[15] + X[18] + X[22] + X[23] * 2 - X[17],
+             P384[7] + X[7] + X[15] + X[16] + X[19] + X[23] - X[18],
+             P384[8] + X[8] + X[16] + X[17] + X[20] - X[19],
+             P384[9] + X[9] + X[17] + X[18] + X[21] - X[20],
+             P384[10] + X[10] + X[18] + X[19] + X[22] - X[21],
+             P384[11] + X[11] + X[19] + X[20] + X[23] - X[22],
+             0});
 
          CT::unpoison(S);
          BOTAN_ASSERT(S <= 4, "Expected overflow");

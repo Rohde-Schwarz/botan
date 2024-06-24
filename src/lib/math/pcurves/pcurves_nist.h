@@ -11,54 +11,44 @@
 
 namespace Botan {
 
-template <WordType W>
-constexpr uint32_t get_uint32(const W xw[], size_t i) {
+template <size_t OutN, WordType W, size_t N>
+constexpr std::array<int64_t, OutN> into_32bit_words(const std::array<W, N>& xw) {
    static_assert(WordInfo<W>::bits == 32 || WordInfo<W>::bits == 64);
-
+   std::array<int64_t, OutN> result = {};
    if constexpr(WordInfo<W>::bits == 32) {
-      return xw[i];
+      for(size_t i = 0; i != N; ++i) {
+         result[i] = xw[i];
+      }
    } else {
-      return static_cast<uint32_t>(xw[i / 2] >> ((i % 2) * 32));
+      for(size_t i = 0; i != N * 2; ++i) {
+         result[i] = static_cast<uint32_t>(xw[i / 2] >> ((i % 2) * 32));
+      }
    }
+   return result;
 }
 
 template <WordType W, size_t N>
-class SumAccum {
-   public:
-      static_assert(WordInfo<W>::bits == 32 || WordInfo<W>::bits == 64);
+   requires(WordInfo<W>::bits == 32 || WordInfo<W>::bits == 64)
+auto accumulate_with_carry(std::array<int64_t, N * WordInfo<W>::bits / 32 + 1> vs) -> std::pair<std::array<W, N>, W> {
+   std::array<W, N> result = {};
+   int64_t S = 0;
 
-      static constexpr size_t N32 = N * (WordInfo<W>::bits / 32);
+   for(size_t i = 0; i != vs.size() - 1; ++i) {
+      S += vs[i];
+      const uint32_t r = static_cast<uint32_t>(S);
+      S >>= 32;
 
-      SumAccum(std::array<W, N>& r) : m_r(r), m_S(0), m_idx(0) {}
-
-      void accum(int64_t v) {
-         BOTAN_DEBUG_ASSERT(m_idx < N32);
-
-         m_S += v;
-         const uint32_t r = static_cast<uint32_t>(m_S);
-         m_S >>= 32;
-
-         if constexpr(WordInfo<W>::bits == 32) {
-            m_r[m_idx] = r;
-         } else {
-            m_r[m_idx / 2] |= static_cast<uint64_t>(r) << (32 * (m_idx % 2));
-         }
-
-         m_idx += 1;
+      if constexpr(WordInfo<W>::bits == 32) {
+         result[i] = r;
+      } else {
+         result[i / 2] |= static_cast<uint64_t>(r) << (32 * (i % 2));
       }
+   };
 
-      W final_carry(int64_t C) {
-         BOTAN_DEBUG_ASSERT(m_idx == N32);
-         m_S += C;
-         BOTAN_DEBUG_ASSERT(m_S >= 0);
-         return static_cast<W>(m_S);
-      }
-
-   private:
-      std::array<W, N>& m_r;
-      int64_t m_S;
-      size_t m_idx;
-};
+   const int64_t final_carry = S + vs.back();
+   BOTAN_DEBUG_ASSERT(final_carry >= 0);
+   return {result, static_cast<W>(final_carry)};
+}
 
 }  // namespace Botan
 

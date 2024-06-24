@@ -25,46 +25,17 @@ class Secp256r1Rep final {
          hex_to_words<uint32_t>("0x3fffffffc00000004000000000000000000000003fffffffffffffffffffffffc");
 
       constexpr static std::array<W, N> redc(const std::array<W, 2 * N>& z) {
-         const int64_t X00 = get_uint32(z.data(), 0);
-         const int64_t X01 = get_uint32(z.data(), 1);
-         const int64_t X02 = get_uint32(z.data(), 2);
-         const int64_t X03 = get_uint32(z.data(), 3);
-         const int64_t X04 = get_uint32(z.data(), 4);
-         const int64_t X05 = get_uint32(z.data(), 5);
-         const int64_t X06 = get_uint32(z.data(), 6);
-         const int64_t X07 = get_uint32(z.data(), 7);
-         const int64_t X08 = get_uint32(z.data(), 8);
-         const int64_t X09 = get_uint32(z.data(), 9);
-         const int64_t X10 = get_uint32(z.data(), 10);
-         const int64_t X11 = get_uint32(z.data(), 11);
-         const int64_t X12 = get_uint32(z.data(), 12);
-         const int64_t X13 = get_uint32(z.data(), 13);
-         const int64_t X14 = get_uint32(z.data(), 14);
-         const int64_t X15 = get_uint32(z.data(), 15);
-
-         const int64_t S0 = P256_4[0] + X00 + X08 + X09 - (X11 + X12 + X13 + X14);
-         const int64_t S1 = P256_4[1] + X01 + X09 + X10 - (X12 + X13 + X14 + X15);
-         const int64_t S2 = P256_4[2] + X02 + X10 + X11 - (X13 + X14 + X15);
-         const int64_t S3 = P256_4[3] + X03 + 2 * (X11 + X12) + X13 - (X15 + X08 + X09);
-         const int64_t S4 = P256_4[4] + X04 + 2 * (X12 + X13) + X14 - (X09 + X10);
-         const int64_t S5 = P256_4[5] + X05 + 2 * (X13 + X14) + X15 - (X10 + X11);
-         const int64_t S6 = P256_4[6] + X06 + X13 + X14 * 3 + X15 * 2 - (X08 + X09);
-         const int64_t S7 = P256_4[7] + X07 + X15 * 3 + X08 - (X10 + X11 + X12 + X13);
-         const int64_t S8 = P256_4[8];
-
-         std::array<W, N> r = {};
-
-         SumAccum sum(r);
-
-         sum.accum(S0);
-         sum.accum(S1);
-         sum.accum(S2);
-         sum.accum(S3);
-         sum.accum(S4);
-         sum.accum(S5);
-         sum.accum(S6);
-         sum.accum(S7);
-         const auto S = sum.final_carry(S8);
+         const auto X = into_32bit_words<16>(z);
+         auto [r, S] =
+            accumulate_with_carry<W, N>({P256_4[0] + X[0] + X[8] + X[9] - (X[11] + X[12] + X[13] + X[14]),
+                                         P256_4[1] + X[1] + X[9] + X[10] - (X[12] + X[13] + X[14] + X[15]),
+                                         P256_4[2] + X[2] + X[10] + X[11] - (X[13] + X[14] + X[15]),
+                                         P256_4[3] + X[3] + 2 * (X[11] + X[12]) + X[13] - (X[15] + X[8] + X[9]),
+                                         P256_4[4] + X[4] + 2 * (X[12] + X[13]) + X[14] - (X[9] + X[10]),
+                                         P256_4[5] + X[5] + 2 * (X[13] + X[14]) + X[15] - (X[10] + X[11]),
+                                         P256_4[6] + X[6] + X[13] + X[14] * 3 + X[15] * 2 - (X[8] + X[9]),
+                                         P256_4[7] + X[7] + X[15] * 3 + X[8] - (X[10] + X[11] + X[12] + X[13]),
+                                         P256_4[8]});
 
          CT::unpoison(S);
          BOTAN_ASSERT(S <= 8, "Expected overflow");
