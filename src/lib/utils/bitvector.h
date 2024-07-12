@@ -830,7 +830,11 @@ class bitvector_base final {
       /// @}
 
    private:
-      void check_offset(size_type pos) const { BOTAN_ARG_CHECK(pos < m_bits, "Out of range"); }
+      void check_offset(size_type pos) const {
+         // BOTAN_ASSERT_NOMSG(!CT::is_poisoned(&m_bits, sizeof(m_bits)));
+         // BOTAN_ASSERT_NOMSG(!CT::is_poisoned(&pos, sizeof(pos)));
+         BOTAN_ARG_CHECK(pos < m_bits, "Out of range");
+      }
 
       void zero_unused_bits() {
          const auto first_unused_bit = size();

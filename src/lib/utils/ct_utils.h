@@ -32,6 +32,17 @@ namespace Botan::CT {
 /// @name Constant Time Check Annotation Helpers
 /// @{
 
+constexpr bool is_poisoned(const void* p, size_t n) {
+#if defined(BOTAN_HAS_VALGRIND)
+   if(!std::is_constant_evaluated()) {
+      return VALGRIND_CHECK_MEM_IS_DEFINED(p, n) != 0;
+   }
+#endif
+
+   BOTAN_UNUSED(p, n);
+   return false;
+}
+
 /**
 * Use valgrind to mark the contents of memory as being undefined.
 * Valgrind will accept operations which manipulate undefined values,
