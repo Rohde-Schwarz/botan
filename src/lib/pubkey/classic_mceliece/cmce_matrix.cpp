@@ -91,7 +91,9 @@ std::optional<CmceColumnSelection> move_columns(CmceMatrix& mat, const Classic_M
          row_acc |= sub_mat.at(next_row);
       }
 
-      if(row_acc.none()) {
+      bool semi_systematic_form_failed = row_acc.none();
+      CT::unpoison(semi_systematic_form_failed);
+      if(semi_systematic_form_failed) {
          // If the current row and all subsequent rows are zero
          // we cannot create a semi-systematic matrix
          return std::nullopt;
@@ -156,7 +158,9 @@ std::optional<CmceColumnSelection> apply_gauss(const Classic_McEliece_Parameters
    for(size_t diag_pos = 0; diag_pos < params.pk_no_rows(); ++diag_pos) {
       if(params.is_f() && diag_pos == params.pk_no_rows() - params.mu()) {
          auto ret_pivots = move_columns(mat, params);
-         if(!ret_pivots) {
+         bool move_columns_failed = !ret_pivots.has_value();
+         CT::unpoison(move_columns_failed);
+         if(move_columns_failed) {
             return std::nullopt;
          } else {
             pivots = std::move(ret_pivots.value());
@@ -173,7 +177,9 @@ std::optional<CmceColumnSelection> apply_gauss(const Classic_McEliece_Parameters
 
       // If the current bit on the diagonal is not set at this point
       // the matrix is not systematic. We abort the computation in this case.
-      if(!mat[diag_pos].at(diag_pos)) {
+      bool diag_bit_zero = !mat[diag_pos].at(diag_pos);
+      CT::unpoison(diag_bit_zero);
+      if(diag_bit_zero) {
          return std::nullopt;
       }
 
@@ -214,7 +220,9 @@ std::optional<std::pair<Classic_McEliece_Matrix, CmceColumnSelection>> Classic_M
    auto mat = init_matrix_with_alphas(params, field_ordering, g);
    auto pivots = apply_gauss(params, mat);
 
-   if(!pivots) {
+   auto gauss_failed = !pivots.has_value();
+   CT::unpoison(gauss_failed);
+   if(gauss_failed) {
       return std::nullopt;
    }
 
@@ -228,7 +236,9 @@ Classic_McEliece_Matrix::create_matrix_and_apply_pivots(const Classic_McEliece_P
                                                         const Classic_McEliece_Minimal_Polynomial& g) {
    auto pk_matrix_and_pivots = create_matrix(params, field_ordering, g);
 
-   if(!pk_matrix_and_pivots) {
+   bool matrix_creation_failed = !pk_matrix_and_pivots.has_value();
+   CT::unpoison(matrix_creation_failed);
+   if(matrix_creation_failed) {
       return std::nullopt;
    }
 

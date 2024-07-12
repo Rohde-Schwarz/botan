@@ -805,6 +805,10 @@ class bitvector_base final {
          full_range_operation(maybe_xor, *this, detail::unwrap(other));
       }
 
+      constexpr void _const_time_poison() const { CT::poison(m_blocks); }
+
+      constexpr void _const_time_unpoison() const { CT::unpoison(m_blocks); }
+
       /// @}
 
       /// @name Iterators
@@ -1326,6 +1330,10 @@ class Strong_Adapter<T> : public Container_Strong_Adapter_Base<T> {
       auto capacity() const { return this->get().capacity(); }
 
       auto reserve(size_type n) { return this->get().reserve(n); }
+
+      constexpr void _const_time_poison() const { this->get()._const_time_poison(); }
+
+      constexpr void _const_time_unpoison() const { this->get()._const_time_unpoison(); }
 };
 
 }  // namespace detail

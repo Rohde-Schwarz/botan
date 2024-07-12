@@ -93,8 +93,10 @@ std::optional<Classic_McEliece_Minimal_Polynomial> Classic_McEliece_Polynomial_R
          }
       }
 
-      if(mat.at(j).coef_at(j).is_zero()) {
-         // Fail if not systematic.
+      const bool is_zero_at_diagonal = mat.at(j).coef_at(j).is_zero();
+      CT::unpoison(is_zero_at_diagonal);
+      if(is_zero_at_diagonal) {
+         // Fail if not systematic. New rejection sampling iteration starts.
          return std::nullopt;
       }
 
