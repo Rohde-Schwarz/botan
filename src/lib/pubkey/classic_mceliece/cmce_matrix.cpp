@@ -33,7 +33,7 @@ void bit_vector_insert_at(secure_bitvector& bv, size_t pos, uint64_t val) {
 }
 
 CT::Mask<uint64_t> bit_at_mask(uint64_t val, size_t pos) {
-   return CT::Mask<uint64_t>::expand((val >> pos) & 1);
+   return CT::Mask<uint64_t>::expand((1 << pos) & val);
 }
 
 /// Swaps bit i with bit j in val
