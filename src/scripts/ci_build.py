@@ -231,7 +231,7 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
         flags += ['--unsafe-terminate-on-asserts']
 
     if target in ['valgrind', 'valgrind-full']:
-        flags += ['--with-valgrind']
+        flags += ['--with-valgrind', '--with-debug-info']
 
         test_prefix = ['valgrind',
                        '-v',
