@@ -184,7 +184,7 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
              '--link-method=symlink',
              '--enable-experimental-features',
             #  '--debug',
-             '--with-debug-info', '--msvc-runtime=MD']
+             '--debug-mode', '--msvc-runtime=MDd']
 
     if target in ['shared', 'static']:
         install_prefix = tempfile.mkdtemp(prefix='botan-install-')
