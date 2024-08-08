@@ -183,14 +183,15 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
              '--with-build-dir=%s' % build_dir,
              '--link-method=symlink',
              '--enable-experimental-features',
-             '--debug']
+            #  '--debug',
+             '--with-debug-info', '--msvc-runtime=MD']
 
     if target in ['shared', 'static']:
         install_prefix = tempfile.mkdtemp(prefix='botan-install-')
         flags += ['--prefix=%s' % (install_prefix)]
 
-    if ccache is not None:
-        flags += ['--no-store-vc-rev', '--compiler-cache=%s' % (ccache)]
+    # if ccache is not None:
+    #     flags += ['--no-store-vc-rev', '--compiler-cache=%s' % (ccache)]
 
     if not disable_werror:
         pass
