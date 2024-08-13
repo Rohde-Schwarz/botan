@@ -123,6 +123,8 @@ def build_targets(target, target_os):
         yield 'bogo_shim'
     if target in ['examples']:
         yield 'examples'
+    if target in ['amalgamation'] and target_os in ['linux']:
+        yield 'examples'
     if target in ['valgrind', 'valgrind-full']:
         yield 'ct_selftest'
 
@@ -213,6 +215,9 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
 
     if target in ['amalgamation', 'cross-arm64-amalgamation', 'cross-android-arm64-amalgamation']:
         flags += ['--amalgamation']
+
+    if target in ['amalgamation'] and target_os in ['linux']:
+        flags += ['--with-boost']
 
     if target in ['bsi', 'nist']:
         # tls is optional for bsi/nist but add it so verify tests work with these minimized configs
@@ -782,6 +787,9 @@ def main(args=None):
                 make_targets += ['fuzzer_corpus_zip', 'fuzzers']
 
             if target in ['examples']:
+                make_targets += ['examples']
+
+            if target in ['amalgamation'] and options.os in ['linux']:
                 make_targets += ['examples']
 
             if target in ['valgrind', 'valgrind-full']:
