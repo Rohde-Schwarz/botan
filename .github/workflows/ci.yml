@@ -12,7 +12,7 @@ permissions:
 
 on:
   push:
-    branches: [ ci/amalgamation-example ]
+    branches: [ ci/amalg-regression-ci-run ]
   pull_request:
     branches: [ master ]
 
