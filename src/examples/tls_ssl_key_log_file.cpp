@@ -23,6 +23,9 @@
    #include <sys/ioctl.h>
    #include <sys/socket.h>
 #endif
+#if defined(BOTAN_TARGET_OS_HAS_POSIX1)
+   #include <unistd.h>
+#endif
 
 namespace {
 
@@ -201,7 +204,9 @@ class DtlsConnection : public Botan::TLS::Callbacks {
          if(fd) {
 #if defined(BOTAN_TARGET_OS_HAS_SOCKETS)
             shutdown(fd, SHUT_RDWR);
+   #if defined(BOTAN_TARGET_OS_HAS_POSIX1)
             ::close(fd);
+   #endif
 #endif
          }
       }
