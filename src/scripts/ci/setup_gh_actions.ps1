@@ -14,12 +14,6 @@ param(
 
 choco install -y sccache
 
-# Amalgamation builds also build the examples, which require boost
-$amalgamation_targets = @("amalgamation")
-if($amalgamation_targets -contains $TARGET ) {
-    choco install -y boost-msvc-14.3
-}
-
 # find the sccache cache location and store it in the build job's environment
 $raw_cl = (sccache --stats-format json --show-stats | ConvertFrom-Json).cache_location
 $cache_location = ([regex] 'Local disk: "(.*)"').Match($raw_cl).groups[1].value
