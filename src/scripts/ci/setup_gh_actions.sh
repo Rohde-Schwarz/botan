@@ -138,7 +138,7 @@ else
     export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
     brew install ccache
 
-    if [ "$TARGET" = "shared" ]; then
+    if [ "$TARGET" = "shared" ]  || [ "$TARGET" = "amalgamation" ] ; then
         brew install boost
 
         # On Apple Silicon we need to specify the include directory
