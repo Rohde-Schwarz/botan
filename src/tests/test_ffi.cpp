@@ -281,6 +281,9 @@ class FFI_RNG_Test final : public FFI_Test {
          botan_rng_t hwrng_rng = nullptr;
          botan_rng_t null_rng;
          botan_rng_t custom_rng;
+         botan_rng_t tpm2_rng = nullptr;
+
+         botan_tpm2_ctx_t tpm2_ctx;
 
          TEST_FFI_FAIL("invalid rng type", botan_rng_init, (&rng, "invalid_type"));
 
@@ -367,10 +370,29 @@ class FFI_RNG_Test final : public FFI_Test {
             result.test_eq("custom_destroy_cb called", cb_counter, 5);
          }
 
+         const auto tcti_name = Test::options().tpm2_tcti_name().value_or("");
+         const auto tcti_conf = Test::options().tpm2_tcti_conf().value_or("");
+         if(TEST_FFI_INIT(botan_tpm2_ctx_init_ex, (&tpm2_ctx, tcti_name.c_str(), tcti_conf.c_str()))) {
+            if(TEST_FFI_INIT(botan_tpm2_rng_init, (&tpm2_rng, tpm2_ctx))) {
+               Botan::clear_mem(outbuf.data(), outbuf.size());
+
+               TEST_FFI_OK(botan_rng_get, (tpm2_rng, outbuf.data(), outbuf.size()));
+               TEST_FFI_OK(botan_rng_reseed, (tpm2_rng, 256));
+
+               TEST_FFI_OK(botan_rng_reseed_from_rng, (tpm2_rng, system_rng, 256));
+
+               uint8_t not_really_entropy[32] = {0};
+               TEST_FFI_OK(botan_rng_add_entropy, (tpm2_rng, not_really_entropy, 32));
+            }
+
+            TEST_FFI_OK(botan_tpm2_ctx_destroy, (tpm2_ctx));
+         }
+
          TEST_FFI_OK(botan_rng_destroy, (rng));
          TEST_FFI_OK(botan_rng_destroy, (null_rng));
          TEST_FFI_OK(botan_rng_destroy, (system_rng));
          TEST_FFI_OK(botan_rng_destroy, (hwrng_rng));
+         TEST_FFI_OK(botan_rng_destroy, (tpm2_rng));
       }
 };
 
@@ -3554,6 +3576,105 @@ class FFI_DH_Test final : public FFI_Test {
       }
 };
 
+class FFI_TPM2_RSA_Test final : public FFI_Test {
+   public:
+      std::string name() const override { return "FFI TPM 2.0 RSA"; }
+
+      void ffi_test(Test::Result& result, botan_rng_t rng) override {
+         const auto tcti_name = Test::options().tpm2_tcti_name().value_or("");
+         const auto tcti_conf = Test::options().tpm2_tcti_conf().value_or("");
+         const auto rsa_handle = Test::options().tpm2_persistent_rsa_handle();
+         const auto auth_value = Test::options().tpm2_persistent_auth_value();
+
+         botan_tpm2_ctx_t ctx;
+         if(TEST_FFI_INIT(botan_tpm2_ctx_init_ex, (&ctx, tcti_name.c_str(), tcti_conf.c_str()))) {
+            botan_tpm2_session_t session;
+            if(TEST_FFI_INIT(botan_tpm2_unauthenticated_session_init, (&session, ctx))) {
+               botan_privkey_t priv;
+               if(TEST_FFI_INIT(
+                     botan_tpm2_persistent_privkey_open,
+                     (&priv, ctx, rsa_handle, auth_value.data(), auth_value.size(), session, nullptr, nullptr))) {
+                  botan_pubkey_t pub;
+                  TEST_FFI_OK(botan_privkey_export_pubkey, (&pub, priv));
+                  TEST_FFI_OK(botan_pubkey_check_key, (pub, rng, 0));
+
+                  std::array<char, 32> namebuf{};
+                  size_t name_len = namebuf.size() - 1 /* ensure \0 termination */;
+                  if(TEST_FFI_OK(botan_pubkey_algo_name, (pub, namebuf.data(), &name_len))) {
+                     result.test_eq("algo name", std::string(namebuf.data()), "RSA");
+                  }
+
+                  name_len = namebuf.size() - 1;
+                  if(TEST_FFI_OK(botan_privkey_algo_name, (priv, namebuf.data(), &name_len))) {
+                     result.test_eq("algo name", std::string(namebuf.data()), "RSA");
+                  }
+
+                  // Persistent private keys on a TPM cannot be exported
+                  std::vector<uint8_t> privkey_bits(1024);
+                  auto privkey_len = privkey_bits.size();
+                  TEST_FFI_RC(BOTAN_FFI_ERROR_NOT_IMPLEMENTED,
+                              botan_privkey_export,
+                              (priv, privkey_bits.data(), &privkey_len, BOTAN_PRIVKEY_EXPORT_FLAG_DER));
+
+                  botan_mp_t pqd, n, e;
+                  botan_mp_init(&pqd);
+                  botan_mp_init(&n);
+                  botan_mp_init(&e);
+
+                  // cannot export private parameters from TPM
+                  TEST_FFI_RC(BOTAN_FFI_ERROR_BAD_PARAMETER, botan_privkey_rsa_get_p, (pqd, priv));
+                  TEST_FFI_RC(BOTAN_FFI_ERROR_BAD_PARAMETER, botan_privkey_rsa_get_q, (pqd, priv));
+                  TEST_FFI_RC(BOTAN_FFI_ERROR_BAD_PARAMETER, botan_privkey_rsa_get_d, (pqd, priv));
+                  TEST_FFI_OK(botan_privkey_rsa_get_e, (e, priv));
+                  TEST_FFI_OK(botan_privkey_rsa_get_n, (n, priv));
+
+                  // Confirm same (e,n) values in public key
+                  {
+                     botan_mp_t pub_e, pub_n;
+                     botan_mp_init(&pub_e);
+                     botan_mp_init(&pub_n);
+                     TEST_FFI_OK(botan_pubkey_rsa_get_e, (pub_e, pub));
+                     TEST_FFI_OK(botan_pubkey_rsa_get_n, (pub_n, pub));
+
+                     TEST_FFI_RC(1, botan_mp_equal, (pub_e, e));
+                     TEST_FFI_RC(1, botan_mp_equal, (pub_n, n));
+                     botan_mp_destroy(pub_e);
+                     botan_mp_destroy(pub_n);
+                  }
+
+                  TEST_FFI_OK(botan_mp_destroy, (pqd));
+                  TEST_FFI_OK(botan_mp_destroy, (n));
+                  TEST_FFI_OK(botan_mp_destroy, (e));
+
+                  std::array<uint8_t, 10> message = {'h', 'a', 'l', 'l', 'o', ' ', 'w', 'e', 'l', 't'};
+                  botan_pk_op_sign_t sign;
+                  if(TEST_FFI_INIT(botan_pk_op_sign_create, (&sign, priv, "PSS(SHA-256)", 0))) {
+                     size_t sig_len;
+                     TEST_FFI_OK(botan_pk_op_sign_output_length, (sign, &sig_len));
+                     TEST_FFI_OK(botan_pk_op_sign_update, (sign, message.data(), message.size()));
+
+                     std::vector<uint8_t> sig(sig_len);
+                     TEST_FFI_OK(botan_pk_op_sign_finish, (sign, rng, sig.data(), &sig_len));
+
+                     botan_pk_op_verify_t verify;
+                     if(TEST_FFI_INIT(botan_pk_op_verify_create, (&verify, pub, "PSS(SHA-256)", 0))) {
+                        TEST_FFI_OK(botan_pk_op_verify_update, (verify, message.data(), message.size()));
+                        TEST_FFI_OK(botan_pk_op_verify_finish, (verify, sig.data(), sig.size()));
+
+                        TEST_FFI_OK(botan_pk_op_verify_destroy, (verify));
+                     }
+                     TEST_FFI_OK(botan_pk_op_sign_destroy, (sign));
+                  }
+                  TEST_FFI_OK(botan_pubkey_destroy, (pub));
+               }
+               TEST_FFI_OK(botan_privkey_destroy, (priv));
+            }
+            TEST_FFI_OK(botan_tpm2_session_destroy, (session));
+         }
+         TEST_FFI_OK(botan_tpm2_ctx_destroy, (ctx));
+      }
+};
+
 BOTAN_REGISTER_TEST("ffi", "ffi_utils", FFI_Utils_Test);
 BOTAN_REGISTER_TEST("ffi", "ffi_rng", FFI_RNG_Test);
 BOTAN_REGISTER_TEST("ffi", "ffi_rsa_cert", FFI_RSA_Cert_Test);
@@ -3597,6 +3718,7 @@ BOTAN_REGISTER_TEST("ffi", "ffi_kyber768", FFI_Kyber768_Test);
 BOTAN_REGISTER_TEST("ffi", "ffi_kyber1024", FFI_Kyber1024_Test);
 BOTAN_REGISTER_TEST("ffi", "ffi_elgamal", FFI_ElGamal_Test);
 BOTAN_REGISTER_TEST("ffi", "ffi_dh", FFI_DH_Test);
+BOTAN_REGISTER_TEST("ffi", "ffi_tpm2_rsa", FFI_TPM2_RSA_Test);
 
 #endif
 

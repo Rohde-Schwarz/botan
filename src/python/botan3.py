@@ -6,6 +6,7 @@ https://botan.randombit.net
 
 (C) 2015,2017,2018,2019,2023 Jack Lloyd
 (C) 2015 Uri  Blumenthal (extensions and patches)
+(C) 2024 Amos Treiber, René Meusel - Rohde & Schwarz Cybersecurity
 
 Botan is released under the Simplified BSD License (see license.txt)
 
@@ -20,6 +21,7 @@ introduced in Botan 3.0.0
 
 from ctypes import CDLL, CFUNCTYPE, POINTER, byref, create_string_buffer, \
     c_void_p, c_size_t, c_uint8, c_uint32, c_uint64, c_int, c_uint, c_char, c_char_p, addressof
+from typing import Callable
 
 from sys import platform
 from time import strptime, mktime, time as system_time
@@ -502,6 +504,18 @@ def _set_prototypes(dll):
     ffi_api(dll.botan_zfec_decode,
             [c_size_t, c_size_t, POINTER(c_size_t), POINTER(c_char_p), c_size_t, POINTER(c_char_p)])
 
+    # TPM2
+    ffi_api(dll.botan_tpm2_supports_crypto_backend, [])
+    ffi_api(dll.botan_tpm2_ctx_init, [c_void_p, c_char_p], [-40])
+    ffi_api(dll.botan_tpm2_ctx_init_ex, [c_void_p, c_char_p, c_char_p], [-40])
+    ffi_api(dll.botan_tpm2_ctx_enable_crypto_backend, [c_void_p, c_void_p])
+    ffi_api(dll.botan_tpm2_ctx_destroy, [c_void_p], [-40])
+    ffi_api(dll.botan_tpm2_rng_init, [c_void_p, c_void_p])
+    ffi_api(dll.botan_tpm2_unauthenticated_session_init, [c_void_p, c_void_p])
+    ffi_api(dll.botan_tpm2_session_destroy, [c_void_p])
+    ffi_api(dll.botan_tpm2_persistent_privkey_open, [c_void_p, c_void_p, c_uint32, c_char_p, c_size_t, c_void_p, c_void_p, c_void_p])
+
+
     return dll
 
 #
@@ -632,13 +646,70 @@ def const_time_compare(x, y):
     return rc == 0
 
 #
+# TPM2
+#
+
+class TPM2Object:
+    def __init__(self, obj: c_void_p, destroyer: Callable[[c_void_p], None]):
+        self.__obj = obj
+        self.__destroyer = destroyer
+
+    def __del__(self):
+        if hasattr(self, '__obj') and hasattr(self, '__destroyer'):
+            self.__destroyer(self.__obj)
+
+    def handle_(self):
+        return self.__obj
+
+class TPM2Context(TPM2Object):
+    def __init__(self, tcti_name_maybe_with_conf: str | None = None, tcti_conf: str | None = None):
+        obj = c_void_p(0)
+        if tcti_conf is not None:
+            rc = _DLL.botan_tpm2_ctx_init_ex(byref(obj), _ctype_str(tcti_name_maybe_with_conf), _ctype_str(tcti_conf))
+        else:
+            rc = _DLL.botan_tpm2_ctx_init(byref(obj), _ctype_str(tcti_name_maybe_with_conf))
+        if rc == -40: # 'Not Implemented'
+            raise BotanException("TPM2 is not implemented in this build configuration", rc)
+        self.rng_ = None
+        super().__init__(obj, _DLL.botan_tpm2_ctx_destroy)
+
+    @staticmethod
+    def supports_botan_crypto_backend() -> bool:
+        rc = _DLL.botan_tpm2_supports_crypto_backend()
+        return rc == 1
+
+    def enable_botan_crypto_backend(self, rng):
+        # By keeping a reference to the passed-in RNG object, we make sure
+        # that the underlying object lives at least as long as this context.
+        self.rng_ = rng
+        _DLL.botan_tpm2_ctx_enable_crypto_backend(self.handle_(), self.rng_.handle_())
+
+class TPM2Session(TPM2Object):
+    def __init__(self, obj: c_void_p):
+        super().__init__(obj, _DLL.botan_tpm2_session_destroy)
+
+class TPM2UnauthenticatedSession(TPM2Session):
+    def __init__(self, ctx: TPM2Context):
+        obj = c_void_p(0)
+        _DLL.botan_tpm2_unauthenticated_session_init(byref(obj), ctx.handle_())
+        super().__init__(obj)
+
+def session_bundle(s1: TPM2Session | None, s2: TPM2Session | None, s3: TPM2Session | None) -> tuple[TPM2Session | None, TPM2Session | None, TPM2Session | None]:
+    return (s.handle_() if isinstance(s, TPM2Session) else None for s in (s1, s2, s3))
+
+#
 # RNG
 #
 class RandomNumberGenerator:
     # Can also use type "system"
-    def __init__(self, rng_type='system'):
+    def __init__(self, rng_type='system', ctx=None):
         self.__obj = c_void_p(0)
-        _DLL.botan_rng_init(byref(self.__obj), _ctype_str(rng_type))
+        if rng_type == 'tpm2':
+            if not isinstance(ctx, TPM2Context):
+                raise BotanException("Cannot instantiate a TPM2-based RNG without a TPM2 context")
+            _DLL.botan_tpm2_rng_init(byref(self.__obj), ctx.handle_())
+        else:
+            _DLL.botan_rng_init(byref(self.__obj), _ctype_str(rng_type))
 
     def __del__(self):
         _DLL.botan_rng_destroy(self.__obj)
@@ -1269,6 +1340,12 @@ class PrivateKey:
     def load_kyber(cls, key):
         obj = c_void_p(0)
         _DLL.botan_privkey_load_kyber(byref(obj), key, len(key))
+        return PrivateKey(obj)
+
+    @classmethod
+    def load_persistent_on_tpm2(cls, context: TPM2Context, tpm_handle: int, auth_value: bytes, s1: TPM2Session | None = None, s2: TPM2Session | None = None, s3: TPM2Session | None = None):
+        obj = c_void_p(0)
+        _DLL.botan_tpm2_persistent_privkey_open(byref(obj), context.handle_(), tpm_handle, _ctype_bits(auth_value), len(auth_value), *session_bundle(s1, s2, s3))
         return PrivateKey(obj)
 
     def __del__(self):

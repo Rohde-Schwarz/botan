@@ -862,6 +862,12 @@ def main(args=None):
         if root_dir != '.':
             python_tests.append('--test-data-dir=%s' % root_dir)
 
+        if is_running_in_github_actions() and 'BOTAN_TPM2_ENABLED' in os.environ:
+            python_tests.extend(["--tpm2-tcti-name=%s" % os.getenv('BOTAN_TPM2_TCTI_NAME'),
+                                 "--tpm2-tcti-conf=%s" % os.getenv('BOTAN_TPM2_TCTI_CONF'),
+                                 "--tpm2-persistent-rsa-handle=%s" % os.getenv('BOTAN_TPM2_PERSISTENT_RSA_KEY_HANDLE'),
+                                 "--tpm2-persistent-auth-value=%s" % os.getenv('BOTAN_TPM2_PERSISTENT_KEY_AUTH_VALUE')])
+
         if target in ['shared', 'coverage'] and not (options.os == 'windows' and options.cpu == 'x86'):
             cmds.append([py_interp, '-b'] + python_tests)
 

@@ -31,10 +31,10 @@ def hex_decode(buf):
 
 # pylint: disable=global-statement
 
-TEST_DATA_DIR = '.'
+ARGS = None
 
 def test_data(relpath):
-    return os.path.join(TEST_DATA_DIR, relpath)
+    return os.path.join(ARGS.test_data_dir, relpath)
 
 class BotanPythonTests(unittest.TestCase):
     def test_version(self):
@@ -175,6 +175,25 @@ class BotanPythonTests(unittest.TestCase):
         user_rng.reseed_from_rng(system_rng, 256)
 
         user_rng.add_entropy('seed material...')
+
+    def test_tpm2_rng(self):
+        try:
+            tpm2_ctx = botan.TPM2Context(ARGS.tpm2_tcti_name, ARGS.tpm2_tcti_conf)
+        except botan.BotanException as ex:
+            if ex.error_code() == -40: # Not Implemented
+                self.skipTest("No TPM2 support in this build")
+            else:
+                raise ex
+
+        tpm2_rng = botan.RandomNumberGenerator("tpm2", tpm2_ctx)
+
+        output1 = tpm2_rng.get(32)
+        output2 = tpm2_rng.get(32)
+
+        self.assertEqual(len(output1), 32)
+        self.assertEqual(len(output2), 32)
+        self.assertNotEqual(output1, output2)
+        tpm2_rng.add_entropy('xkcd #221: 4 - chosen by fair dice roll')
 
     def test_hash(self):
 
@@ -414,6 +433,52 @@ ofvkP1EDmpx50fHLawIDAQAB
         kem_d = botan.KemDecrypt(rsapriv, 'KDF2(SHA-256)')
         shared_key_d = kem_d.decrypt_shared_key(salt, 32, encap_key)
         self.assertEqual(shared_key, shared_key_d)
+
+    def test_rsa_from_tpm2(self):
+        try:
+            tpm2_ctx = botan.TPM2Context(ARGS.tpm2_tcti_name, ARGS.tpm2_tcti_conf)
+        except botan.BotanException as ex:
+            if ex.error_code() == -40: # Not Implemented
+                self.skipTest("No TPM2 support in this build")
+            else:
+                raise ex
+
+        if botan.TPM2Context.supports_botan_crypto_backend():
+            # Constructing this RNG in-place is deliberate to ensure that the
+            # TPM2 context wrapper retains a reference to the RNG to prolong
+            # its lifetime.
+            tpm2_ctx.enable_botan_crypto_backend(botan.RandomNumberGenerator())
+
+        session = botan.TPM2UnauthenticatedSession(tpm2_ctx)
+        priv = botan.PrivateKey.load_persistent_on_tpm2(tpm2_ctx,
+                                                        ARGS.tpm2_persistent_rsa_handle,
+                                                        ARGS.tpm2_persistent_auth_value,
+                                                        session)
+        self.assertEqual(priv.algo_name(), 'RSA')
+
+        with self.assertRaises(botan.BotanException):
+            priv.to_pem()
+        with self.assertRaises(botan.BotanException):
+            priv.to_der()
+
+        pub = priv.get_public_key()
+        self.assertEqual(pub.algo_name(), 'RSA')
+
+        pub_pem = pub.to_pem()
+        pub_der = pub.to_der()
+
+        self.assertEqual(pub_pem[0:27], "-----BEGIN PUBLIC KEY-----\n")
+        self.assertGreater(len(pub_pem), len(pub_der))
+
+        signer = botan.PKSign(priv, 'PSS(SHA-256)')
+        signer.update('messa')
+        signer.update('ge')
+        sig = signer.finish(botan.RandomNumberGenerator())
+
+        verify = botan.PKVerify(pub, 'PSS(SHA-256)')
+        verify.update('mess')
+        verify.update('age')
+        self.assertTrue(verify.check_signature(sig))
 
     def test_kyber(self):
         rng = botan.RandomNumberGenerator()
@@ -926,13 +991,18 @@ class BotanPythonZfecTests(unittest.TestCase):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--test-data-dir', default='.')
+    parser.add_argument("--tpm2-tcti-name")
+    parser.add_argument("--tpm2-tcti-conf")
+    parser.add_argument("--tpm2-persistent-rsa-handle", default="0x81000008", type=lambda s: int(s, 16))
+    parser.add_argument("--tpm2-persistent-ecc-handle", default="0x81000010", type=lambda s: int(s, 16))
+    parser.add_argument("--tpm2-persistent-auth-value", default="password",   type=lambda s: s.encode('utf-8'))
+
     parser.add_argument('unittest_args', nargs='*')
 
-    args = parser.parse_args()
-    global TEST_DATA_DIR
-    TEST_DATA_DIR = args.test_data_dir
+    global ARGS
+    ARGS = parser.parse_args()
 
-    sys.argv[1:] = args.unittest_args
+    sys.argv[1:] = ARGS.unittest_args
     unittest.main()
 
 if __name__ == '__main__':
