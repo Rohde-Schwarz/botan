@@ -38,7 +38,7 @@ class BOTAN_PUBLIC_API(3, 1) SphincsPlus_PublicKey : public virtual Public_Key {
 
       size_t key_length() const override;
 
-      std::string algo_name() const override { return "SPHINCS+"; }
+      std::string algo_name() const override { return "SLH-DSA"; }
 
       size_t estimated_strength() const override;
       AlgorithmIdentifier algorithm_identifier() const override;

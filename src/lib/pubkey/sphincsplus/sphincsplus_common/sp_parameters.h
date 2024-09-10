@@ -38,13 +38,26 @@ enum class Sphincs_Parameter_Set {
 };
 
 /**
+ * @brief FIPS 205 pure or pre-hash mode (see FIPS 205, Section 10.2)
+ */
+enum class SlhDsaInputMode {
+   /// Message is used directly. Recommended in most cases
+   Pure,
+   /// Prehash mode: A message digest is used as the signature creation input.
+   /// TODO: Not yet supported
+   PreHash
+};
+
+/**
  * Container for all SLH-DSA parameters defined by a specific instance (see
  * FIPS 205, Table 2). Also contains getters for various
  * parameters that are derived from the given parameters.
  */
 class BOTAN_PUBLIC_API(3, 1) Sphincs_Parameters final {
    public:
-      static Sphincs_Parameters create(Sphincs_Parameter_Set set, Sphincs_Hash_Type hash);
+      static Sphincs_Parameters create(Sphincs_Parameter_Set set,
+                                       Sphincs_Hash_Type hash,
+                                       SlhDsaInputMode input_mode = SlhDsaInputMode::Pure);
       static Sphincs_Parameters create(std::string_view name);
       static Sphincs_Parameters create(const OID& oid);
 
@@ -74,6 +87,11 @@ class BOTAN_PUBLIC_API(3, 1) Sphincs_Parameters final {
        * @returns the generic algorithm parameterization set to be used by those parameters
        */
       Sphincs_Parameter_Set parameter_set() const { return m_set; }
+
+      /**
+       * @returns the input mode, i.e. whether the message is used directly or pre-hashed
+       */
+      SlhDsaInputMode input_mode() const { return m_input_mode; }
 
       /**
        * @returns true for SLH-DSA parameter sets. False for SPHINCS+ Round 3.1 parameter sets.
@@ -145,6 +163,7 @@ class BOTAN_PUBLIC_API(3, 1) Sphincs_Parameters final {
       uint32_t ht_signature_bytes() const { return m_ht_sig_bytes; }
 
       /**
+       *  TODO: Undo renaming
        * @returns the base 2 logarithm of the Winternitz parameter for WOTS+ signatures
        */
       uint32_t lg_w() const { return m_lg_w; }
@@ -185,6 +204,7 @@ class BOTAN_PUBLIC_API(3, 1) Sphincs_Parameters final {
       uint32_t fors_message_bytes() const { return m_fors_message_bytes; }
 
       /**
+       * TODO: undo renaming
        * @returns the byte length of a SLH-DSA signature
        */
       uint32_t slh_dsa_signature_bytes() const { return m_sp_sig_bytes; }
@@ -218,6 +238,7 @@ class BOTAN_PUBLIC_API(3, 1) Sphincs_Parameters final {
    private:
       Sphincs_Parameters(Sphincs_Parameter_Set set,
                          Sphincs_Hash_Type hash_type,
+                         SlhDsaInputMode input_mode,
                          uint32_t n,
                          uint32_t h,
                          uint32_t d,
@@ -229,6 +250,7 @@ class BOTAN_PUBLIC_API(3, 1) Sphincs_Parameters final {
    private:
       Sphincs_Parameter_Set m_set;
       Sphincs_Hash_Type m_hash_type;
+      SlhDsaInputMode m_input_mode;
       uint32_t m_n;
       uint32_t m_h;
       uint32_t m_d;

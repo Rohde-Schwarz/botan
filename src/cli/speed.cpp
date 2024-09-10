@@ -427,7 +427,7 @@ class Speed final : public Command {
             "X448",
             "McEliece",
             "Kyber",
-            "SPHINCS+",
+            "SLH-DSA",
             "FrodoKEM",
             "HSS-LMS",
          };
@@ -661,7 +661,7 @@ class Speed final : public Command {
             }
 #endif
 #if defined(BOTAN_HAS_SPHINCS_PLUS_COMMON)
-            else if(algo == "SPHINCS+") {
+            else if(algo == "SLH-DSA") {
                bench_sphincs_plus(provider, msec);
             }
 #endif
@@ -2258,7 +2258,7 @@ class Speed final : public Command {
             auto keygen_timer = make_timer(params_str, provider, "keygen");
 
             std::unique_ptr<Botan::Private_Key> key(
-               keygen_timer->run([&] { return Botan::create_private_key("SPHINCS+", rng(), params_str); }));
+               keygen_timer->run([&] { return Botan::create_private_key("SLH-DSA", rng(), params_str); }));
 
             record_result(keygen_timer);
             if(bench_pk_sig(*key, params_str, provider, "", msec) == 1) {
