@@ -1,10 +1,10 @@
 /*
- * SphincsPlus Parameters
+ * SLH-DSA Parameters
  * (C) 2023 Jack Lloyd
  *     2023 Fabian Albert, René Meusel, Amos Treiber - Rohde & Schwarz Cybersecurity
  *
  * Botan is released under the Simplified BSD License (see license.txt)
- **/
+ */
 
 #include <botan/sp_parameters.h>
 
@@ -165,26 +165,26 @@ Sphincs_Parameters::Sphincs_Parameters(Sphincs_Parameter_Set set,
    BOTAN_ARG_CHECK(m_d > 0, "d must be greater than zero");
 
    m_xmss_tree_height = m_h / m_d;
-   m_log_w = ceil_log2(m_w);
+   m_lg_w = ceil_log2(m_w);
 
-   // base_w algorithm (as described in Sphincs+ 3.1 Section 2.5) only works
+   // base_2^b algorithm (Fips 205, Algorithm 4) only works
    // when m_log_w is a divisor of 8.
-   BOTAN_ASSERT_NOMSG(m_log_w <= 8 && 8 % m_log_w == 0);
+   BOTAN_ASSERT_NOMSG(m_lg_w <= 8 && 8 % m_lg_w == 0);
 
-   // # Winternitz blocks of the message
-   m_wots_len1 = (m_n * 8) / m_log_w;
+   // # Winternitz blocks of the message (len_1 of FIPS 205, Algorithm 1)
+   m_wots_len1 = (m_n * 8) / m_lg_w;
 
-   // # Winternitz blocks of the checksum
-   m_wots_len2 = ceil_log2(m_wots_len1 * (m_w - 1)) / m_log_w + 1;
+   // # Winternitz blocks of the checksum (output of FIPS 205 Algorithm 1)
+   m_wots_len2 = ceil_log2(m_wots_len1 * (m_w - 1)) / m_lg_w + 1;
 
-   // # Winternitz blocks in the signature
+   // # Winternitz blocks in the signature (len of FIPS 205, Equation 5.4)
    m_wots_len = m_wots_len1 + m_wots_len2;
 
    // byte length of WOTS+ signature as well as public key
    m_wots_bytes = m_wots_len * m_n;
 
    // # of bytes the WOTS+ checksum consists of
-   m_wots_checksum_bytes = ceil_tobytes(m_wots_len2 * m_log_w);
+   m_wots_checksum_bytes = ceil_tobytes(m_wots_len2 * m_lg_w);
 
    m_fors_sig_bytes = (m_a + 1) * m_k * m_n;
 
@@ -226,7 +226,7 @@ bool Sphincs_Parameters::is_available() const {
 }
 
 Sphincs_Parameters Sphincs_Parameters::create(Sphincs_Parameter_Set set, Sphincs_Hash_Type hash) {
-   // See "Table 3" in SPHINCS+ specification (NIST R3.1 submission, page 39)
+   // See FIPS 205, Table 2
    switch(set) {
       case Sphincs_Parameter_Set::Sphincs128Small:
       case Sphincs_Parameter_Set::SLHDSA128Small:

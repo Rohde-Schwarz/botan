@@ -145,19 +145,20 @@ signatures, then the whole scheme becomes insecure, and signatures can be
 forged.
 
 HSS-LMS
--------
+~~~~~~~
 
 A post-quantum secure hash-based signature scheme similar to XMSS. Contains
 support for multitrees. It is stateful, meaning the private key changes after
 each signature.
 
-SPHINCS+
-~~~~~~~~~
+SLH-DSA
+~~~~~~~
 
-A post-quantum secure signature scheme whose security is based (only) on the
-security of a hash function. Unlike XMSS, it is a stateless signature
-scheme, meaning that the private key does not change with each signature. It
-has high security but very long signatures and high runtime.
+The Stateless Hash-Based Digital Signature Standard (SLH-DSA)
+is the FIPS 205 post-quantum secure signature scheme whose security is solely
+based on the security of a hash function. Unlike XMSS, it is a stateless
+signature scheme, meaning that the private key does not change with each
+signature. It has high security but very long signatures and high runtime.
 
 FrodoKEM
 ~~~~~~~~
@@ -807,7 +808,7 @@ Botan implements the following signature algorithms:
 
 #. Dilithium.
    Takes the optional parameter ``Deterministic`` (default) or ``Randomized``.
-#. SPHINCS+.
+#. SLH-DSA.
    Takes the optional parameter ``Deterministic`` (default) or ``Randomized``.
 #. XMSS. Takes no parameter.
 #. HSS-LMS. Takes no parameter.

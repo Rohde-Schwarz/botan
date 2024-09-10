@@ -1,5 +1,5 @@
 /*
- * SPHINCS+ Hash Implementation for SHA-256
+ * SLH-DSA Hash Implementation for SHA-256
  * (C) 2023 Jack Lloyd
  *     2023 Fabian Albert, René Meusel, Amos Treiber - Rohde & Schwarz Cybersecurity
  *
@@ -16,7 +16,7 @@
 namespace Botan {
 
 /**
- * Implementation of SPHINCS+ hash function abstraction for SHAKE256
+ * Implementation of SLH-DSA hash function abstraction for SHAKE256
  */
 class Sphincs_Hash_Functions_Shake : public Sphincs_Hash_Functions {
    private:

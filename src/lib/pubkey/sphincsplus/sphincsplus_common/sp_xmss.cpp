@@ -1,10 +1,10 @@
 /*
-* Sphincs+ XMSS logic
+* SLH-DSA's XMSS - eXtended Merkle Signature Scheme (FIPS 205, Section 6)
 * (C) 2023 Jack Lloyd
 *     2023 Fabian Albert, René Meusel, Amos Treiber - Rohde & Schwarz Cybersecurity
 *
 * Botan is released under the Simplified BSD License (see license.txt)
-**/
+*/
 
 #include <botan/internal/sp_xmss.h>
 
@@ -17,7 +17,7 @@
 namespace Botan {
 
 SphincsTreeNode xmss_sign_and_pkgen(StrongSpan<SphincsXmssSignature> out_sig,
-                                    const SphincsTreeNode& root,
+                                    const SphincsTreeNode& message,
                                     const SphincsSecretSeed& secret_seed,
                                     Sphincs_Address& wots_addr,
                                     Sphincs_Address& tree_addr,
@@ -32,7 +32,7 @@ SphincsTreeNode xmss_sign_and_pkgen(StrongSpan<SphincsXmssSignature> out_sig,
       // if `idx_leaf` is not set, we don't want to calculate a signature and
       // therefore won't need to bother preparing the chain lengths either.
       if(idx_leaf.has_value()) {
-         return chain_lengths(root, params);
+         return chain_lengths(message, params);
       } else {
          return {};
       };

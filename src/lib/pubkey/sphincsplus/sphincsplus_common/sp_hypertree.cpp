@@ -1,10 +1,10 @@
 /*
-* Sphincs+ hypertree logic
-* (C) 2023 Jack Lloyd
-*     2023 Fabian Albert, René Meusel, Amos Treiber - Rohde & Schwarz Cybersecurity
-*
-* Botan is released under the Simplified BSD License (see license.txt)
-**/
+ * SLH-DSA's Hypertree Logic (FIPS 205, Section 7)
+ * (C) 2023 Jack Lloyd
+ *     2023 Fabian Albert, René Meusel, Amos Treiber - Rohde & Schwarz Cybersecurity
+ *
+ * Botan is released under the Simplified BSD License (see license.txt)
+ */
 
 #include <botan/internal/sp_hypertree.h>
 

@@ -1,10 +1,10 @@
 /*
- * SPHINCS+ Address
+ * SLH-DSA Address
  * (C) 2023 Jack Lloyd
  *     2023 Fabian Albert, René Meusel, Amos Treiber - Rohde & Schwarz Cybersecurity
  *
  * Botan is released under the Simplified BSD License (see license.txt)
- **/
+ */
 
 #ifndef BOTAN_SPHINCS_PLUS_ADDRESS_H_
 #define BOTAN_SPHINCS_PLUS_ADDRESS_H_
@@ -28,11 +28,12 @@ enum class Sphincs_Address_Type : uint32_t {
 };
 
 /**
- * Representation of a SPHINCS+ hash function address as specified in
- * SPHINCS+ Specification Round 3.1, Section 2.7.3
+ * Representation of a SLH-DSA hash function address as specified in
+ * FIPS 205, Section 4.2
  */
 class BOTAN_TEST_API Sphincs_Address final {
    private:
+      // Offsets of the address fields in the address array. Counted in 32-bit words.
       static constexpr size_t layer_offset = 0;
       static constexpr size_t tree_offset = 1;  // tree address is 3 words wide
       static constexpr size_t type_offset = 4;

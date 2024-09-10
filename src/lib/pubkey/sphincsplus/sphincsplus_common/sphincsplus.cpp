@@ -1,5 +1,5 @@
 /*
-* Sphincs+
+* SLH-DSA - Stateless Hash-Based Digital Signature Standard - FIPS 205
 * (C) 2023 Jack Lloyd
 *     2023 Fabian Albert, René Meusel, Amos Treiber - Rohde & Schwarz Cybersecurity
 *
@@ -132,7 +132,7 @@ std::vector<uint8_t> SphincsPlus_PublicKey::raw_public_key_bits() const {
 
 std::vector<uint8_t> SphincsPlus_PublicKey::public_key_bits() const {
    // Currently, there isn't a finalized definition of an ASN.1 structure for
-   // SPHINCS+ aka SLH-DSA public keys. Therefore, we return the raw public key bits.
+   // SLH-DSA or SPHINCS+ public keys. Therefore, we return the raw public key bits.
    return raw_public_key_bits();
 }
 
@@ -154,12 +154,12 @@ class SphincsPlus_Verification_Operation final : public PK_Ops::Verification {
          m_msg_buffer.insert(m_msg_buffer.end(), msg.begin(), msg.end());
       }
 
-      /*
-      * Perform a verification operation
-      */
+      /**
+       * Perform a verification operation
+       */
       bool is_valid_signature(std::span<const uint8_t> sig) override {
          const auto& p = m_public->parameters();
-         if(sig.size() != p.sphincs_signature_bytes()) {
+         if(sig.size() != p.slh_dsa_signature_bytes()) {
             m_msg_buffer.clear();
             return false;
          }
@@ -203,7 +203,7 @@ std::unique_ptr<PK_Ops::Verification> SphincsPlus_PublicKey::create_x509_verific
    const AlgorithmIdentifier& signature_algorithm, std::string_view provider) const {
    if(provider.empty() || provider == "base") {
       if(signature_algorithm != this->algorithm_identifier()) {
-         throw Decoding_Error("Unexpected AlgorithmIdentifier for SPHINCS+ signature");
+         throw Decoding_Error("Unexpected AlgorithmIdentifier for SLH-DSA signature");
       }
       return std::make_unique<SphincsPlus_Verification_Operation>(m_public);
    }
@@ -301,7 +301,7 @@ class SphincsPlus_Signature_Operation final : public PK_Ops::Signature {
       std::vector<uint8_t> sign(RandomNumberGenerator& rng) override {
          const auto& p = m_public->parameters();
 
-         std::vector<uint8_t> sphincs_sig_buffer(p.sphincs_signature_bytes());
+         std::vector<uint8_t> sphincs_sig_buffer(p.slh_dsa_signature_bytes());
          BufferStuffer sphincs_sig(sphincs_sig_buffer);
 
          // Compute and append the digest randomization value (R of spec).
@@ -341,7 +341,7 @@ class SphincsPlus_Signature_Operation final : public PK_Ops::Signature {
          return sphincs_sig_buffer;
       }
 
-      size_t signature_length() const override { return m_public->parameters().sphincs_signature_bytes(); }
+      size_t signature_length() const override { return m_public->parameters().slh_dsa_signature_bytes(); }
 
       AlgorithmIdentifier algorithm_identifier() const override {
          return m_public->parameters().algorithm_identifier();
@@ -362,7 +362,7 @@ std::unique_ptr<PK_Ops::Signature> SphincsPlus_PrivateKey::create_signature_op(R
                                                                                std::string_view provider) const {
    BOTAN_UNUSED(rng);
    BOTAN_ARG_CHECK(params.empty() || params == "Deterministic" || params == "Randomized",
-                   "Unexpected parameters for signing with SPHINCS+");
+                   "Unexpected parameters for signing with SLH-DSA");
 
    const bool randomized = (params == "Randomized");
    if(provider.empty() || provider == "base") {

@@ -1,10 +1,12 @@
 /*
- * FORS - Forest of Random Subsets
+ * FORS - Forest of Random Subsets (FIPS 205, Section 8)
  * (C) 2023 Jack Lloyd
  *     2023 Fabian Albert, René Meusel, Amos Treiber - Rohde & Schwarz Cybersecurity
  *
+ * Parts of this file have been adapted from https://github.com/sphincs/sphincsplus
+ *
  * Botan is released under the Simplified BSD License (see license.txt)
- **/
+ */
 
 #include <botan/internal/sp_fors.h>
 
@@ -22,6 +24,7 @@ namespace Botan {
 
 namespace {
 
+/// FIPS 205, Algorithm 4: base_2^b(X,b,out_len) with b = a and out_len = k (for usage in FORS)
 std::vector<TreeNodeIndex> fors_message_to_indices(std::span<const uint8_t> message, const Sphincs_Parameters& params) {
    BOTAN_ASSERT_NOMSG((message.size() * 8) >= (params.k() * params.a()));
 

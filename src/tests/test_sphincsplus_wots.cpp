@@ -46,7 +46,7 @@ class SPHINCS_Plus_WOTS_Test final : public Text_Based_Test {
       }
 
       Test::Result run_one_test(const std::string&, const VarMap& vars) final {
-         Test::Result result("SPHINCS+'s WOTS+");
+         Test::Result result("SLH-DSA's WOTS+");
 
          auto params = Botan::Sphincs_Parameters::create(vars.get_req_str("SphincsParameterSet"));
 
@@ -59,7 +59,7 @@ class SPHINCS_Plus_WOTS_Test final : public Text_Based_Test {
 
          auto hashes = Botan::Sphincs_Hash_Functions::create(params, public_seed);
 
-         // Depending on the SPHINCS+ configuration the resulting WOTS+ signature is
+         // Depending on the SLH-DSA's configuration the resulting WOTS+ signature is
          // hashed either with SHA-3 or SHA-256 to reduce the inner dependencies
          // on other hash function modules.
          auto hash_algo_spec = [&]() -> std::string {

@@ -45,7 +45,7 @@ class SPHINCS_Plus_FORS_Test final : public Text_Based_Test {
       }
 
       Test::Result run_one_test(const std::string&, const VarMap& vars) final {
-         Test::Result result("SPHINCS+'s FORS");
+         Test::Result result("SLH-DSA's FORS");
 
          auto params = Botan::Sphincs_Parameters::create(vars.get_req_str("SphincsParameterSet"));
 
@@ -54,7 +54,7 @@ class SPHINCS_Plus_FORS_Test final : public Text_Based_Test {
 
          const auto hashed_message = Botan::SphincsHashedMessage(vars.get_req_bin("Msg"));
 
-         // Depending on the SPHINCS+ configuration the resulting signature is
+         // Depending on the SLH-DSA's configuration the resulting signature is
          // hashed either with SHA-3 or SHA-256 to reduce the inner dependencies
          // on other hash function modules.
          auto hash_algo_spec = [&]() -> std::string {

@@ -1,10 +1,10 @@
 /*
- * SPHINCS+ Parameters
+ * SLH-DSA Parameters
  * (C) 2023 Jack Lloyd
  *     2023 Fabian Albert, René Meusel, Amos Treiber - Rohde & Schwarz Cybersecurity
  *
  * Botan is released under the Simplified BSD License (see license.txt)
- **/
+ */
 
 #ifndef BOTAN_SP_PARAMS_H_
 #define BOTAN_SP_PARAMS_H_
@@ -18,7 +18,7 @@ namespace Botan {
 enum class Sphincs_Hash_Type {
    Shake256,
    Sha256,
-   Haraka,  ///< Haraka is currently not supported
+   BOTAN_DEPRECATED("Haraka is not and will not be supported") Haraka,  ///< Haraka is currently not supported
 };
 
 enum class Sphincs_Parameter_Set {
@@ -38,8 +38,8 @@ enum class Sphincs_Parameter_Set {
 };
 
 /**
- * Container for all SPHINCS+ parameters defined by a specific instance (see
- * Table 3 of Sphincs+ round 3.1 spec). Also contains getters for various
+ * Container for all SLH-DSA parameters defined by a specific instance (see
+ * FIPS 205, Table 2). Also contains getters for various
  * parameters that are derived from the given parameters.
  */
 class BOTAN_PUBLIC_API(3, 1) Sphincs_Parameters final {
@@ -91,17 +91,17 @@ class BOTAN_PUBLIC_API(3, 1) Sphincs_Parameters final {
       std::string hash_name() const;
 
       /**
-       * @returns SPHINCS+ security parameter in bytes
+       * @returns SLH-DSA security parameter in bytes
        */
       size_t n() const { return m_n; }
 
       /**
-       * @returns Height of the SPHINCS+ hypertree
+       * @returns Height of the SLH-DSA hypertree
        */
       uint32_t h() const { return m_h; }
 
       /**
-       * @returns Number of XMSS layers in the SPHINCS+ hypertree
+       * @returns Number of XMSS layers in the SLH-DSA hypertree
        */
       uint32_t d() const { return m_d; }
 
@@ -147,7 +147,7 @@ class BOTAN_PUBLIC_API(3, 1) Sphincs_Parameters final {
       /**
        * @returns the base 2 logarithm of the Winternitz parameter for WOTS+ signatures
        */
-      uint32_t log_w() const { return m_log_w; }
+      uint32_t lg_w() const { return m_lg_w; }
 
       /**
        * @returns the len1 parameter for WOTS+ signatures
@@ -185,9 +185,9 @@ class BOTAN_PUBLIC_API(3, 1) Sphincs_Parameters final {
       uint32_t fors_message_bytes() const { return m_fors_message_bytes; }
 
       /**
-       * @returns the byte length of a Sphincs+ signature
+       * @returns the byte length of a SLH-DSA signature
        */
-      uint32_t sphincs_signature_bytes() const { return m_sp_sig_bytes; }
+      uint32_t slh_dsa_signature_bytes() const { return m_sp_sig_bytes; }
 
       /**
        * @returns the byte length of an encoded public key for this parameter set
@@ -211,7 +211,7 @@ class BOTAN_PUBLIC_API(3, 1) Sphincs_Parameters final {
 
       /**
        * @returns the byte length of the output of H_msg. Corresponds to
-       *          m in the specification of H_msg in Section 7.2
+       *          'm' of FIPS 205, Table 2.
        */
       uint32_t h_msg_digest_bytes() const { return m_h_msg_digest_bytes; }
 
@@ -236,7 +236,7 @@ class BOTAN_PUBLIC_API(3, 1) Sphincs_Parameters final {
       uint32_t m_k;
       uint32_t m_w;
       uint32_t m_bitsec;
-      uint32_t m_log_w;
+      uint32_t m_lg_w;
       uint32_t m_wots_len1;
       uint32_t m_wots_len2;
       uint32_t m_wots_len;
