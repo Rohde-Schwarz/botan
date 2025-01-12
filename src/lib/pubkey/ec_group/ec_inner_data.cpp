@@ -61,6 +61,13 @@ EC_Group_Data::EC_Group_Data(const BigInt& p,
       }
    }
 
+   // Try a generic pcurves instance
+   if(!m_pcurve && !m_has_cofactor) {
+      m_pcurve = PCurve::PrimeOrderCurve::from_params(p, a, b, g_x, g_y, order);
+      // possibly still null here, if parameters unsuitable or if the
+      // pcurves_generic module wasn't included in the build
+   }
+
 #if defined(BOTAN_HAS_LEGACY_EC_POINT)
    secure_vector<word> ws;
    m_a_r = m_monty.mul(a, m_monty.R2(), ws);
