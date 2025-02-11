@@ -10,6 +10,7 @@
 #include <botan/rng.h>
 #include <botan/internal/ct_utils.h>
 #include <botan/internal/loadstor.h>
+#include <botan/internal/pcurves_base.h>
 #include <botan/internal/pcurves_util.h>
 #include <botan/internal/stl_util.h>
 #include <vector>
@@ -687,6 +688,8 @@ class IntMod final {
 
       constexpr void _const_time_unpoison() const { CT::unpoison(m_val); }
 
+      constexpr size_t bytes() const { return BYTES; }
+
    private:
       constexpr const std::array<W, N>& value() const { return m_val; }
 
@@ -703,7 +706,8 @@ class IntMod final {
 * This contains a pair of integers (x,y) which satisfy the curve equation
 */
 template <typename FieldElement, typename Params>
-class AffineCurvePoint final {
+class AffineCurvePoint final
+      : public AffineBaseCurvePoint<AffineCurvePoint<FieldElement, Params>, FieldElement, {FieldElement::BYTES}> {
    public:
       // We can't pass a FieldElement directly because FieldElement is
       // not "structural" due to having private members, so instead
@@ -711,58 +715,14 @@ class AffineCurvePoint final {
       static constexpr FieldElement A = FieldElement::from_words(Params::AW);
       static constexpr FieldElement B = FieldElement::from_words(Params::BW);
 
-      static constexpr size_t BYTES = 1 + 2 * FieldElement::BYTES;
-      static constexpr size_t COMPRESSED_BYTES = 1 + FieldElement::BYTES;
-
       using Self = AffineCurvePoint<FieldElement, Params>;
+      using Base = AffineBaseCurvePoint<Self, FieldElement, {FieldElement::BYTES}>;
 
-      constexpr AffineCurvePoint(const FieldElement& x, const FieldElement& y) : m_x(x), m_y(y) {}
+      using AffineBaseCurvePoint<Self, FieldElement, {FieldElement::BYTES}>::AffineBaseCurvePoint;
 
-      constexpr AffineCurvePoint() : m_x(FieldElement::zero()), m_y(FieldElement::zero()) {}
+      constexpr AffineCurvePoint() : AffineCurvePoint(FieldElement::zero(), FieldElement::zero()) {}
 
       static constexpr Self identity() { return Self(FieldElement::zero(), FieldElement::zero()); }
-
-      constexpr CT::Choice is_identity() const { return x().is_zero() && y().is_zero(); }
-
-      AffineCurvePoint(const Self& other) = default;
-      AffineCurvePoint(Self&& other) = default;
-      AffineCurvePoint& operator=(const Self& other) = default;
-      AffineCurvePoint& operator=(Self&& other) = default;
-
-      constexpr Self negate() const { return Self(x(), y().negate()); }
-
-      /**
-      * Serialize the point in uncompressed format
-      */
-      constexpr void serialize_to(std::span<uint8_t, Self::BYTES> bytes) const {
-         BOTAN_STATE_CHECK(this->is_identity().as_bool() == false);
-         BufferStuffer pack(bytes);
-         pack.append(0x04);
-         x().serialize_to(pack.next<FieldElement::BYTES>());
-         y().serialize_to(pack.next<FieldElement::BYTES>());
-         BOTAN_DEBUG_ASSERT(pack.full());
-      }
-
-      /**
-      * Serialize the point in compressed format
-      */
-      constexpr void serialize_compressed_to(std::span<uint8_t, Self::COMPRESSED_BYTES> bytes) const {
-         BOTAN_STATE_CHECK(this->is_identity().as_bool() == false);
-         const uint8_t hdr = CT::Mask<uint8_t>::from_choice(y().is_even()).select(0x02, 0x03);
-
-         BufferStuffer pack(bytes);
-         pack.append(hdr);
-         x().serialize_to(pack.next<FieldElement::BYTES>());
-         BOTAN_DEBUG_ASSERT(pack.full());
-      }
-
-      /**
-      * Serialize the affine x coordinate only
-      */
-      constexpr void serialize_x_to(std::span<uint8_t, FieldElement::BYTES> bytes) const {
-         BOTAN_STATE_CHECK(this->is_identity().as_bool() == false);
-         x().serialize_to(bytes);
-      }
 
       /**
       * If idx is zero then return the identity element. Otherwise return pts[idx - 1]
@@ -770,16 +730,7 @@ class AffineCurvePoint final {
       * Returns the identity element also if idx is out of range
       */
       static constexpr auto ct_select(std::span<const Self> pts, size_t idx) {
-         auto result = Self::identity();
-
-         // Intentionally wrapping; set to maximum size_t if idx == 0
-         const size_t idx1 = static_cast<size_t>(idx - 1);
-         for(size_t i = 0; i != pts.size(); ++i) {
-            const auto found = CT::Mask<size_t>::is_equal(idx1, i).as_choice();
-            result.conditional_assign(found, pts[i]);
-         }
-
-         return result;
+         return Base::ct_select_impl(Self::identity(), pts, idx);
       }
 
       /**
@@ -796,78 +747,11 @@ class AffineCurvePoint final {
       * TODO(Botan4): remove support for decoding hybrid points
       */
       static std::optional<Self> deserialize(std::span<const uint8_t> bytes) {
-         if(bytes.size() == Self::BYTES) {
-            if(bytes[0] == 0x04) {
-               auto x = FieldElement::deserialize(bytes.subspan(1, FieldElement::BYTES));
-               auto y = FieldElement::deserialize(bytes.subspan(1 + FieldElement::BYTES, FieldElement::BYTES));
-
-               if(x && y) {
-                  const auto lhs = (*y).square();
-                  const auto rhs = Self::x3_ax_b(*x);
-                  if((lhs == rhs).as_bool()) {
-                     return Self(*x, *y);
-                  }
-               }
-            } else if(bytes[0] == 0x06 || bytes[0] == 0x07) {
-               // Deprecated "hybrid" encoding
-               const CT::Choice y_is_even = CT::Mask<uint8_t>::is_equal(bytes[0], 0x06).as_choice();
-               auto x = FieldElement::deserialize(bytes.subspan(1, FieldElement::BYTES));
-               auto y = FieldElement::deserialize(bytes.subspan(1 + FieldElement::BYTES, FieldElement::BYTES));
-
-               if(x && y && (y_is_even == y->is_even()).as_bool()) {
-                  const auto lhs = (*y).square();
-                  const auto rhs = Self::x3_ax_b(*x);
-                  if((lhs == rhs).as_bool()) {
-                     return Self(*x, *y);
-                  }
-               }
-            }
-         } else if(bytes.size() == Self::COMPRESSED_BYTES) {
-            if(bytes[0] == 0x02 || bytes[0] == 0x03) {
-               const CT::Choice y_is_even = CT::Mask<uint8_t>::is_equal(bytes[0], 0x02).as_choice();
-
-               if(auto x = FieldElement::deserialize(bytes.subspan(1, FieldElement::BYTES))) {
-                  auto [y, is_square] = x3_ax_b(*x).sqrt();
-
-                  if(is_square.as_bool()) {
-                     const auto flip_y = y_is_even != y.is_even();
-                     FieldElement::conditional_assign(y, flip_y, y.negate());
-                     return Self(*x, y);
-                  }
-               }
-            }
-         } else if(bytes.size() == 1 && bytes[0] == 0x00) {
-            // See SEC1 section 2.3.4
-            return Self::identity();
-         }
-
-         return {};
+         return Base::deserialize_impl([] { return Self::identity(); },
+                                       [](std::span<const uint8_t> fe) { return FieldElement::deserialize(fe); },
+                                       FieldElement::BYTES,
+                                       bytes);
       }
-
-      /**
-      * Return the affine x coordinate
-      */
-      constexpr const FieldElement& x() const { return m_x; }
-
-      /**
-      * Return the affine y coordinate
-      */
-      constexpr const FieldElement& y() const { return m_y; }
-
-      /**
-      * Conditional assignment of an affine point
-      */
-      constexpr void conditional_assign(CT::Choice cond, const Self& pt) {
-         FieldElement::conditional_assign(m_x, m_y, cond, pt.x(), pt.y());
-      }
-
-      constexpr void _const_time_poison() const { CT::poison_all(m_x, m_y); }
-
-      constexpr void _const_time_unpoison() const { CT::unpoison_all(m_x, m_y); }
-
-   private:
-      FieldElement m_x;
-      FieldElement m_y;
 };
 
 /**

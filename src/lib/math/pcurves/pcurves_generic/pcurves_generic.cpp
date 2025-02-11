@@ -12,6 +12,7 @@
 #include <botan/internal/ct_utils.h>
 #include <botan/internal/loadstor.h>
 #include <botan/internal/mp_core.h>
+#include <botan/internal/pcurves_base.h>
 #include <botan/internal/pcurves_instance.h>
 #include <botan/internal/primality.h>
 #include <algorithm>
@@ -749,6 +750,8 @@ class GenericField final {
          return {z, correct};
       }
 
+      size_t bytes() const { return curve()->_params().field_bytes(); }
+
       GenericField(const GPOC& curve, std::array<W, N> val) : m_curve(curve), m_val(val) {}
 
    private:
@@ -791,55 +794,17 @@ class GenericField final {
 *
 * This contains a pair of integers (x,y) which satisfy the curve equation
 */
-class GenericAffinePoint final {
+class GenericAffinePoint final : public AffineBaseCurvePoint<GenericAffinePoint, GenericField, {std::dynamic_extent}> {
    public:
-      GenericAffinePoint(const GenericField& x, const GenericField& y) : m_x(x), m_y(y) {}
+      using Base = AffineBaseCurvePoint<GenericAffinePoint, GenericField, {std::dynamic_extent}>;
 
-      GenericAffinePoint(const GPOC& curve) : m_x(GenericField::zero(curve)), m_y(GenericField::zero(curve)) {}
+      using AffineBaseCurvePoint::AffineBaseCurvePoint;
+
+      GenericAffinePoint(const GPOC& curve) :
+            AffineBaseCurvePoint(GenericField::zero(curve), GenericField::zero(curve)) {}
 
       static GenericAffinePoint identity(const GPOC& curve) {
          return GenericAffinePoint(GenericField::zero(curve), GenericField::zero(curve));
-      }
-
-      CT::Choice is_identity() const { return x().is_zero() && y().is_zero(); }
-
-      GenericAffinePoint negate() const { return GenericAffinePoint(x(), y().negate()); }
-
-      /**
-      * Serialize the point in uncompressed format
-      */
-      void serialize_to(std::span<uint8_t> bytes) const {
-         const size_t fe_bytes = curve()->_params().field_bytes();
-         BOTAN_ARG_CHECK(bytes.size() == 1 + 2 * fe_bytes, "Buffer size incorrect");
-         BOTAN_STATE_CHECK(this->is_identity().as_bool() == false);
-         BufferStuffer pack(bytes);
-         pack.append(0x04);
-         x().serialize_to(pack.next(fe_bytes));
-         y().serialize_to(pack.next(fe_bytes));
-         BOTAN_DEBUG_ASSERT(pack.full());
-      }
-
-      /**
-      * Serialize the point in compressed format
-      */
-      void serialize_compressed_to(std::span<uint8_t> bytes) const {
-         const size_t fe_bytes = curve()->_params().field_bytes();
-         BOTAN_ARG_CHECK(bytes.size() == 1 + fe_bytes, "Buffer size incorrect");
-         BOTAN_STATE_CHECK(this->is_identity().as_bool() == false);
-         const uint8_t hdr = CT::Mask<uint8_t>::from_choice(y().is_even()).select(0x02, 0x03);
-
-         BufferStuffer pack(bytes);
-         pack.append(hdr);
-         x().serialize_to(pack.next(fe_bytes));
-         BOTAN_DEBUG_ASSERT(pack.full());
-      }
-
-      /**
-      * Serialize the affine x coordinate only
-      */
-      void serialize_x_to(std::span<uint8_t> bytes) const {
-         BOTAN_STATE_CHECK(this->is_identity().as_bool() == false);
-         x().serialize_to(bytes);
       }
 
       /**
@@ -849,16 +814,7 @@ class GenericAffinePoint final {
       */
       static auto ct_select(std::span<const GenericAffinePoint> pts, size_t idx) {
          BOTAN_ARG_CHECK(!pts.empty(), "Cannot select from an empty set");
-         auto result = GenericAffinePoint::identity(pts[0].curve());
-
-         // Intentionally wrapping; set to maximum size_t if idx == 0
-         const size_t idx1 = static_cast<size_t>(idx - 1);
-         for(size_t i = 0; i != pts.size(); ++i) {
-            const auto found = CT::Mask<size_t>::is_equal(idx1, i).as_choice();
-            result.conditional_assign(found, pts[i]);
-         }
-
-         return result;
+         return Base::ct_select_impl(GenericAffinePoint::identity(pts[0].curve()), pts, idx);
       }
 
       /**
@@ -877,82 +833,14 @@ class GenericAffinePoint final {
       * TODO(Botan4): remove support for decoding hybrid points
       */
       static std::optional<GenericAffinePoint> deserialize(const GPOC& curve, std::span<const uint8_t> bytes) {
-         const size_t fe_bytes = curve->_params().field_bytes();
-
-         if(bytes.size() == 1 + 2 * fe_bytes) {
-            if(bytes[0] == 0x04) {
-               auto x = GenericField::deserialize(curve, bytes.subspan(1, fe_bytes));
-               auto y = GenericField::deserialize(curve, bytes.subspan(1 + fe_bytes, fe_bytes));
-
-               if(x && y) {
-                  const auto lhs = (*y).square();
-                  const auto rhs = GenericAffinePoint::x3_ax_b(*x);
-                  if((lhs == rhs).as_bool()) {
-                     return GenericAffinePoint(*x, *y);
-                  }
-               }
-            } else if(bytes[0] == 0x06 || bytes[0] == 0x07) {
-               // Deprecated "hybrid" encoding
-               const CT::Choice y_is_even = CT::Mask<uint8_t>::is_equal(bytes[0], 0x06).as_choice();
-               auto x = GenericField::deserialize(curve, bytes.subspan(1, fe_bytes));
-               auto y = GenericField::deserialize(curve, bytes.subspan(1 + fe_bytes, fe_bytes));
-
-               if(x && y && (y_is_even == y->is_even()).as_bool()) {
-                  const auto lhs = (*y).square();
-                  const auto rhs = GenericAffinePoint::x3_ax_b(*x);
-                  if((lhs == rhs).as_bool()) {
-                     return GenericAffinePoint(*x, *y);
-                  }
-               }
-            }
-         } else if(bytes.size() == 1 + fe_bytes) {
-            if(bytes[0] == 0x02 || bytes[0] == 0x03) {
-               const CT::Choice y_is_even = CT::Mask<uint8_t>::is_equal(bytes[0], 0x02).as_choice();
-
-               if(auto x = GenericField::deserialize(curve, bytes.subspan(1, fe_bytes))) {
-                  auto [y, is_square] = x3_ax_b(*x).sqrt();
-
-                  if(is_square.as_bool()) {
-                     const auto flip_y = y_is_even != y.is_even();
-                     GenericField::conditional_assign(y, flip_y, y.negate());
-                     return GenericAffinePoint(*x, y);
-                  }
-               }
-            }
-         } else if(bytes.size() == 1 && bytes[0] == 0x00) {
-            // See SEC1 section 2.3.4
-            return GenericAffinePoint::identity(curve);
-         }
-
-         return {};
+         return Base::deserialize_impl(
+            [&] { return GenericAffinePoint::identity(curve); },
+            [&](std::span<const uint8_t> fe) { return GenericField::deserialize(curve, fe); },
+            curve->_params().field_bytes(),
+            bytes);
       }
 
-      /**
-      * Return the affine x coordinate
-      */
-      const GenericField& x() const { return m_x; }
-
-      /**
-      * Return the affine y coordinate
-      */
-      const GenericField& y() const { return m_y; }
-
-      /**
-      * Conditional assignment of an affine point
-      */
-      void conditional_assign(CT::Choice cond, const GenericAffinePoint& pt) {
-         GenericField::conditional_assign(m_x, m_y, cond, pt.x(), pt.y());
-      }
-
-      const GPOC& curve() const { return m_x.curve(); }
-
-      void _const_time_poison() const { CT::poison_all(m_x, m_y); }
-
-      void _const_time_unpoison() const { CT::unpoison_all(m_x, m_y); }
-
-   private:
-      GenericField m_x;
-      GenericField m_y;
+      const GPOC& curve() const { return x().curve(); }
 };
 
 class GenericProjectivePoint final {

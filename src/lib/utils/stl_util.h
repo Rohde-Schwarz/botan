@@ -155,12 +155,28 @@ class BufferStuffer final {
          return result;
       }
 
+      /**
+       * @returns a span containing @p bytes (statically known), or @p dynamic_bytes
+       *          if and only if @p bytes is std::dynamic_extent.
+       *
+       * Note: If @p bytes is not std::dynamic_extent, and @p dynamic_bytes has
+       *       a different value, an exception is thrown.
+       */
       template <size_t bytes>
-      constexpr std::span<uint8_t, bytes> next() {
-         BOTAN_STATE_CHECK(m_buffer.size() >= bytes);
+      constexpr std::span<uint8_t, bytes> next(size_t dynamic_bytes = bytes) {
+         BOTAN_ARG_CHECK(bytes == std::dynamic_extent || bytes == dynamic_bytes,
+                         "dynamic and static length parameters don't match");
+         const size_t effective_bytes = (bytes == std::dynamic_extent) ? dynamic_bytes : bytes;
+         BOTAN_STATE_CHECK(m_buffer.size() >= effective_bytes);
 
-         auto result = m_buffer.first<bytes>();
-         m_buffer = m_buffer.subspan(bytes);
+         auto result = [&] {
+            if constexpr(bytes == std::dynamic_extent) {
+               return m_buffer.first(dynamic_bytes);
+            } else {
+               return m_buffer.first<bytes>();
+            }
+         }();
+         m_buffer = m_buffer.subspan(result.size());
          return result;
       }
 
