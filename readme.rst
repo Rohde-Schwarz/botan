@@ -1,152 +1,99 @@
-Botan
+Botan: Crypto and TLS for C++20
 ========================================
 
-Botan (Japanese for peony flower) is a cryptography library released under the
-permissive `Simplified BSD <https://botan.randombit.net/license.txt>`_ license.
+The `German Federal Office for Information Security (BSI) <https://www.bsi.bund.de/EN/>`_
+carried out projects for the developement of a secure cryptographic library based on the
+`Botan <https://botan.randombit.net>`_ cryptographic library. It satisfies the basic requirements
+of the BSI and its use is recommended in security products. More information can be found `here <https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Informationen-und-Empfehlungen/Kryptografie/Kryptobibliothek-Botan/kryptobibliothek-botan_node.html>`_.
+The library includes all algorithms  recommended by BSI technical guidelines `02102-1 <https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr02102/tr02102_node.html>`_,
+`02102-2 <https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr02102/tr02102_node.html>`_ and `03111 <https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr03111/TR-03111_node.html>`_.
+Botan is licensed under the Simplified BSD license and can therefore be freely
+used in open source as well as commercial software.
 
-Botan's `goal <https://botan.randombit.net/handbook/goals.html>`_
-is to be the best option for production cryptography by offering the tools
-necessary to implement a range of practical systems, such as TLSv1.3, X.509 PKI,
-modern AEAD ciphers, support for PKCS#11 and TPM hardware, memory-hard password
-hashing, and post quantum cryptography. All of this is covered by an extensive
-test suite, including an automated system for detecting side channels. The
-modular build system allows enabling or disabling features in a fine-grained way,
-and amalgamation builds are also supported.
+All changes are provided `upstream <https://github.com/randombit/botan>`_ via the `Botan releases <https://botan.randombit.net/#releases>`_.
+You can find the approved upstream releases on the `BSI webiste <https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Informationen-und-Empfehlungen/Kryptografie/Kryptobibliothek-Botan/kryptobibliothek-botan_node.html>`_.
 
-It comes out of the box with C++, C, and Python APIs, and several other `language
-bindings <https://github.com/randombit/botan/wiki/Language-Bindings>`_ are available.
-The library is accompanied by a featureful `command line interface
-<https://botan.randombit.net/handbook/cli.html>`_. Consult the `documentation
-<https://botan.randombit.net/handbook>`_ for more information.
+In case an approved version differs from an official Botan version, a special `*-RSCS` version is released
+in this repository. The changes are listed in the `release notes <news.rst>`_ and will be included in the next
+Botan release.
 
-Development is coordinated on `GitHub <https://github.com/randombit/botan>`__ and
-contributions are welcome. If you need help, please open an issue on `GitHub
-<https://github.com/randombit/botan/issues>`__. If you think you have found a
-security issue, see the `security page <https://botan.randombit.net/security.html>`_
-for contact information.
+Release Downloads
+----------------------------------------
 
-|ci_status| |nightly_ci_status| |coverage| |ossfuzz| |repo| |ossf| |cii|
+The latest RSCS version is `3.7.1-RSCS1 <https://github.com/Rohde-Schwarz/botan/releases/download/3.7.1-RSCS1/botan-3.7.1-RSCS1.zip>`_ (`sig <https://github.com/Rohde-Schwarz/botan/releases/download/3.7.1-RSCS1/botan-3.7.1-RSCS1.zip.sig>`_) released on 2025-03-28.
 
-.. |ci_status| image:: https://github.com/randombit/botan/actions/workflows/ci.yml/badge.svg?branch=master
-    :target: https://github.com/randombit/botan/actions/workflows/ci.yml
-    :alt: CI status
+`SHA-256 <https://github.com/Rohde-Schwarz/botan/releases/download/3.7.1-RSCS1/botan-3.7.1-RSCS1.zip.hash>`_: F55EE971BC538E91A64174D9F576753A866C2C53AC6EC64F7DAB77076023AE65
 
-.. |nightly_ci_status| image:: https://github.com/randombit/botan/actions/workflows/nightly.yml/badge.svg?branch=master
-    :target: https://github.com/randombit/botan/actions/workflows/nightly.yml
-    :alt: nightly CI status
+All approved *-RSCS releases are signed with the following key::
 
-.. |coverage| image:: https://img.shields.io/coverallsCoverage/github/randombit/botan?branch=master
-    :target: https://coveralls.io/github/randombit/botan
-    :alt: Coverage report
+  -----BEGIN PUBLIC KEY-----
+  MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyGKrzmfZhGuIaMXGZ56x
+  yKtzTuvDrK50edCd1/EccVtS1V/52bmM/mfWaTCvUKUd+BlKw544L+hEaMdoGMvj
+  rkJL70DxU+fqV3NHBJKDqV+fJi4X8iWPIq3B/Tu08jFYjeHoRDN3BcaGFSQnR9lC
+  1p3PXbga8Mpk5Qe93ca3tGawr2AKt0ImdVwWvcPlL2JHr63jB0YARYzf1M8DtDzk
+  RQewoyrxbyQbup4Qgd2IbJsfTbNxgeWFMSeiBEZVnqVosKvzLybXZpmbmZSxQr64
+  qT8JRzlJbIh3RrJlfGPu2YFojg9x+uL0KqGGPhqDFIR/UQdW1Ve+kjh7MaSQJsnZ
+  u/+HoGJVSDfkiW1ZLPfYHDye85e4c5z4JCxbOMn2IVSlFWxfrNjaIU6jEjxyS09E
+  6W9Yr2r5iC/ef5BFc38JgVuvfMa3RJHSqY4AfIl+GnozwtKzYsedfKAZkZUx+kiu
+  65FdQqHR1iMrM4kxmRIeYxttdF7h0NzU7CGGXoVV14qRMQ9ZMTHPyasqmt5JihK6
+  cyn9e8DPzgndm2HhBJeQdSMCWraZoZqO8GjzuTuSVtt4a3C/G++rpLA9RXHRwK1P
+  UjeWn1B9Pd6fX4oZ1/eQF+Y5oZnl80IsILOE2CdxEKN2TNQftESdKNNWe+nCEY1c
+  sSPNDnqFuHxJaS2oS5A3BBUCAwEAAQ==
+  -----END PUBLIC KEY-----
 
-.. |ossfuzz| image:: https://oss-fuzz-build-logs.storage.googleapis.com/badges/botan.svg
-    :target: https://oss-fuzz.com/coverage-report/job/libfuzzer_asan_botan/latest
-    :alt: OSS-Fuzz status
+The SHA-256 public key fingerprint is B1B688ED5FD24ACD53E73BE74A5279916471B2A9C80BC33AA9A7EDC58iA715CF0.
 
-.. |repo| image:: https://repology.org/badge/tiny-repos/botan.svg
-    :target: https://repology.org/project/botan/versions
-    :alt: Packaging status
+Verify the release signature using Botan (where the public key listed above is referred to as *Botan-Signing-Key.pem*)::
 
-.. |ossf| image:: https://api.securityscorecards.dev/projects/github.com/randombit/botan/badge
-    :target: https://securityscorecards.dev/viewer/?uri=github.com/randombit/botan
-    :alt: OSSF Scorecard
+  $ botan verify --hash=SHA-512 --emsa=EMSA4 Botan-Signing-Key.pem botan-3.7.1-RSCS1.zip botan-3.7.1-RSCS1.zip.sig
+  Signature is valid
 
-.. |cii| image:: https://bestpractices.coreinfrastructure.org/projects/531/badge
-    :target: https://bestpractices.coreinfrastructure.org/projects/531
-    :alt: CII Best Practices statement
+Verify the release signature using OpenSSL (you need to base64 decode the signature first)::
 
-Releases
+  $ type botan-3.7.1-RSCS1.zip.sig | openssl base64 -d -out botan-3.7.1-RSCS1.zip.sig.dec
+
+or alternatively using python::
+
+  $ python -m base64 -d botan-3.7.1-RSCS1.zip.sig > botan-3.7.1-RSCS1.zip.sig.dec
+
+  $ openssl dgst -sha512 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:64 -verify Botan-Signing-Key.pem -signature botan-3.7.1-RSCS1.zip.sig.dec botan-3.7.1-RSCS1.zip
+  Verified OK
+
+Documentation
+----------------------------------------
+
+Botan provides a comprehensive `API documentation <https://botan.randombit.net/doxygen/>`_ as well as
+a users `handbook <https://botan.randombit.net/handbook/>`_.
+
+In addition to the official documentation, documents created during the BSI project such as
+Crypto Specification and Audit Reports are found in the `botan-docs <https://github.com/sehlen-bsi/botan-docs>`_
+repository.
+
+Support & Maintenance
+----------------------------------------
+
+If you need help with a problem, please `open an issue <https://github.com/randombit/botan/issues/new>`_
+at the offical GitHub repository. In case you want to contribute some changes, please also
+`contribute <https://github.com/randombit/botan/compare>`_ them to the official Botan repository.
+
+BSI Compliant Usage of Botan
+----------------------------------------
+
+Botan contains a `BSI module policy <src/build-data/policy/bsi.txt>`_ which includes all algorithms recommended by BSI
+technical guidelines and prohibits alternative algorithms.
+To configure Botan with the BSI policy::
+
+  $ ./configure.py --module-policy=bsi
+
+Additional modules which are not automatically enabled by the BSI policy
+can be enabled manually using `--enable-modules`, for example::
+
+  $ ./configure.py --module-policy=bsi --enable-modules=tls,ffi,x509,xts
+
+TLS
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-All releases are signed with a `PGP key <https://botan.randombit.net/pgpkey.txt>`_.
-See the `release notes <https://botan.randombit.net/news.html>`_ for
-what's new.
-
-Botan is also available through most `distributions
-<https://github.com/randombit/botan/wiki/Distros>`_ such as Fedora,
-Debian, Arch and Homebrew.
-
-Botan3
---------
-
-New minor releases of Botan3 are made quarterly, normally on the first Tuesday of
-February, May, August, and November.
-
-The latest release in the Botan3 series is
-`3.7.1 <https://botan.randombit.net/releases/Botan-3.7.1.tar.xz>`_
-`(sig) <https://botan.randombit.net/releases/Botan-3.7.1.tar.xz.asc>`__,
-released on 2025-02-05.
-
-Botan2
---------
-
-Botan2 has, as of 2025-1-1, reached end of life. No further releases are expected.
-
-The latest release in the Botan2 series is
-`2.19.5 <https://botan.randombit.net/releases/Botan-2.19.5.tar.xz>`_
-`(sig) <https://botan.randombit.net/releases/Botan-2.19.5.tar.xz.asc>`__,
-released on 2024-07-08.
-
-Find Enclosed
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Transport Layer Security (TLS) Protocol
-----------------------------------------
-
-* TLS v1.2/v1.3, and DTLS v1.2
-* Supported extensions include session tickets, SNI, ALPN, OCSP stapling,
-  encrypt-then-mac CBC, and extended master secret.
-* Supports authentication using certificates or preshared keys (PSK)
-* Supports record encryption with modern AEAD modes as well as legacy CBC ciphersuites.
-* TLS 1.3 supports hybrid post-quantum key exchange using ML-KEM or FrodoKEM
-
-Public Key Infrastructure
-----------------------------------------
-
-* X.509v3 certificates and CRL creation and handling
-* PKIX certificate path validation, including name constraints
-* OCSP request creation and response handling
-* PKCS #10 certificate request generation and processing
-* Access to Windows, macOS and Unix system certificate stores
-* SQL database backed certificate store
-
-Public Key Cryptography
-----------------------------------------
-
-* RSA signatures and encryption
-* DH, ECDH, X25519 and X448 key agreement
-* Elliptic curve signature schemes ECDSA, Ed25519, Ed448, ECGDSA, ECKCDSA, SM2
-* Post-quantum signature schemes ML-DSA (Dilithium), SLH-DSA (SPHINCS+), HSS/LMS, XMSS
-* Post-quantum key encapsulation schemes ML-KEM (Kyber), FrodoKEM, Classic McEliece
-
-Ciphers, hashes, MACs, and checksums
-----------------------------------------
-
-* Authenticated cipher modes EAX, OCB, GCM, SIV, CCM, (X)ChaCha20Poly1305
-* Cipher modes CTR, CBC, XTS, CFB, OFB
-* Block ciphers AES, ARIA, Blowfish, Camellia, CAST-128, DES/3DES, IDEA,
-  SEED, Serpent, SHACAL2, SM4, Threefish-512, Twofish
-* Stream ciphers (X)ChaCha20, (X)Salsa20, RC4
-* Hash functions SHA-1, SHA-2, SHA-3, RIPEMD-160, BLAKE2b/BLAKE2s, Skein-512, SM3, Whirlpool
-* Password hashing schemes Argon2, Scrypt, bcrypt, and PBKDF2
-* Authentication codes HMAC, CMAC, Poly1305, KMAC, GMAC
-
-Other Useful Things
-----------------------------------------
-
-* Full C++ PKCS #11 API wrapper
-* Interfaces for TPM v2.0 device access
-* Simple compression API wrapping zlib, bzip2, and lzma libraries
-* RNG wrappers for system RNG, ESDM and hardware RNGs
-* HMAC_DRBG and entropy collection system for userspace RNGs
-* SRP-6a password authenticated key exchange
-* Key derivation functions including HKDF, KDF2, SP 800-108, SP 800-56A, SP 800-56C
-* HOTP and TOTP algorithms
-* Format preserving encryption scheme FE1
-* Threshold secret sharing
-* Roughtime client
-* Zfec compatible forward error correction encoding
-* Encoding schemes including hex, base32, base64 and base58
-* NIST key wrapping
-* Boost.Asio compatible TLS client stream
-* 24-bit OpenPGP CRC
+Botan contains a TLS Policy class `BSI_TR_02102_2 <src/lib/tls/tls_policy.h>`_ that only allows the algorithms recommended in
+BSI technical guideline `02102-2 <https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Standards-und-Zertifizierung/Technische-Richtlinien/TR-nach-Thema-sortiert/tr02102/tr02102_node.html>`_.
+This policy can be passed whereever a ``TLS_Policy`` reference is accepted by the API.
+For more information, see the `handbook <https://botan.randombit.net/handbook/api_ref/tls.html>`_.
