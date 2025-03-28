@@ -5,7 +5,7 @@ release_patch = 1
 
 release_so_abi_rev = 7
 
-release_suffix = ''
+release_suffix = '-RSCS1'
 
 # These are set by the distribution script
 release_vc_rev = None

@@ -1,6 +1,11 @@
 Release Notes
 ========================================
 
+Version 3.7.1-RSCS1, 2025-03-28
+
+* Backport GH #4794: Additional sanity checks in ECDH key exchange for
+  compliance with TR-02102 and TR-03111.
+
 Version 3.7.1, 2025-02-05
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
