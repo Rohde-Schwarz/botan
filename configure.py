@@ -92,7 +92,7 @@ class Version:
 
             suffix = Version.data["release_suffix"]
             if suffix != "":
-                suffix_re = re.compile('-(alpha|beta|rc)[0-9]+')
+                suffix_re = re.compile('-(alpha|beta|rc|RSCS)[0-9]+')
 
                 if not suffix_re.match(suffix):
                     raise Exception("Unexpected version suffix '%s'" % (suffix))

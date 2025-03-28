@@ -320,12 +320,12 @@ def cli_help_tests(_tmp_dir):
 def cli_version_tests(_tmp_dir):
     output = test_cli("version", None, None)
 
-    version_re = re.compile(r'[0-9]\.[0-9]+\.[0-9](\-[a-z]+[0-9]+)?')
+    version_re = re.compile(r'[0-9]\.[0-9]+\.[0-9](\-[a-zA-Z]+[0-9]+)?')
     if not version_re.match(output):
         logging.error("Unexpected version output %s", output)
 
     output = test_cli("version", ["--full"], None, None)
-    version_full_re = re.compile(r'Botan [0-9]\.[0-9]+\.[0-9](\-[a-z]+[0-9]+)? \(.* revision .*, distribution .*\)$')
+    version_full_re = re.compile(r'Botan [0-9]\.[0-9]+\.[0-9](\-[a-zA-Z]+[0-9]+)? \(.* revision .*, distribution .*\)$')
     if not version_full_re.match(output):
         logging.error("Unexpected version output %s", output)
 

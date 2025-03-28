@@ -171,7 +171,7 @@ def rewrite_version_file(version_file, target_version, snapshot_branch, rev_id, 
     contents = open(version_file, encoding='utf8').readlines()
 
     version_re = re.compile('release_(major|minor|patch) = ([0-9]+)')
-    version_suffix_re = re.compile('release_suffix = \'(-(alpha|beta|rc)[0-9]+)\'')
+    version_suffix_re = re.compile('release_suffix = \'(-(alpha|beta|rc|RSCS)[0-9]+)\'')
 
     def content_rewriter(target_version):
         version_info = {}
