@@ -41,22 +41,14 @@ All approved *-RSCS releases are signed with the following key::
   sSPNDnqFuHxJaS2oS5A3BBUCAwEAAQ==
   -----END PUBLIC KEY-----
 
-The SHA-256 public key fingerprint is B1B688ED5FD24ACD53E73BE74A5279916471B2A9C80BC33AA9A7EDC58iA715CF0.
-
 Verify the release signature using Botan (where the public key listed above is referred to as *Botan-Signing-Key.pem*)::
 
-  $ botan verify --hash=SHA-512 --emsa=EMSA4 Botan-Signing-Key.pem botan-3.7.1-RSCS1.zip botan-3.7.1-RSCS1.zip.sig
+  $ botan verify --hash=SHA-512 Botan-Signing-Key.pem botan-3.7.1-RSCS1.zip botan-3.7.1-RSCS1.zip.sig
   Signature is valid
 
-Verify the release signature using OpenSSL (you need to base64 decode the signature first)::
+Verify the release signature using OpenSSL and Python::
 
-  $ type botan-3.7.1-RSCS1.zip.sig | openssl base64 -d -out botan-3.7.1-RSCS1.zip.sig.dec
-
-or alternatively using python::
-
-  $ python -m base64 -d botan-3.7.1-RSCS1.zip.sig > botan-3.7.1-RSCS1.zip.sig.dec
-
-  $ openssl dgst -sha512 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:64 -verify Botan-Signing-Key.pem -signature botan-3.7.1-RSCS1.zip.sig.dec botan-3.7.1-RSCS1.zip
+  $ python -m base64 -d botan-3.7.1-RSCS1.zip.sig | openssl dgst -sha512 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:64 -verify Botan-Signing-Key.pem -signature /dev/stdin botan-3.7.1-RSCS1.zip
   Verified OK
 
 Documentation
