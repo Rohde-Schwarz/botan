@@ -11,7 +11,7 @@ Botan is licensed under the Simplified BSD license and can therefore be freely
 used in open source as well as commercial software.
 
 All changes are provided `upstream <https://github.com/randombit/botan>`_ via the `Botan releases <https://botan.randombit.net/#releases>`_.
-You can find the approved upstream releases on the `BSI webiste <https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Informationen-und-Empfehlungen/Kryptografie/Kryptobibliothek-Botan/kryptobibliothek-botan_node.html>`_.
+You can find the approved upstream releases on the `BSI website <https://www.bsi.bund.de/EN/Themen/Unternehmen-und-Organisationen/Informationen-und-Empfehlungen/Kryptografie/Kryptobibliothek-Botan/kryptobibliothek-botan_node.html>`_.
 
 In case an approved version differs from an official Botan version, a special `*-RSCS` version is released
 in this repository. The changes are listed in the `release notes <news.rst>`_ and will be included in the next
