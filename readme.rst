@@ -24,40 +24,72 @@ The latest RSCS version is `3.7.1-RSCS1 <https://github.com/Rohde-Schwarz/botan/
 
 `SHA-256 <https://github.com/Rohde-Schwarz/botan/releases/download/3.7.1-RSCS1/botan-3.7.1-RSCS1.zip.hash>`_: F55EE971BC538E91A64174D9F576753A866C2C53AC6EC64F7DAB77076023AE65
 
-All approved *-RSCS releases are signed with the following key::
+The release can be verified with the following certificate ``certBotan.pem``::
 
-  -----BEGIN PUBLIC KEY-----
-  MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyGKrzmfZhGuIaMXGZ56x
-  yKtzTuvDrK50edCd1/EccVtS1V/52bmM/mfWaTCvUKUd+BlKw544L+hEaMdoGMvj
-  rkJL70DxU+fqV3NHBJKDqV+fJi4X8iWPIq3B/Tu08jFYjeHoRDN3BcaGFSQnR9lC
-  1p3PXbga8Mpk5Qe93ca3tGawr2AKt0ImdVwWvcPlL2JHr63jB0YARYzf1M8DtDzk
-  RQewoyrxbyQbup4Qgd2IbJsfTbNxgeWFMSeiBEZVnqVosKvzLybXZpmbmZSxQr64
-  qT8JRzlJbIh3RrJlfGPu2YFojg9x+uL0KqGGPhqDFIR/UQdW1Ve+kjh7MaSQJsnZ
-  u/+HoGJVSDfkiW1ZLPfYHDye85e4c5z4JCxbOMn2IVSlFWxfrNjaIU6jEjxyS09E
-  6W9Yr2r5iC/ef5BFc38JgVuvfMa3RJHSqY4AfIl+GnozwtKzYsedfKAZkZUx+kiu
-  65FdQqHR1iMrM4kxmRIeYxttdF7h0NzU7CGGXoVV14qRMQ9ZMTHPyasqmt5JihK6
-  cyn9e8DPzgndm2HhBJeQdSMCWraZoZqO8GjzuTuSVtt4a3C/G++rpLA9RXHRwK1P
-  UjeWn1B9Pd6fX4oZ1/eQF+Y5oZnl80IsILOE2CdxEKN2TNQftESdKNNWe+nCEY1c
-  sSPNDnqFuHxJaS2oS5A3BBUCAwEAAQ==
-  -----END PUBLIC KEY-----
+  -----BEGIN CERTIFICATE-----
+  MIIHCjCCBPKgAwIBAgITWQABJxyBe2TeKW/9ywADAAEnHDANBgkqhkiG9w0BAQsF
+  ADBoMQswCQYDVQQGEwJERTEQMA4GA1UECAwHQmF2YXJpYTEPMA0GA1UEBwwGTXVu
+  aWNoMRYwFAYDVQQKDA1Sb2hkZS1TY2h3YXJ6MR4wHAYDVQQDDBVSb2hkZS1TY2h3
+  YXJ6LVVzZXItQ0EwHhcNMjUwNDI0MTEyMDUxWhcNMjcwNDI0MTEyMDUxWjATMREw
+  DwYDVQQDDAhTQV9CT1RBTjB2MBAGByqGSM49AgEGBSuBBAAiA2IABEyUT731zCmx
+  zY8NJA4T2+5gIMmLJnsuwkbhJbO26dOb4h/xNL5a0wcvTDWqkUlJ8Tsr2hrpJOc1
+  N5BpvYoSa1quTQHzBXS4Dm+YPIULPnDe8X9ZXkZQGvbqKGq9br0fc6OCA64wggOq
+  MB0GA1UdDgQWBBT84ZPVOLOFtJSWxXz5SbcencFg1DALBgNVHQ8EBAMCB4AwHwYD
+  VR0jBBgwFoAUXgYDIHF8OB7lAKIfi3TUY5IvbiMwggEVBgNVHR8EggEMMIIBCDCC
+  AQSgggEAoIH9hoG7bGRhcDovLy9DTj1Sb2hkZS1TY2h3YXJ6LVVzZXItQ0EoMyks
+  Q049Q01VMDMsQ049Q0RQLENOPVB1YmxpYyUyMEtleSUyMFNlcnZpY2VzLENOPVNl
+  cnZpY2VzLENOPUNvbmZpZ3VyYXRpb24sREM9cnNpbnQsREM9bmV0P2NlcnRpZmlj
+  YXRlUmV2b2NhdGlvbkxpc3Q/YmFzZT9vYmplY3RDbGFzcz1jUkxEaXN0cmlidXRp
+  b25Qb2ludIY9aHR0cDovL3BraS5yb2hkZS1zY2h3YXJ6LmNvbS9jcmwvUm9oZGUt
+  U2Nod2Fyei1Vc2VyLUNBKDMpLmNybDCBhwYIKwYBBQUHAQEEezB5MC0GCCsGAQUF
+  BzABhiFodHRwOi8vcGtpLnJvaGRlLXNjaHdhcnouY29tL29jc3AwSAYIKwYBBQUH
+  MAKGPGh0dHA6Ly9wa2kucm9oZGUtc2Nod2Fyei5jb20vY2EvUm9oZGUtU2Nod2Fy
+  ei1Vc2VyLUNBKDMpLmNydDAMBgNVHRMBAf8EAjAAMD0GCSsGAQQBgjcVBwQwMC4G
+  JisGAQQBgjcVCIT/01qHwLAlhM2JPIP20QqGv81+Z4L64F+CtfVHAgFkAgEkMB8G
+  A1UdJQQYMBYGCisGAQQBgjcKAwwGCCsGAQUFBwMEMCkGCSsGAQQBgjcVCgQcMBow
+  DAYKKwYBBAGCNwoDDDAKBggrBgEFBQcDBDA4BgNVHREEMTAvoC0GCisGAQQBgjcU
+  AgOgHwwdc2FfYm90YW4uc2FAcm9oZGUtc2Nod2Fyei5jb20wUQYJKwYBBAGCNxkC
+  BEQwQqBABgorBgEEAYI3GQIBoDIEMFMtMS01LTIxLTIxOTIyNjcyODMtMzUwMzk4
+  Nzg3Ny0yNzA2NDYyNTc1LTcwNDU2NjCBkQYDVR0gBIGJMIGGMEUGCisGAQQBlAZn
+  ZAMwNzA1BggrBgEFBQcCARYpaHR0cDovL3BraS5yb2hkZS1zY2h3YXJ6LmNvbS9D
+  ZXJ0Y2xhc3Nlcy8wPQYKKwYBBAGUBmcAADAvMC0GCCsGAQUFBwIBFiFodHRwOi8v
+  cGtpLnJvaGRlLXNjaHdhcnouY29tL0NQUy8wDQYJKoZIhvcNAQELBQADggIBAIPy
+  Tw8bYszGJvJueGJq4O2Pyg9Qb99JtOFi3jtWwWY6REbF11LTiEJhlgQ920u5JlSL
+  4mfJvFRykXvSX+j5Gi8UBwoyEXcJjE7HJCG2SFXGSSX6ZYtsqqYkUadzUKCe/34K
+  A2djoU60bwJPZ6bPmjKVjH8R1WNOvRh+w6TwIuiNm7zFS0yKUEnJtKHKGNev593u
+  rw5t/3GRJLvcuRd/XL4QbO7/19pNnnCSrX7At0bbHBDlNt5u7cVunKdZNDPW5fsS
+  IviShSchvUbBMkHLslGpDfxmBiw1gBBaRvcowBywTr9vQ/mxYyi+uGTykamAehm2
+  zd5u1EBTQs2Dem9d9pXUDdsU+/+RAr95rN55IbW8FwYSufl6k5ubmamjwmayKo+X
+  glnoBSaPdXblabHSnwvZ9Rpsr4UxuHO7yTHCQVNknvoXT+EIUtUEmGK8umwjDUnY
+  FsGDJYj3qP2UrYtqgx3KX/33B0dQNojzPrKuzxlVtDYhmLWg3Dbawd7E7pP/58Tc
+  DsK/rhTAt19VPX5USNlIGQSk4XPjN+vW6hWqTpEzuPe5NvjVzWn6sPLaY2C3JP4T
+  HWxiQfpnZE+f+LJWfJ8mhLFYckozMM55mvTTrU8rCjIK05fiyNV+o8sf18gxd5mO
+  tUrRBCAhqojI7PFlrP50Ra7xsOZ/WuF5883UuD4x
+  -----END CERTIFICATE-----
 
-The SHA-256 public key fingerprint is B1B688ED5FD24ACD53E73BE74A5279916471B2A9C80BC33AA9A7EDC58iA715CF0.
+To verify the signature, do the following steps:
 
-Verify the release signature using Botan (where the public key listed above is referred to as *Botan-Signing-Key.pem*)::
+1. Verify ``certBotan.pem`` with the `Rohde & Schwarz PKI <https://pki.rohde-schwarz.com/RS-Certificates.html>`_
 
-  $ botan verify --hash=SHA-512 --emsa=EMSA4 Botan-Signing-Key.pem botan-3.7.1-RSCS1.zip botan-3.7.1-RSCS1.zip.sig
-  Signature is valid
+::
 
-Verify the release signature using OpenSSL (you need to base64 decode the signature first)::
+  $ wget "https://pki.rohde-schwarz.com/CA/Rohde-Schwarz-User-CA(3).pem" && wget "https://pki.rohde-schwarz.com/CA/Rohde-Schwarz-Root-CA(2).pem"
 
-  $ type botan-3.7.1-RSCS1.zip.sig | openssl base64 -d -out botan-3.7.1-RSCS1.zip.sig.dec
+::
 
-or alternatively using python::
+  $ openssl verify -CAfile "Rohde-Schwarz-Root-CA(2).pem" -untrusted "Rohde-Schwarz-User-CA(3).pem" certBotan.pem
 
-  $ python -m base64 -d botan-3.7.1-RSCS1.zip.sig > botan-3.7.1-RSCS1.zip.sig.dec
+2. Extract public key from ``certBotan.pem``
 
-  $ openssl dgst -sha512 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:64 -verify Botan-Signing-Key.pem -signature botan-3.7.1-RSCS1.zip.sig.dec botan-3.7.1-RSCS1.zip
-  Verified OK
+::
+
+  $ openssl x509 -in certBotan.pem -pubkey -noout > pubkeyBotan.pem
+
+3. Verify signature
+
+::
+
+  $ openssl dgst -sha384 -verify pubkeyBotan.pem -signature botan-3.7.1-RSCS1.zip.sig botan-3.7.1-RSCS1.zip
 
 Documentation
 ----------------------------------------
