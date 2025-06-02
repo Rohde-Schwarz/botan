@@ -5,29 +5,70 @@
 (C) 2017 Fabian Weissberg, Rohde & Schwarz Cybersecurity
 
 Botan is released under the Simplified BSD License (see license.txt)
+
+NOTE: This script requires the Jinja templating library to be installed.
 """
 
 import sys
 import datetime
 import re
 from collections import defaultdict
+from jinja2 import Environment, FileSystemLoader
+
+# This must match OID::hash_code
+def hash_oid(oid):
+    word_size = 2 ** 64
+    lo24 = 0xFFFFFF
+    hash = 0x621F302327D9A49A
+
+    for part in map(int, oid.split('.')):
+        hash = (hash * 257) % word_size
+        hash += part
+
+    return hash & lo24
+
+# This must match hash_oid_name in static_oids.cpp.in
+def hash_oid_name(name):
+    word_size = 2 ** 32
+    lo24 = 0xFFFFFF
+
+    hash = 0x411ECD00 + len(name)
+
+    for part in map(ord, name):
+        hash = (hash * 251) % word_size
+        hash += part
+
+    return hash & lo24
 
 def format_oid(oid):
     return "{" + oid.replace('.', ', ') + '}'
 
-def format_str2oid(m):
-    s = ''
-    for k in sorted(m.keys()):
-        v = m[k]
+def render_static_oid(m):
+    res = []
 
-        if len(s) > 0:
-            s += '      '
+    hashes = set()
 
-        s += '{"%s", %s},\n' % (k,format_oid(v))
+    for (k, v) in m.items():
 
-    s = s[:-2] # chomp last two chars
+        # Verify no collsions between any of the values
+        oid_hc = hash_oid(v)
+        if oid_hc in hashes:
+            raise Exception("Hash collision for OID %s" % (v))
+        hashes.add(oid_hc)
 
-    return s
+        # Intentionally using the same set here so we check that there
+        # are no H(name) vs H(oid) collisions
+        name_hc = hash_oid_name(k)
+        if name_hc in hashes:
+            raise Exception("Hash collision for OID name '%s'" % (k))
+        hashes.add(name_hc)
+
+        res.append({ 'oid_hash': oid_hc,
+                     'name_hash': name_hc,
+                     'name': k,
+                     'oid': format_oid(v) })
+
+    return res
 
 def format_dup_oids(m):
     s = ''
@@ -43,7 +84,7 @@ def format_dup_oids(m):
 
 def main(args = None):
     """
-    Regenerate src/lib/asn1/oid_maps.cpp
+    Regenerate src/lib/asn1/static_oids.cpp
     """
     if args is None:
         args = sys.argv
@@ -88,17 +129,19 @@ def main(args = None):
         elif oid in oid2str:
             aliases.append((nam, oid))
 
-    template = open('src/build-data/oid_maps.cpp.in').read()
-    new_oid = template % (
-        sys.argv[0],
-        datetime.date.today().strftime("%Y-%m-%d"),
-        format_str2oid(str2oid),
-        format_dup_oids(dup_oids),
-        format_dup_oids(aliases))
+    this_script = sys.argv[0]
+    date = datetime.date.today().strftime("%Y-%m-%d")
 
-    file = open('src/lib/asn1/oid_maps.cpp', 'w')
-    file.write(new_oid)
-    file.close()
+    env = Environment(loader=FileSystemLoader("src/build-data/templates"))
+
+    with open('./src/lib/asn1/static_oids.cpp', encoding='utf8', mode='w') as static_oids:
+        template = env.get_template("static_oids.cpp.in")
+        static_oids.write(template.render(script=this_script,
+                                          date=date,
+                                          static_oid_data=render_static_oid(str2oid),
+                                          dup_oids=format_dup_oids(dup_oids),
+                                          aliases=format_dup_oids(aliases)))
+        static_oids.write("\n")
 
     return 0
 
