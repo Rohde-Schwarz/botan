@@ -12,36 +12,35 @@ NOTE: This script requires the Jinja templating library to be installed.
 import sys
 import datetime
 import re
-from collections import defaultdict
 from jinja2 import Environment, FileSystemLoader
 
 # This must match OID::hash_code
 def hash_oid(oid):
     word_size = 2 ** 64
     lo24 = 0xFFFFFF
-    hash = 0x621F302327D9A49A
+    h = 0x621F302327D9A49A
 
     for part in map(int, oid.split('.')):
-        hash = (hash * 257) % word_size
-        hash += part
+        h = (h * 257) % word_size
+        h += part
 
-    return hash & lo24
+    return h & lo24
 
 # This must match hash_oid_name in static_oids.cpp.in
 def hash_oid_name(name):
     word_size = 2 ** 32
     lo24 = 0xFFFFFF
 
-    hash = 0x411ECD00 + len(name)
+    h = 0x411ECD00 + len(name)
 
     for part in map(ord, name):
-        hash = (hash * 251) % word_size
-        hash += part
+        h = (h * 251) % word_size
+        h += part
 
-    return hash & lo24
+    return h & lo24
 
 def format_oid(oid):
-    return "{" + oid.replace('.', ', ') + '}'
+    return '{' + oid.replace('.', ', ') + '}'
 
 def render_static_oid(m):
     res = []
@@ -70,17 +69,8 @@ def render_static_oid(m):
 
     return res
 
-def format_dup_oids(m):
-    s = ''
-    for kv in m:
-        if len(s) > 0:
-            s += '      '
-
-        s += '{"%s", %s},\n' % (kv[0],format_oid(kv[1]))
-
-    s = s[:-2] # chomp last two chars
-
-    return s
+def format_oid_with_name(m):
+    return [ {'name': kv[0], 'oid': format_oid(kv[1])} for kv in m ]
 
 def main(args = None):
     """
@@ -89,7 +79,7 @@ def main(args = None):
     if args is None:
         args = sys.argv
 
-    oid_lines = open('./src/build-data/oids.txt').readlines()
+    oid_lines = open('./src/build-data/oids.txt', encoding='utf8').readlines()
 
     oid_re = re.compile(r"^([0-9][0-9.]+) += +([A-Za-z0-9_\./\(\), -]+)$")
     hdr_re = re.compile(r"^\[([a-z0-9_]+)\]$")
@@ -98,8 +88,6 @@ def main(args = None):
     str2oid = {}
     dup_oids = []
     aliases = []
-
-    cur_hdr = None
 
     for line in oid_lines:
         line = line.strip()
@@ -111,7 +99,6 @@ def main(args = None):
 
         match = hdr_re.match(line)
         if match is not None:
-            cur_hdr = match.group(1)
             continue
 
         match = oid_re.match(line)
@@ -139,8 +126,8 @@ def main(args = None):
         static_oids.write(template.render(script=this_script,
                                           date=date,
                                           static_oid_data=render_static_oid(str2oid),
-                                          dup_oids=format_dup_oids(dup_oids),
-                                          aliases=format_dup_oids(aliases)))
+                                          dup_oids=format_oid_with_name(dup_oids),
+                                          aliases=format_oid_with_name(aliases)))
         static_oids.write("\n")
 
     return 0
