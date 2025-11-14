@@ -794,11 +794,13 @@ class FFI_Cert_Validation_Test final : public FFI_Test {
          if(!TEST_FFI_INIT(botan_x509_cert_load_file, (&root, Test::data_file("x509/nist/root.crt").c_str()))) {
             return;
          }
+         TEST_FFI_RC(0, botan_x509_cert_is_ca, (root));
 
          botan_x509_cert_t end2;
          botan_x509_cert_t sub2;
          REQUIRE_FFI_OK(botan_x509_cert_load_file, (&end2, Test::data_file("x509/nist/test02/end.crt").c_str()));
          REQUIRE_FFI_OK(botan_x509_cert_load_file, (&sub2, Test::data_file("x509/nist/test02/int.crt").c_str()));
+         TEST_FFI_RC(-1, botan_x509_cert_is_ca, (end2));
 
          TEST_FFI_RC(1, botan_x509_cert_verify, (&rc, end2, &sub2, 1, &root, 1, nullptr, 0, nullptr, 0));
          result.confirm("Validation test02 failed", rc == 5002);
