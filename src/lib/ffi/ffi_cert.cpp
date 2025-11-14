@@ -343,6 +343,15 @@ int botan_x509_cert_allowed_usage(botan_x509_cert_t cert, unsigned int key_usage
 #endif
 }
 
+int botan_x509_cert_has_ex_constraint(botan_x509_cert_t cert, const char* oid) {
+#if defined(BOTAN_HAS_X509_CERTIFICATES)
+   return BOTAN_FFI_VISIT(cert, [=](const auto& c) -> int { return c.has_ex_constraint(oid) ? 0 : -1; });
+#else
+   BOTAN_UNUSED(cert, oid);
+   return BOTAN_FFI_ERROR_NOT_IMPLEMENTED;
+#endif
+}
+
 int botan_x509_cert_destroy(botan_x509_cert_t cert) {
 #if defined(BOTAN_HAS_X509_CERTIFICATES)
    return BOTAN_FFI_CHECKED_DELETE(cert);

@@ -2261,6 +2261,8 @@ enum botan_x509_cert_key_constraints /* NOLINT(*-enum-size,*-use-enum-class) */ 
 
 BOTAN_FFI_EXPORT(2, 0) int botan_x509_cert_allowed_usage(botan_x509_cert_t cert, unsigned int key_usage);
 
+BOTAN_FFI_EXPORT(3, 11) int botan_x509_cert_has_ex_constraint(botan_x509_cert_t cert, const char* oid);
+
 /**
 * Check if the certificate matches the specified hostname via alternative name or CN match.
 * RFC 5280 wildcards also supported.
