@@ -2263,6 +2263,65 @@ BOTAN_FFI_EXPORT(2, 0) int botan_x509_cert_allowed_usage(botan_x509_cert_t cert,
 
 BOTAN_FFI_EXPORT(3, 11) int botan_x509_cert_has_ex_constraint(botan_x509_cert_t cert, const char* oid);
 
+typedef struct botan_x509_alt_names_struct* botan_x509_alt_names_t;
+
+/**
+* Provides an object that allows accessing all "subject alternative names"
+* within the respective certificate extension. Returns BOTAN_FFI_ERROR_NO_VALUE
+* if the certificate does not contain any such alternative names.
+*/
+BOTAN_FFI_EXPORT(3, 11)
+int botan_x509_cert_subject_alternative_names(botan_x509_cert_t cert, botan_x509_alt_names_t* alt_names);
+
+/**
+* Provides an object that allows accessing all "issuer alternative names"
+* within the respective certificate extension. Returns BOTAN_FFI_ERROR_NO_VALUE
+* if the certificate does not contain any such alternative names.
+*/
+BOTAN_FFI_EXPORT(3, 11)
+int botan_x509_cert_issuer_alternative_names(botan_x509_cert_t cert, botan_x509_alt_names_t* alt_names);
+
+BOTAN_FFI_EXPORT(3, 11) int botan_x509_alternative_names_destroy(botan_x509_alt_names_t alt_names);
+
+enum botan_x509_alternative_name_types /* NOLINT(*-enum-size,*-use-enum-class) */ {
+   ALTNAME_EMAIL,
+   ALTNAME_DNS,
+   ALTNAME_DIRNAME,
+   ALTNAME_URI,
+   ALTNAME_IP4_ADDRESS,
+};
+
+/**
+* Returns the number of alternative names of the given type available in the
+* given alternative names object. The "view" functions below retrieve entries
+* one-by-one using an index that must not be equal or larger than the value
+* returned here.
+*/
+BOTAN_FFI_EXPORT(3, 11)
+int botan_x509_alternative_names_items_of(botan_x509_alt_names_t alt_names, unsigned int type, size_t* count);
+
+/**
+* Provides a single alternative name of the requested type at the given index
+* or BOTAN_FFI_ERROR_OUT_OF_RANGE if the requested value does not exist.
+*
+* The types EMAIL, DNS, URI, IP4_ADDRESS may be viewed as "string", other types
+* will result in BOTAN_FFI_ERROR_NO_VALUE.
+*/
+BOTAN_FFI_EXPORT(3, 11)
+int botan_x509_alternative_names_view_str_item_at(
+   botan_x509_alt_names_t alt_names, unsigned int type, size_t index, botan_view_ctx ctx, botan_view_str_fn view);
+
+/**
+* Provides a single alternative name of the requested type at the given index
+* or BOTAN_FFI_ERROR_OUT_OF_RANGE if the requested value does not exist.
+*
+* The types DIRNAME, IP4_ADDRESS may be viewed as "binary", other types will
+* result in BOTAN_FFI_ERROR_NO_VALUE.
+*/
+BOTAN_FFI_EXPORT(3, 11)
+int botan_x509_alternative_names_view_bin_item_at(
+   botan_x509_alt_names_t alt_names, unsigned int type, size_t index, botan_view_ctx ctx, botan_view_bin_fn view);
+
 /**
 * Check if the certificate matches the specified hostname via alternative name or CN match.
 * RFC 5280 wildcards also supported.
