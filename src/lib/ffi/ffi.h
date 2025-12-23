@@ -2364,6 +2364,9 @@ BOTAN_FFI_EXPORT(2, 13) int botan_x509_crl_load_file(botan_x509_crl_t* crl_obj, 
 BOTAN_FFI_EXPORT(2, 13)
 int botan_x509_crl_load(botan_x509_crl_t* crl_obj, const uint8_t crl_bits[], size_t crl_bits_len);
 
+BOTAN_FFI_EXPORT(3, 11) int botan_x509_crl_this_update(botan_x509_crl_t crl, uint64_t* time_since_epoch);
+BOTAN_FFI_EXPORT(3, 11) int botan_x509_crl_next_update(botan_x509_crl_t crl, uint64_t* time_since_epoch);
+
 BOTAN_FFI_EXPORT(2, 13) int botan_x509_crl_destroy(botan_x509_crl_t crl);
 /**
  * Retrieve a specific binary value from an X.509 certificate revocation list.

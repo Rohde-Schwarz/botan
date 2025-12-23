@@ -19,6 +19,7 @@
    #include <botan/hex.h>
    #include <botan/mem_ops.h>
    #include <botan/pkix_types.h>
+   #include <botan/internal/calendar.h>
    #include <botan/internal/fmt.h>
    #include <botan/internal/loadstor.h>
    #include <botan/internal/stl_util.h>
@@ -707,6 +708,13 @@ class FFI_CRL_Test final : public FFI_Test {
          TEST_FFI_RC(BOTAN_FFI_ERROR_NO_VALUE,
                      botan_x509_crl_view_binary_values,
                      (bytecrl, BOTAN_X509_SUBJECT_KEY_IDENTIFIER, 0, akid.delegate(), akid.callback()));
+
+         uint64_t thisUpdate;
+         uint64_t nextUpdate;
+         TEST_FFI_OK(botan_x509_crl_this_update, (bytecrl, &thisUpdate));
+         TEST_FFI_OK(botan_x509_crl_next_update, (bytecrl, &nextUpdate));
+         result.test_eq("thisUpdate", thisUpdate, Botan::calendar_point(2050, 2, 25, 15, 21, 42).seconds_since_epoch());
+         result.test_eq("nextUpdate", nextUpdate, Botan::calendar_point(2050, 2, 25, 15, 24, 41).seconds_since_epoch());
 
          botan_x509_crl_t crl;
          REQUIRE_FFI_OK(botan_x509_crl_load_file, (&crl, Test::data_file("x509/nist/root.crl").c_str()));
