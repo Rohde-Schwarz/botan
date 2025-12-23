@@ -2392,6 +2392,28 @@ int botan_x509_crl_view_binary_values(botan_x509_crl_t crl_obj,
 BOTAN_FFI_EXPORT(2, 13) int botan_x509_is_revoked(botan_x509_crl_t crl, botan_x509_cert_t cert);
 
 /**
+* Allows iterating all entries of the CRL. The provided output parameters may be
+* set to NULL individually if the application does require only a subset.
+*
+* @param crl                              the CRL whose entries should be listed
+* @param index                            the index of the CRL entry to return
+* @param expire_time_seconds_since_epoch  the revocation timestamp of this entry
+* @param reason                           the reason code (see RFC 5280 - 5.3.1)
+* @param serial_bits                      the revoked cert's serial number
+* @param serial_bits_len                  the length of the cert's serial number
+*
+* @returns BOTAN_FFI_ERROR_OUT_OF_RANGE if the given @p index is out of range of
+*          the CRL entry list.
+*/
+BOTAN_FFI_EXPORT(3, 11)
+int botan_x509_crl_get_entry(botan_x509_crl_t crl,
+                             size_t index,
+                             uint64_t* expire_time_seconds_since_epoch,
+                             uint8_t* reason,
+                             uint8_t serial_bits[],
+                             size_t* serial_bits_len);
+
+/**
  * Different flavor of `botan_x509_cert_verify`, supports revocation lists.
  * CRLs are passed as an array, same as intermediates and trusted CAs
  */

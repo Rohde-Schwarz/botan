@@ -834,6 +834,44 @@ int botan_x509_is_revoked(botan_x509_crl_t crl, botan_x509_cert_t cert) {
 #endif
 }
 
+int botan_x509_crl_get_entry(botan_x509_crl_t crl,
+                             size_t index,
+                             uint64_t* expire_time_seconds_since_epoch,
+                             uint8_t* reason,
+                             uint8_t serial_bits[],
+                             size_t* serial_bits_len) {
+#if defined(BOTAN_HAS_X509_CERTIFICATES)
+   return BOTAN_FFI_VISIT(crl, [=](const Botan::X509_CRL& c) -> int {
+      const auto& entries = c.get_revoked();
+      if(index >= entries.size()) {
+         return BOTAN_FFI_ERROR_OUT_OF_RANGE;
+      }
+
+      const auto& entry = entries[index];
+
+      if(serial_bits_len) {
+         const auto rc = write_vec_output(serial_bits, serial_bits_len, entry.serial_number());
+         if(rc != BOTAN_FFI_SUCCESS) {
+            return rc;
+         }
+      }
+
+      if(expire_time_seconds_since_epoch) {
+         *expire_time_seconds_since_epoch = entry.expire_time().time_since_epoch();
+      }
+
+      if(reason) {
+         *reason = static_cast<uint8_t>(entry.reason_code());
+      }
+
+      return BOTAN_FFI_SUCCESS;
+   });
+#else
+   BOTAN_UNUSED(crl, index, expire_time_seconds_since_epoch, reason, searial_bits, serial_bits_len);
+   return BOTAN_FFI_ERROR_NOT_IMPLEMENTED;
+#endif
+}
+
 int botan_x509_cert_verify_with_crl(int* result_code,
                                     botan_x509_cert_t cert,
                                     const botan_x509_cert_t* intermediates,
