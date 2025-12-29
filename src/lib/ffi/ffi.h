@@ -2263,6 +2263,68 @@ BOTAN_FFI_EXPORT(2, 0) int botan_x509_cert_allowed_usage(botan_x509_cert_t cert,
 
 BOTAN_FFI_EXPORT(3, 11) int botan_x509_cert_has_ex_constraint(botan_x509_cert_t cert, const char* oid);
 
+typedef struct botan_x509_general_name_struct* botan_x509_general_name_t;
+
+/**
+* GeneralName type identifiers as defined in RFC 3280 A.2 (GeneralName ::= CHOICE)
+* Type identifiers that are omitted here are (currently) not supported.
+*/
+enum botan_x509_general_name_types /* NOLINT(*-enum-size,*-use-enum-class) */ {
+   BOTAN_X509_OTHER_NAME = 0,
+   BOTAN_X509_EMAIL_ADDRESS = 1,
+   BOTAN_X509_DNS_NAME = 2,
+   BOTAN_X509_DIRECTORY_NAME = 4,
+   BOTAN_X509_URI = 6,
+   BOTAN_X509_IP_ADDRESS = 7,
+};
+
+/**
+* Provides the contained type of the @p name and returns BOTAN_FFI_SUCCESS if
+* that type is supported and may be retrieved via the view functions below.
+* Otherwise BOTAN_FFI_ERROR_INVALID_OBJECT_STATE is returned.
+*/
+int botan_x509_general_name_get_type(botan_x509_general_name_t name, unsigned int* type);
+
+/**
+* Views the name as a string or returns BOTAN_FFI_ERROR_INVALID_OBJECT_STATE
+* if the contained GeneralName value cannot be represented as a string.
+*
+* The types EMAIL, DNS, URI, IP4_ADDRESS may be viewed as "string".
+*/
+BOTAN_FFI_EXPORT(3, 11)
+int botan_x509_general_name_view_string_value(botan_x509_general_name_t name,
+                                              botan_view_ctx ctx,
+                                              botan_view_str_fn view);
+
+/**
+* Views the name as a bit string or returns BOTAN_FFI_ERROR_INVALID_OBJECT_STATE
+* if the contained GeneralName value cannot be represented as a binary string.
+*
+* The types DIRNAME, IP4_ADDRESS may be viewed as "binary".
+*/
+BOTAN_FFI_EXPORT(3, 11)
+int botan_x509_general_name_view_binary_value(botan_x509_general_name_t name,
+                                              botan_view_ctx ctx,
+                                              botan_view_bin_fn view);
+
+BOTAN_FFI_EXPORT(3, 11) int botan_x509_general_name_destroy(botan_x509_general_name_t alt_names);
+
+/**
+* Extracts "permitted" name constraints from a given @p cert one-by-one.
+* Returns BOTAN_FFI_ERROR_OUT_OF_RANGE if the given @p index is larger than the
+* available number of "permitted" name constraints.
+*/
+BOTAN_FFI_EXPORT(3, 11)
+int botan_x509_permitted_name_constraints(botan_x509_cert_t cert, size_t index, botan_x509_general_name_t* constraint);
+
+/**
+* Extracts "excluded" name constraints from a given @p cert one-by-one.
+* Returns BOTAN_FFI_ERROR_OUT_OF_RANGE if the given @p index is larger than the
+* available number of "excluded" name constraints.
+*/
+BOTAN_FFI_EXPORT(3, 11)
+int botan_x509_excluded_name_constraints(botan_x509_cert_t cert, size_t index, botan_x509_general_name_t* constraint);
+
 typedef struct botan_x509_alt_names_struct* botan_x509_alt_names_t;
 
 /**

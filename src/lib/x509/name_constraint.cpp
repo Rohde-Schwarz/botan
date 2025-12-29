@@ -14,6 +14,7 @@
 #include <botan/internal/int_utils.h>
 #include <botan/internal/loadstor.h>
 #include <botan/internal/parsing.h>
+#include <botan/internal/stl_util.h>
 
 namespace Botan {
 
@@ -57,6 +58,19 @@ std::string GeneralName::name() const {
    } else {
       BOTAN_ASSERT_UNREACHABLE();
    }
+}
+
+std::vector<uint8_t> GeneralName::binary_name() const {
+   return std::visit(Botan::overloaded{
+                        [](const Botan::X509_DN& dn) { return dn.get_bits(); },
+                        [](const std::pair<uint32_t, uint32_t>& ip) {
+                           return concat<std::vector<uint8_t>>(store_be(ip.first), store_be(ip.second));
+                        },
+                        [](const auto&) -> std::vector<uint8_t> {
+                           throw Invalid_State("Cannot convert GeneralName to binary string");
+                        },
+                     },
+                     m_name);
 }
 
 void GeneralName::encode_into(DER_Encoder& /*to*/) const {

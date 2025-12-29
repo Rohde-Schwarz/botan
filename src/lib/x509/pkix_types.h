@@ -300,6 +300,11 @@ class BOTAN_PUBLIC_API(2, 0) GeneralName final : public ASN1_Object {
       BOTAN_DEPRECATED("Deprecated no replacement") std::string name() const;
 
       /**
+      * @return The name as binary string. Format depends on type.
+      */
+      BOTAN_DEPRECATED("Deprecated no replacement") std::vector<uint8_t> binary_name() const;
+
+      /**
       * Checks whether a given certificate (partially) matches this name.
       * @param cert certificate to be matched
       * @return the match result
