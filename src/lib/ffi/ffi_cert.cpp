@@ -654,21 +654,24 @@ int botan_x509_alternative_names_destroy(botan_x509_alt_names_t alt_names) {
 
 namespace {
 
-using altname_dataset_variant = std::variant<std::reference_wrapper<const std::set<std::string>>,
+using altname_dataset_variant = std::variant<std::monostate,
+                                             std::reference_wrapper<const std::set<std::string>>,
                                              std::reference_wrapper<const std::set<uint32_t>>,
                                              std::reference_wrapper<const std::set<Botan::X509_DN>>>;
 
 altname_dataset_variant get_alternative_name_set(const Botan::AlternativeName& alt_names, unsigned int type) {
-   switch(static_cast<botan_x509_alternative_name_types>(type)) {
-      case ALTNAME_EMAIL:
+   switch(static_cast<botan_x509_general_name_types>(type)) {
+      case BOTAN_X509_OTHER_NAME:
+         return {}; /* viewing this value is unsupported */
+      case BOTAN_X509_EMAIL_ADDRESS:
          return alt_names.email();
-      case ALTNAME_DNS:
+      case BOTAN_X509_DNS_NAME:
          return alt_names.dns();
-      case ALTNAME_DIRNAME:
+      case BOTAN_X509_DIRECTORY_NAME:
          return alt_names.directory_names();
-      case ALTNAME_URI:
+      case BOTAN_X509_URI:
          return alt_names.uris();
-      case ALTNAME_IP4_ADDRESS:
+      case BOTAN_X509_IP_ADDRESS:
          return alt_names.ipv4_address();
    }
 
@@ -679,38 +682,29 @@ template <typename ViewFnT, typename EncoderFnT>
    requires std::same_as<botan_view_bin_fn, ViewFnT> || std::same_as<botan_view_str_fn, ViewFnT>
 int select_and_encode_value_then_invoke_view_callback(
    size_t index, botan_view_ctx ctx, ViewFnT view_fn, altname_dataset_variant set, EncoderFnT encoder_fn) {
-   return std::visit(
-      [=](const auto& items) -> int {
-         if(items.get().size() <= index) {
-            return BOTAN_FFI_ERROR_OUT_OF_RANGE;
-         }
+   return std::visit(Botan::overloaded{
+                        [=](const auto& items) -> int {
+                           if(items.get().size() <= index) {
+                              return BOTAN_FFI_ERROR_OUT_OF_RANGE;
+                           }
 
-         auto item = items.get().begin();
-         std::advance(item, index);
+                           auto item = items.get().begin();
+                           std::advance(item, index);
 
-         if constexpr(std::invocable<decltype(encoder_fn), decltype(*item)>) {
-            return invoke_view_callback(view_fn, ctx, encoder_fn(*item));
-         } else {
-            return BOTAN_FFI_ERROR_NO_VALUE;
-         }
-      },
-      set);
+                           if constexpr(std::invocable<decltype(encoder_fn), decltype(*item)>) {
+                              return invoke_view_callback(view_fn, ctx, encoder_fn(*item));
+                           } else {
+                              return BOTAN_FFI_ERROR_NO_VALUE;
+                           }
+                        },
+                        [](std::monostate) -> int { return BOTAN_FFI_ERROR_NO_VALUE; },
+                     },
+                     set);
 }
 
 }  // namespace
 
 extern "C" {
-
-int botan_x509_alternative_names_items_of(botan_x509_alt_names_t alt_names, unsigned int type, size_t* count) {
-#if defined(BOTAN_HAS_X509_CERTIFICATES)
-   return BOTAN_FFI_VISIT(alt_names, [=](const Botan::AlternativeName& an) {
-      std::visit([=](const auto& items) { *count = items.get().size(); }, get_alternative_name_set(an, type));
-   });
-#else
-   BOTAN_UNUSED(alt_names, type, count);
-   return BOTAN_FFI_ERROR_NOT_IMPLEMENTED;
-#endif
-}
 
 int botan_x509_alternative_names_view_str_item_at(
    botan_x509_alt_names_t alt_names, unsigned int type, size_t index, botan_view_ctx ctx, botan_view_str_fn view) {

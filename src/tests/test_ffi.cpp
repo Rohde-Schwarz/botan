@@ -1132,41 +1132,29 @@ class FFI_Cert_ExtKeyUsages_Test final : public FFI_Test {
       }
 };
 
-auto read_string_alternative_names(Test::Result& result,
-                                   botan_x509_alt_names_t alt_names,
-                                   botan_x509_alternative_name_types type) {
-   size_t count;
-   TEST_FFI_OK(botan_x509_alternative_names_items_of, (alt_names, type, &count));
-
+auto read_string_alternative_names(botan_x509_alt_names_t alt_names, botan_x509_general_name_types type) {
    std::vector<std::string> out;
-   out.reserve(count);
 
-   for(size_t i = 0; i < count; ++i) {
-      TEST_FFI_OK(botan_x509_alternative_names_view_str_item_at,
-                  (alt_names, type, i, &out, [](auto v, const char* ptr, size_t) -> int {
-                     static_cast<std::vector<std::string>*>(v)->emplace_back(ptr);
-                     return BOTAN_FFI_SUCCESS;
-                  }));
+   for(size_t i = 0, rc = BOTAN_FFI_SUCCESS; rc == BOTAN_FFI_SUCCESS; ++i) {
+      rc = botan_x509_alternative_names_view_str_item_at(
+         alt_names, type, i, &out, [](auto v, const char* ptr, size_t) -> int {
+            static_cast<std::vector<std::string>*>(v)->emplace_back(ptr);
+            return BOTAN_FFI_SUCCESS;
+         });
    }
 
    return out;
 }
 
-auto read_binary_alternative_names(Test::Result& result,
-                                   botan_x509_alt_names_t alt_names,
-                                   botan_x509_alternative_name_types type) {
-   size_t count;
-   TEST_FFI_OK(botan_x509_alternative_names_items_of, (alt_names, type, &count));
-
+auto read_binary_alternative_names(botan_x509_alt_names_t alt_names, botan_x509_general_name_types type) {
    std::vector<std::vector<uint8_t>> out;
-   out.reserve(count);
 
-   for(size_t i = 0; i < count; ++i) {
-      TEST_FFI_OK(botan_x509_alternative_names_view_bin_item_at,
-                  (alt_names, type, i, &out, [](auto v, const uint8_t* ptr, size_t len) -> int {
-                     static_cast<std::vector<std::vector<uint8_t>>*>(v)->emplace_back(ptr, ptr + len);
-                     return BOTAN_FFI_SUCCESS;
-                  }));
+   for(size_t i = 0, rc = BOTAN_FFI_SUCCESS; rc == BOTAN_FFI_SUCCESS; ++i) {
+      rc = botan_x509_alternative_names_view_bin_item_at(
+         alt_names, type, i, &out, [](auto v, const uint8_t* ptr, size_t len) -> int {
+            static_cast<std::vector<std::vector<uint8_t>>*>(v)->emplace_back(ptr, ptr + len);
+            return BOTAN_FFI_SUCCESS;
+         });
    }
 
    return out;
@@ -1211,30 +1199,30 @@ class FFI_Cert_AlternativeNames_Test final : public FFI_Test {
             return;
          }
 
-         const auto san_email = read_string_alternative_names(result, san, ALTNAME_EMAIL);
+         const auto san_email = read_string_alternative_names(san, BOTAN_X509_EMAIL_ADDRESS);
          result.test_eq("expected number of emails in SAN", san_email.size(), 2);
          result.confirm("testing@x509-labs.com", Botan::value_exists(san_email, "testing@x509-labs.com"));
          result.confirm("info@x509-labs.com", Botan::value_exists(san_email, "info@x509-labs.com"));
 
-         const auto san_dns = read_string_alternative_names(result, san, ALTNAME_DNS);
+         const auto san_dns = read_string_alternative_names(san, BOTAN_X509_DNS_NAME);
          result.test_eq("expected number of hostnames in SAN", san_dns.size(), 3);
          result.confirm("test.x509-labs.com", Botan::value_exists(san_dns, "test.x509-labs.com"));
          result.confirm("versuch.x509-labs.com", Botan::value_exists(san_dns, "versuch.x509-labs.com"));
          result.confirm("trail.x509-labs.com", Botan::value_exists(san_dns, "trail.x509-labs.com"));
 
-         const auto san_uri = read_string_alternative_names(result, san, ALTNAME_URI);
+         const auto san_uri = read_string_alternative_names(san, BOTAN_X509_URI);
          result.test_eq("expected number of URIs in SAN", san_uri.size(), 2);
          result.confirm("https://x509-labs.com", Botan::value_exists(san_uri, "https://x509-labs.com"));
          result.confirm("http://x509-labs.com", Botan::value_exists(san_uri, "http://x509-labs.com"));
 
-         const auto san_ip4 = read_string_alternative_names(result, san, ALTNAME_IP4_ADDRESS);
+         const auto san_ip4 = read_string_alternative_names(san, BOTAN_X509_IP_ADDRESS);
          result.test_eq("expected number of IPv4 addresses", san_ip4.size(), 1);
          result.confirm("127.0.0.1", Botan::value_exists(san_ip4, "127.0.0.1"));
-         const auto san_ip4_bin = read_binary_alternative_names(result, san, ALTNAME_IP4_ADDRESS);
+         const auto san_ip4_bin = read_binary_alternative_names(san, BOTAN_X509_IP_ADDRESS);
          result.test_eq("expected number of IPv4 addresses (bin)", san_ip4_bin.size(), 1);
          result.test_eq("127.0.0.1 (bin)", san_ip4_bin.front(), Botan::store_be(uint32_t(0x7F000001)));
 
-         const auto san_dn_bytes = read_binary_alternative_names(result, san, ALTNAME_DIRNAME);
+         const auto san_dn_bytes = read_binary_alternative_names(san, BOTAN_X509_DIRECTORY_NAME);
          result.test_eq("expected number of DNs in SAN", san_dn_bytes.size(), 3);
          const auto san_dn_cns = read_common_names(san_dn_bytes);
          result.confirm("First Name", Botan::value_exists(san_dn_cns, "First Name"));
@@ -1243,45 +1231,45 @@ class FFI_Cert_AlternativeNames_Test final : public FFI_Test {
 
          TEST_FFI_RC(BOTAN_FFI_ERROR_OUT_OF_RANGE,
                      botan_x509_alternative_names_view_str_item_at,
-                     (san, ALTNAME_EMAIL, san_email.size(), nullptr, [](auto, auto, auto) { return 0; }));
+                     (san, BOTAN_X509_EMAIL_ADDRESS, san_email.size(), nullptr, [](auto, auto, auto) { return 0; }));
          TEST_FFI_RC(BOTAN_FFI_ERROR_NO_VALUE, /* invalid data format */
                      botan_x509_alternative_names_view_str_item_at,
-                     (san, ALTNAME_DIRNAME, 0, nullptr, [](auto, auto, auto) { return 0; }));
+                     (san, BOTAN_X509_DIRECTORY_NAME, 0, nullptr, [](auto, auto, auto) { return 0; }));
 
          TEST_FFI_RC(BOTAN_FFI_ERROR_OUT_OF_RANGE,
                      botan_x509_alternative_names_view_bin_item_at,
-                     (san, ALTNAME_DIRNAME, san_dn_cns.size(), nullptr, [](auto, auto, auto) { return 0; }));
+                     (san, BOTAN_X509_DIRECTORY_NAME, san_dn_cns.size(), nullptr, [](auto, auto, auto) { return 0; }));
          TEST_FFI_RC(BOTAN_FFI_ERROR_NO_VALUE, /* invalid data format */
                      botan_x509_alternative_names_view_bin_item_at,
-                     (san, ALTNAME_EMAIL, 0, nullptr, [](auto, auto, auto) { return 0; }));
+                     (san, BOTAN_X509_EMAIL_ADDRESS, 0, nullptr, [](auto, auto, auto) { return 0; }));
 
          botan_x509_alt_names_t ian;
          if(!TEST_FFI_INIT(botan_x509_cert_issuer_alternative_names, (cert_with_alt_names, &ian))) {
             return;
          }
 
-         const auto ian_email = read_string_alternative_names(result, ian, ALTNAME_EMAIL);
+         const auto ian_email = read_string_alternative_names(ian, BOTAN_X509_EMAIL_ADDRESS);
          result.test_eq("expected number of emails in IAN", ian_email.size(), 0);
 
-         const auto ian_dns = read_string_alternative_names(result, ian, ALTNAME_DNS);
+         const auto ian_dns = read_string_alternative_names(ian, BOTAN_X509_DNS_NAME);
          result.test_eq("expected number of hostnames in IAN", ian_dns.size(), 3);
          result.confirm("test.x509-labs-ca.com", Botan::value_exists(ian_dns, "test.x509-labs-ca.com"));
          result.confirm("versuch.x509-labs-ca.com", Botan::value_exists(ian_dns, "versuch.x509-labs-ca.com"));
          result.confirm("trail.x509-labs-ca.com", Botan::value_exists(ian_dns, "trail.x509-labs-ca.com"));
 
-         const auto ian_uri = read_string_alternative_names(result, ian, ALTNAME_URI);
+         const auto ian_uri = read_string_alternative_names(ian, BOTAN_X509_URI);
          result.test_eq("expected number of URIs in IAN", ian_uri.size(), 2);
          result.confirm("https://x509-labs-ca.com", Botan::value_exists(ian_uri, "https://x509-labs-ca.com"));
          result.confirm("http://x509-labs-ca.com", Botan::value_exists(ian_uri, "http://x509-labs-ca.com"));
 
-         const auto ian_ip4 = read_string_alternative_names(result, ian, ALTNAME_IP4_ADDRESS);
+         const auto ian_ip4 = read_string_alternative_names(ian, BOTAN_X509_IP_ADDRESS);
          result.test_eq("expected number of IPv4 addresses", ian_ip4.size(), 1);
          result.confirm("192.168.1.1", Botan::value_exists(ian_ip4, "192.168.1.1"));
-         const auto ian_ip4_bin = read_binary_alternative_names(result, ian, ALTNAME_IP4_ADDRESS);
+         const auto ian_ip4_bin = read_binary_alternative_names(ian, BOTAN_X509_IP_ADDRESS);
          result.test_eq("expected number of IPv4 addresses (bin)", ian_ip4_bin.size(), 1);
          result.test_eq("192.168.1.1 (bin)", ian_ip4_bin.front(), Botan::store_be(uint32_t(0xC0A80101)));
 
-         const auto ian_dn_bytes = read_binary_alternative_names(result, ian, ALTNAME_DIRNAME);
+         const auto ian_dn_bytes = read_binary_alternative_names(ian, BOTAN_X509_DIRECTORY_NAME);
          result.test_eq("expected number of DNs in IAN", ian_dn_bytes.size(), 3);
          const auto ian_dn_cns = read_common_names(ian_dn_bytes);
          result.confirm("First CA", Botan::value_exists(ian_dn_cns, "First CA"));
