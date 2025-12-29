@@ -2283,7 +2283,7 @@ enum botan_x509_general_name_types /* NOLINT(*-enum-size,*-use-enum-class) */ {
 * that type is supported and may be retrieved via the view functions below.
 * Otherwise BOTAN_FFI_ERROR_INVALID_OBJECT_STATE is returned.
 */
-int botan_x509_general_name_get_type(botan_x509_general_name_t name, unsigned int* type);
+BOTAN_FFI_EXPORT(3, 11) int botan_x509_general_name_get_type(botan_x509_general_name_t name, unsigned int* type);
 
 /**
 * Views the name as a string or returns BOTAN_FFI_ERROR_INVALID_OBJECT_STATE
@@ -2315,7 +2315,9 @@ BOTAN_FFI_EXPORT(3, 11) int botan_x509_general_name_destroy(botan_x509_general_n
 * available number of "permitted" name constraints.
 */
 BOTAN_FFI_EXPORT(3, 11)
-int botan_x509_permitted_name_constraints(botan_x509_cert_t cert, size_t index, botan_x509_general_name_t* constraint);
+int botan_x509_cert_permitted_name_constraints(botan_x509_cert_t cert,
+                                               size_t index,
+                                               botan_x509_general_name_t* constraint);
 
 /**
 * Extracts "excluded" name constraints from a given @p cert one-by-one.
@@ -2323,7 +2325,9 @@ int botan_x509_permitted_name_constraints(botan_x509_cert_t cert, size_t index, 
 * available number of "excluded" name constraints.
 */
 BOTAN_FFI_EXPORT(3, 11)
-int botan_x509_excluded_name_constraints(botan_x509_cert_t cert, size_t index, botan_x509_general_name_t* constraint);
+int botan_x509_cert_excluded_name_constraints(botan_x509_cert_t cert,
+                                              size_t index,
+                                              botan_x509_general_name_t* constraint);
 
 typedef struct botan_x509_alt_names_struct* botan_x509_alt_names_t;
 

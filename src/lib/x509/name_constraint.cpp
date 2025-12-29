@@ -62,7 +62,7 @@ std::string GeneralName::name() const {
 
 std::vector<uint8_t> GeneralName::binary_name() const {
    return std::visit(Botan::overloaded{
-                        [](const Botan::X509_DN& dn) { return dn.get_bits(); },
+                        [](const Botan::X509_DN& dn) { return Botan::ASN1::put_in_sequence(dn.get_bits()); },
                         [](const std::pair<uint32_t, uint32_t>& ip) {
                            return concat<std::vector<uint8_t>>(store_be(ip.first), store_be(ip.second));
                         },

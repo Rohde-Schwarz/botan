@@ -562,7 +562,9 @@ int botan_x509_general_name_destroy(botan_x509_general_name_t name) {
 #endif
 }
 
-int botan_x509_permitted_name_constraints(botan_x509_cert_t cert, size_t index, botan_x509_general_name_t* constraint) {
+int botan_x509_cert_permitted_name_constraints(botan_x509_cert_t cert,
+                                               size_t index,
+                                               botan_x509_general_name_t* constraint) {
 #if defined(BOTAN_HAS_X509_CERTIFICATES)
    return BOTAN_FFI_VISIT(cert, [=](const Botan::X509_Certificate& c) {
       if(Botan::any_null_pointers(constraint)) {
@@ -582,7 +584,9 @@ int botan_x509_permitted_name_constraints(botan_x509_cert_t cert, size_t index, 
 #endif
 }
 
-int botan_x509_excluded_name_constraints(botan_x509_cert_t cert, size_t index, botan_x509_general_name_t* constraint) {
+int botan_x509_cert_excluded_name_constraints(botan_x509_cert_t cert,
+                                              size_t index,
+                                              botan_x509_general_name_t* constraint) {
 #if defined(BOTAN_HAS_X509_CERTIFICATES)
    return BOTAN_FFI_VISIT(cert, [=](const Botan::X509_Certificate& c) {
       if(Botan::any_null_pointers(constraint)) {
