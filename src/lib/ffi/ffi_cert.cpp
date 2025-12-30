@@ -605,152 +605,98 @@ int botan_x509_cert_excluded_name_constraints(botan_x509_cert_t cert,
    return BOTAN_FFI_ERROR_NOT_IMPLEMENTED;
 #endif
 }
-
-int botan_x509_cert_subject_alternative_names(botan_x509_cert_t cert, botan_x509_alt_names_t* alt_names) {
-#if defined(BOTAN_HAS_X509_CERTIFICATES)
-   return BOTAN_FFI_VISIT(cert, [=](const Botan::X509_Certificate& c) {
-      if(Botan::any_null_pointers(alt_names)) {
-         return BOTAN_FFI_ERROR_NULL_POINTER;
-      }
-
-      const auto& san = c.subject_alt_name();
-      if(!san.has_items()) {
-         return BOTAN_FFI_ERROR_NO_VALUE;
-      }
-
-      return ffi_new_object(alt_names, std::make_unique<Botan::AlternativeName>(san));
-   });
-#else
-   BOTAN_UNUSED(cert, alt_names);
-   return BOTAN_FFI_ERROR_NOT_IMPLEMENTED;
-#endif
-}
-
-int botan_x509_cert_issuer_alternative_names(botan_x509_cert_t cert, botan_x509_alt_names_t* alt_names) {
-#if defined(BOTAN_HAS_X509_CERTIFICATES)
-   return BOTAN_FFI_VISIT(cert, [=](const Botan::X509_Certificate& c) {
-      if(Botan::any_null_pointers(alt_names)) {
-         return BOTAN_FFI_ERROR_NULL_POINTER;
-      }
-
-      const auto& ian = c.issuer_alt_name();
-      if(!ian.has_items()) {
-         return BOTAN_FFI_ERROR_NO_VALUE;
-      }
-
-      return ffi_new_object(alt_names, std::make_unique<Botan::AlternativeName>(ian));
-   });
-#else
-   BOTAN_UNUSED(cert, alt_names);
-   return BOTAN_FFI_ERROR_NOT_IMPLEMENTED;
-#endif
-}
-
-int botan_x509_alternative_names_destroy(botan_x509_alt_names_t alt_names) {
-#if defined(BOTAN_HAS_X509_CERTIFICATES)
-   return BOTAN_FFI_CHECKED_DELETE(alt_names);
-#else
-   BOTAN_UNUSED(alt_names);
-   return BOTAN_FFI_ERROR_NOT_IMPLEMENTED;
-#endif
-}
 }
 
 namespace {
 
-using altname_dataset_variant = std::variant<std::monostate,
-                                             std::reference_wrapper<const std::set<std::string>>,
-                                             std::reference_wrapper<const std::set<uint32_t>>,
-                                             std::reference_wrapper<const std::set<Botan::X509_DN>>>;
+std::optional<Botan::GeneralName> extract_general_name_at(const Botan::AlternativeName& altnames, size_t index) {
+   if(index < altnames.email().size()) {
+      auto itr = altnames.email().begin();
+      std::advance(itr, index);
+      return Botan::GeneralName::email(*itr);
+   }
+   index -= altnames.email().size();
 
-altname_dataset_variant get_alternative_name_set(const Botan::AlternativeName& alt_names, unsigned int type) {
-   switch(static_cast<botan_x509_general_name_types>(type)) {
-      case BOTAN_X509_OTHER_NAME:
-         return {}; /* viewing this value is unsupported */
-      case BOTAN_X509_EMAIL_ADDRESS:
-         return alt_names.email();
-      case BOTAN_X509_DNS_NAME:
-         return alt_names.dns();
-      case BOTAN_X509_DIRECTORY_NAME:
-         return alt_names.directory_names();
-      case BOTAN_X509_URI:
-         return alt_names.uris();
-      case BOTAN_X509_IP_ADDRESS:
-         return alt_names.ipv4_address();
+   if(index < altnames.dns().size()) {
+      auto itr = altnames.dns().begin();
+      std::advance(itr, index);
+      return Botan::GeneralName::dns(*itr);
+   }
+   index -= altnames.dns().size();
+
+   if(index < altnames.directory_names().size()) {
+      auto itr = altnames.directory_names().begin();
+      std::advance(itr, index);
+      return Botan::GeneralName::directory_name(*itr);
+   }
+   index -= altnames.directory_names().size();
+
+   if(index < altnames.uris().size()) {
+      auto itr = altnames.uris().begin();
+      std::advance(itr, index);
+      return Botan::GeneralName::uri(*itr);
+   }
+   index -= altnames.uris().size();
+
+   if(index < altnames.ipv4_address().size()) {
+      auto itr = altnames.ipv4_address().begin();
+      std::advance(itr, index);
+      return Botan::GeneralName::ipv4_address(*itr);
    }
 
-   BOTAN_ASSERT_UNREACHABLE();
-}
-
-template <typename ViewFnT, typename EncoderFnT>
-   requires std::same_as<botan_view_bin_fn, ViewFnT> || std::same_as<botan_view_str_fn, ViewFnT>
-int select_and_encode_value_then_invoke_view_callback(
-   size_t index, botan_view_ctx ctx, ViewFnT view_fn, altname_dataset_variant set, EncoderFnT encoder_fn) {
-   return std::visit(Botan::overloaded{
-                        [=](const auto& items) -> int {
-                           if(items.get().size() <= index) {
-                              return BOTAN_FFI_ERROR_OUT_OF_RANGE;
-                           }
-
-                           auto item = items.get().begin();
-                           std::advance(item, index);
-
-                           if constexpr(std::invocable<decltype(encoder_fn), decltype(*item)>) {
-                              return invoke_view_callback(view_fn, ctx, encoder_fn(*item));
-                           } else {
-                              return BOTAN_FFI_ERROR_NO_VALUE;
-                           }
-                        },
-                        [](std::monostate) -> int { return BOTAN_FFI_ERROR_NO_VALUE; },
-                     },
-                     set);
+   return std::nullopt;
 }
 
 }  // namespace
 
 extern "C" {
 
-int botan_x509_alternative_names_view_str_item_at(
-   botan_x509_alt_names_t alt_names, unsigned int type, size_t index, botan_view_ctx ctx, botan_view_str_fn view) {
+int botan_x509_cert_subject_alternative_names(botan_x509_cert_t cert,
+                                              size_t index,
+                                              botan_x509_general_name_t* alt_name) {
 #if defined(BOTAN_HAS_X509_CERTIFICATES)
-   return BOTAN_FFI_VISIT(alt_names, [=](const Botan::AlternativeName& an) {
-      return select_and_encode_value_then_invoke_view_callback(
-         index,
-         ctx,
-         view,
-         get_alternative_name_set(an, type),
-         Botan::overloaded{
-            [](std::string str) { return str; },
-            [](uint32_t ip4addr) { return Botan::ipv4_to_string(ip4addr); },
-         });
+   return BOTAN_FFI_VISIT(cert, [=](const Botan::X509_Certificate& c) {
+      if(Botan::any_null_pointers(alt_name)) {
+         return BOTAN_FFI_ERROR_NULL_POINTER;
+      }
+
+      if(!c.v3_extensions().extension_set(Botan::OID::from_string("X509v3.SubjectAlternativeName"))) {
+         return BOTAN_FFI_ERROR_NO_VALUE;
+      }
+
+      if(auto name = extract_general_name_at(c.subject_alt_name(), index)) {
+         return ffi_new_object(alt_name, std::make_unique<Botan::GeneralName>(std::move(name).value()));
+      }
+
+      return BOTAN_FFI_ERROR_OUT_OF_RANGE;
    });
 #else
-   BOTAN_UNUSED(alt_names, type, index, ctx, view);
+   BOTAN_UNUSED(cert, alt_names);
    return BOTAN_FFI_ERROR_NOT_IMPLEMENTED;
 #endif
 }
 
-int botan_x509_alternative_names_view_bin_item_at(
-   botan_x509_alt_names_t alt_names, unsigned int type, size_t index, botan_view_ctx ctx, botan_view_bin_fn view) {
+int botan_x509_cert_issuer_alternative_names(botan_x509_cert_t cert,
+                                             size_t index,
+                                             botan_x509_general_name_t* alt_name) {
 #if defined(BOTAN_HAS_X509_CERTIFICATES)
-   return BOTAN_FFI_VISIT(alt_names, [=](const Botan::AlternativeName& an) {
-      return select_and_encode_value_then_invoke_view_callback(
-         index,
-         ctx,
-         view,
-         get_alternative_name_set(an, type),
-         Botan::overloaded{
-            [](const Botan::X509_DN& dn) {
-               std::vector<uint8_t> dn_bytes;
-               auto der = Botan::DER_Encoder(dn_bytes);
-               dn.encode_into(der);
-               return dn_bytes;
-            },
-            [](uint32_t ipaddr) { return Botan::store_be(ipaddr); },
-         });
+   return BOTAN_FFI_VISIT(cert, [=](const Botan::X509_Certificate& c) {
+      if(Botan::any_null_pointers(alt_name)) {
+         return BOTAN_FFI_ERROR_NULL_POINTER;
+      }
+
+      if(!c.v3_extensions().extension_set(Botan::OID::from_string("X509v3.IssuerAlternativeName"))) {
+         return BOTAN_FFI_ERROR_NO_VALUE;
+      }
+
+      if(auto name = extract_general_name_at(c.issuer_alt_name(), index)) {
+         return ffi_new_object(alt_name, std::make_unique<Botan::GeneralName>(std::move(name).value()));
+      }
+
+      return BOTAN_FFI_ERROR_OUT_OF_RANGE;
    });
 #else
-   BOTAN_UNUSED(alt_names, type, index, ctx, view);
+   BOTAN_UNUSED(cert, alt_names);
    return BOTAN_FFI_ERROR_NOT_IMPLEMENTED;
 #endif
 }

@@ -2329,47 +2329,27 @@ int botan_x509_cert_excluded_name_constraints(botan_x509_cert_t cert,
                                               size_t index,
                                               botan_x509_general_name_t* constraint);
 
-typedef struct botan_x509_alt_names_struct* botan_x509_alt_names_t;
-
 /**
-* Provides an object that allows accessing all "subject alternative names"
-* within the respective certificate extension. Returns BOTAN_FFI_ERROR_NO_VALUE
-* if the certificate does not contain any such alternative names.
+* Provides access to all "subject alternative names", where each entry is
+* returned as a botan_x509_general_name_t. If the given @p index is not
+* within range of the available entries, BOTAN_FFI_ERROR_OUT_OF_RANGE is
+* returned. If @p cert does not contain an IssuerAlternativeNames extension,
+* BOTAN_FFI_ERROR_NO_VALUE is returned.
 */
 BOTAN_FFI_EXPORT(3, 11)
-int botan_x509_cert_subject_alternative_names(botan_x509_cert_t cert, botan_x509_alt_names_t* alt_names);
+int botan_x509_cert_subject_alternative_names(botan_x509_cert_t cert,
+                                              size_t index,
+                                              botan_x509_general_name_t* alt_name);
 
 /**
-* Provides an object that allows accessing all "issuer alternative names"
-* within the respective certificate extension. Returns BOTAN_FFI_ERROR_NO_VALUE
-* if the certificate does not contain any such alternative names.
+* Provides access to all "issuer alternative names", where each entry is
+* returned as a botan_x509_general_name_t. If the given @p index is not
+* within range of the available entries, BOTAN_FFI_ERROR_OUT_OF_RANGE is
+* returned. If @p cert does not contain an IssuerAlternativeNames extension,
+* BOTAN_FFI_ERROR_NO_VALUE is returned.
 */
 BOTAN_FFI_EXPORT(3, 11)
-int botan_x509_cert_issuer_alternative_names(botan_x509_cert_t cert, botan_x509_alt_names_t* alt_names);
-
-BOTAN_FFI_EXPORT(3, 11) int botan_x509_alternative_names_destroy(botan_x509_alt_names_t alt_names);
-
-/**
-* Provides a single alternative name of the requested type at the given index
-* or BOTAN_FFI_ERROR_OUT_OF_RANGE if the requested value does not exist.
-*
-* The types EMAIL, DNS, URI, IP4_ADDRESS may be viewed as "string", other types
-* will result in BOTAN_FFI_ERROR_NO_VALUE.
-*/
-BOTAN_FFI_EXPORT(3, 11)
-int botan_x509_alternative_names_view_str_item_at(
-   botan_x509_alt_names_t alt_names, unsigned int type, size_t index, botan_view_ctx ctx, botan_view_str_fn view);
-
-/**
-* Provides a single alternative name of the requested type at the given index
-* or BOTAN_FFI_ERROR_OUT_OF_RANGE if the requested value does not exist.
-*
-* The types DIRNAME, IP4_ADDRESS may be viewed as "binary", other types will
-* result in BOTAN_FFI_ERROR_NO_VALUE.
-*/
-BOTAN_FFI_EXPORT(3, 11)
-int botan_x509_alternative_names_view_bin_item_at(
-   botan_x509_alt_names_t alt_names, unsigned int type, size_t index, botan_view_ctx ctx, botan_view_bin_fn view);
+int botan_x509_cert_issuer_alternative_names(botan_x509_cert_t cert, size_t index, botan_x509_general_name_t* alt_name);
 
 /**
 * Check if the certificate matches the specified hostname via alternative name or CN match.
