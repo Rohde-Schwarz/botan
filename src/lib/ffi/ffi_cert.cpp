@@ -30,7 +30,6 @@ using namespace Botan_FFI;
 
 BOTAN_FFI_DECLARE_STRUCT(botan_x509_cert_struct, Botan::X509_Certificate, 0x8F628937);
 BOTAN_FFI_DECLARE_STRUCT(botan_x509_general_name_struct, Botan::GeneralName, 0x563654FD);
-BOTAN_FFI_DECLARE_STRUCT(botan_x509_alt_names_struct, Botan::AlternativeName, 0xBD9144C5);
 
 #endif
 
@@ -246,7 +245,7 @@ int botan_x509_cert_is_ca(botan_x509_cert_t cert) {
 }
 
 int botan_x509_cert_get_path_length_constraint(botan_x509_cert_t cert, size_t* path_limit) {
-   if(path_limit == nullptr) {
+   if(Botan::any_null_pointers(path_limit)) {
       return BOTAN_FFI_ERROR_NULL_POINTER;
    }
 
@@ -671,7 +670,7 @@ int botan_x509_cert_subject_alternative_names(botan_x509_cert_t cert,
       return BOTAN_FFI_ERROR_OUT_OF_RANGE;
    });
 #else
-   BOTAN_UNUSED(cert, alt_names);
+   BOTAN_UNUSED(cert, index, alt_name);
    return BOTAN_FFI_ERROR_NOT_IMPLEMENTED;
 #endif
 }
@@ -696,7 +695,7 @@ int botan_x509_cert_issuer_alternative_names(botan_x509_cert_t cert,
       return BOTAN_FFI_ERROR_OUT_OF_RANGE;
    });
 #else
-   BOTAN_UNUSED(cert, alt_names);
+   BOTAN_UNUSED(cert, index, alt_name);
    return BOTAN_FFI_ERROR_NOT_IMPLEMENTED;
 #endif
 }
