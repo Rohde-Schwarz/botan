@@ -2,6 +2,7 @@
 * FFI (C89 API)
 * (C) 2015,2017 Jack Lloyd
 * (C) 2021 René Fischer
+* (C) 2026 Amos Treiber, René Meusel - Rohde & Schwarz Cybersecurity
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -69,7 +70,7 @@ API follows a few simple rules:
 * that declaration is not visible here since this header is intentionally
 * free-standing, depending only on a few C standard library headers.
 */
-#define BOTAN_FFI_API_VERSION 20250829
+#define BOTAN_FFI_API_VERSION 20260203
 
 /**
 * BOTAN_FFI_EXPORT indicates public FFI functions.
