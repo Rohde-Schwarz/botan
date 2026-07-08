@@ -64,6 +64,11 @@ enum class Record_Type : uint8_t {
    Heartbeat = 24,  // RFC 6520
 };
 
+enum class TLS_Flavor : bool {
+   TLS,
+   DTLS,
+};
+
 enum class Handshake_Type : uint8_t {
    HelloRequest = 0,
    ClientHello = 1,
