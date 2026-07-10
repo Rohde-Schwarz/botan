@@ -61,7 +61,7 @@ enum class Record_Type : uint8_t {
    Handshake = 22,
    ApplicationData = 23,
 
-   Heartbeat = 24,  // RFC 6520 (TLS 1.3)
+   Heartbeat = 24,  // RFC 6520
 };
 
 enum class Handshake_Type : uint8_t {
