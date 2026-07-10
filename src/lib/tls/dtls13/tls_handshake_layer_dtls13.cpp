@@ -1,0 +1,337 @@
+/*
+* TLS handshake layer implementation for DTLS 1.3
+* (C) 2026 Jack Lloyd
+*     2026 Amos Treiber, René Meusel - Rohde & Schwarz Cybersecurity GmbH
+*
+* Botan is released under the Simplified BSD License (see license.txt)
+*/
+
+#include <botan/internal/tls_handshake_layer_dtls13.h>
+
+#include <botan/tls_alert.h>
+#include <botan/tls_exceptn.h>
+#include <botan/tls_policy.h>
+#include <botan/internal/bit_ops.h>
+#include <botan/internal/buffer_slicer.h>
+#include <botan/internal/buffer_stuffer.h>
+#include <botan/internal/concat_util.h>
+#include <botan/internal/fmt.h>
+#include <botan/internal/loadstor.h>
+#include <botan/internal/stl_util.h>
+#include <botan/internal/tls_transcript_hash_13.h>
+
+namespace Botan::TLS {
+
+namespace {
+
+uint32_t load_be24(std::span<const uint8_t, 3> bytes) {
+   return make_uint32(0, bytes[0], bytes[1], bytes[2]);
+}
+
+std::array<uint8_t, 3> store_be24(uint32_t value) {
+   BOTAN_ASSERT_NOMSG(value <= 0xFFFFFF);
+   const auto be = store_be(value);
+   std::array<uint8_t, 3> result{};
+   copy_mem(result, std::span{be}.last<3>());
+   return result;
+}
+
+struct PreparedHeader {
+      std::array<uint8_t, 4> tls_header_bytes = {};
+      std::array<uint8_t, 8> dtls_header_bytes = {};
+};
+
+struct DTLS_Handshake_Header {
+      // NOLINTBEGIN(*-non-private-member-variables-in-classes)
+
+      Handshake_Type msg_type;
+      uint32_t message_length;
+      uint16_t message_sequence_number;
+      uint32_t fragment_offset;
+      uint32_t fragment_length;
+
+      // NOLINTEND(*-non-private-member-variables-in-classes)
+
+      static DTLS_Handshake_Header parse(std::span<const uint8_t, DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH> bytes) {
+         return {
+            .msg_type = static_cast<Handshake_Type>(bytes[0]),
+            .message_length = load_be24(bytes.subspan<1, 3>()),
+            .message_sequence_number = load_be<uint16_t>(bytes.subspan<4, 2>()),
+            .fragment_offset = load_be24(bytes.subspan<6, 3>()),
+            .fragment_length = load_be24(bytes.subspan<9, 3>()),
+         };
+      }
+
+      std::array<uint8_t, DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH> serialize() const {
+         return concat(store_be(to_underlying(msg_type)),
+                       store_be24(message_length),
+                       store_be(message_sequence_number),
+                       store_be24(fragment_offset),
+                       store_be24(fragment_length));
+      }
+
+      HandshakeProtocolHeader serialize_tls_header_portion() const {
+         return TLS_Handshake_Layer::prepare_header(msg_type, message_length);
+      }
+};
+
+}  // namespace
+
+Handshake_Layer::CopyDataResult DTLS_Handshake_Layer::copy_data(const Policy& policy,
+                                                                const Handshake_Record& data_from_peer) {
+   BOTAN_ARG_CHECK(data_from_peer.epoch.has_value(), "Epoch number must be provided for DTLS handshake messages");
+
+   bool consumed_something = false;
+   bool skipped_fragment = false;
+   bool detected_duplicate = false;
+
+   BufferSlicer bs(data_from_peer.payload);
+   while(!bs.empty()) {
+      if(bs.remaining() < FRAGMENT_HEADER_LENGTH) {
+         throw TLS_Exception(AlertType::DecodeError, "Bad lengths in DTLS header");
+      }
+
+      const auto header = DTLS_Handshake_Header::parse(bs.take<FRAGMENT_HEADER_LENGTH>());
+
+      if(policy.maximum_handshake_message_size() > 0 &&
+         header.message_length > policy.maximum_handshake_message_size()) {
+         throw TLS_Exception(Alert::DecodeError, "msg_len exceeds maximum handshake message size");
+      }
+
+      if(header.fragment_offset + header.fragment_length > header.message_length) {
+         throw TLS_Exception(Alert::IllegalParameter, "Invalid DTLS handshake fragment received");
+      }
+
+      if(bs.remaining() < header.fragment_length) {
+         throw TLS_Exception(AlertType::DecodeError, "Truncated DTLS handshake fragment received");
+      }
+
+      // RFC 9147 Section 5.2
+      //   If the sequence number is less than next_receive_seq, the message
+      //   MUST be discarded.
+      //
+      // This is a retransmission of a message we have already consumed. The
+      // fragment counts as processed (recognized as a duplicate), so it does
+      // not prevent the containing record from being acknowledged.
+      if(header.message_sequence_number < m_read_message_seq) {
+         bs.skip(header.fragment_length);
+         detected_duplicate = true;
+         continue;
+      }
+
+      // RFC 9147 Section 5.2
+      //   If the sequence number is greater than next_receive_seq, the
+      //   implementation SHOULD queue the message but MAY discard it.
+      //
+      // We queue fragments only within a certain window and discard anything
+      // further in the future. Such fragments cannot be part of the flight we
+      // are currently waiting for.
+      //
+      // Discarded fragments were neither processed nor buffered, hence the
+      // containing record must not be acknowledged (RFC 9147 Section 7).
+      if(static_cast<uint32_t>(header.message_sequence_number) - m_read_message_seq > MAX_BUFFERED_FUTURE_MESSAGES) {
+         bs.skip(header.fragment_length);
+         skipped_fragment = true;
+         continue;
+      }
+
+      // TODO: iterative allocation of the reassembled message to avoid DoS attacks with large messages
+      // TODO: It could make sense to commit fragments only once the entire `bytes` buffer was
+      //       processed successfully. It might be surprising that datagrams are processed
+      //       partially. E.g., in the record layer we're using this approach as well.
+      auto [itr, _] = m_current_read_message.try_emplace(
+         header.message_sequence_number,
+         ReassembledMessage{
+            // TODO: Parse the header already now and error-out if the header
+            //       appears bogus. Note: There's also a commented-out test
+            //       for that in test_tls_dtls13_handshake_layer.cpp, called
+            //       "parse ClientHello detects incoming garbage data with invalid message type".
+            .epoch = *data_from_peer.epoch,
+            .header = header.serialize_tls_header_portion(),
+            .payload = DTLSPayload(header.message_length),
+            .received_bytes = bitvector(header.message_length),
+            .complete = false,
+         });
+      auto& reassembled = itr->second;
+
+      if(reassembled.epoch != data_from_peer.epoch) {
+         throw TLS_Exception(Alert::IllegalParameter,
+                             "Detected DTLS handshake message fragments spanning multiple epochs");
+      }
+
+      if(reassembled.payload.size() != header.message_length ||
+         reassembled.received_bytes.size() != header.message_length ||
+         header.serialize_tls_header_portion() != reassembled.header) {
+         throw TLS_Exception(Alert::IllegalParameter, "Inconsistent values in fragmented DTLS handshake header");
+      }
+
+      // RFC 9147 5.5
+      //    DTLS implementations MUST be able to handle overlapping fragment
+      //    ranges. This allows senders to retransmit handshake messages with
+      //    smaller fragment sizes if the PMTU estimate changes. Senders MUST
+      //    NOT change handshake message bytes upon retransmission. Receivers
+      //    MAY check that retransmitted bytes are identical and SHOULD abort
+      //    the handshake with an "illegal_parameter" alert if the value of a
+      //    byte changes
+      //
+      // We choose to not check that retransmitted bytes are identical to
+      // simplify the implementation. Possible bogus bytes will be recognized
+      // in the transcript hash check.
+
+      // Advance bs and copy the fragment into the reassembled message
+      copy_mem(std::span(reassembled.payload).subspan(header.fragment_offset, header.fragment_length),
+               bs.take(header.fragment_length));
+
+      reassembled.received_bytes.set_range(header.fragment_offset, header.fragment_length);
+      if(reassembled.received_bytes.all_vartime()) {
+         reassembled.complete = true;
+      }
+
+      consumed_something = true;
+   }
+
+   BOTAN_ASSERT_NOMSG(bs.empty());
+
+   // If we skipped a fragment without processing it, the entire record must not
+   // be acknowledged, even if we processed other fragments of the same record.
+   if(skipped_fragment) {
+      if(consumed_something) {
+         return CopyDataResult::ConsumedPartially;
+      } else {
+         return CopyDataResult::Discarded;
+      }
+   }
+
+   // If no fragment was skipped, and at least one fragment was considered new
+   // we can acknowledge the record.
+   if(consumed_something) {
+      return CopyDataResult::Consumed;
+   }
+
+   // If no fragments were skipped, and nothing was consumed either, then we
+   // rejected all contained fragments as duplicates. Such a record may be
+   // re-acknowledged.
+   BOTAN_ASSERT_NOMSG(detected_duplicate);
+   return CopyDataResult::DiscardedDuplicate;
+}
+
+std::optional<Handshake_Message_13> DTLS_Handshake_Layer::next_message(const Policy& policy,
+                                                                       Transcript_Hash_State& transcript_hash) {
+   auto message = m_current_read_message.find(m_read_message_seq);
+   if(message == m_current_read_message.end()) {
+      return std::nullopt;
+   }
+
+   auto& reassembled = message->second;
+   if(!reassembled.complete) {
+      return std::nullopt;
+   }
+
+   auto msg = parse_handshake_message(read_handshake_message_type(reassembled.header[0]), reassembled.payload, policy);
+
+   // Update the transcript hash and remove the reassembled message from the map in case of successful parsing
+   transcript_hash.update(reassembled.header, reassembled.payload);
+   m_current_read_message.erase(m_read_message_seq++);
+
+   return msg;
+}
+
+std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handshake_message(const Policy& policy) {
+   BOTAN_UNUSED(policy);
+
+   auto message = m_current_read_message.find(static_cast<uint16_t>(m_read_message_seq));
+   if(message == m_current_read_message.end()) {
+      return std::nullopt;
+   }
+
+   auto& reassembled = message->second;
+   if(!reassembled.complete) {
+      return std::nullopt;
+   }
+
+   if(reassembled.epoch != m_current_epoch) {
+      throw TLS_Exception(AlertType::UnexpectedMessage, "Post-handshake message received in unexpected epoch");
+   }
+
+   const auto msg_type = read_handshake_message_type(reassembled.header[0]);
+   auto msg = parse_post_handshake_message(msg_type, reassembled.payload);
+
+   m_current_read_message.erase(static_cast<uint16_t>(m_read_message_seq++));
+
+   if(msg_type == Handshake_Type::KeyUpdate) {
+      // RFC 9147 8.
+      //    With a 128-bit key as in AES-128, rekeying 2^64 times has a high
+      //    probability of key reuse within a given connection. [...] sending
+      //    implementations MUST NOT allow the epoch to exceed 2^48-1.
+      //
+      // RFC 9147 8. (Errata-ID 8050)
+      //    After the handshake, each epoch change consumes a message_seq value,
+      //    which is limited to 2^16-1. [...] In this case, the implementation
+      //    MUST check for this limit, if reached, terminate the association.
+      //
+      // Thus, we won't ever be able to wrap the key anywhere near the 2^48
+      // limit due to the technical limitations of the message sequence number.
+      if(to_underlying(m_current_epoch) == std::numeric_limits<uint16_t>::max()) {
+         throw TLS_Exception(AlertType::UnexpectedMessage, "DTLS handshake message sequence number exhausted");
+      }
+
+      m_current_epoch = static_cast<Epoch_Number>(to_underlying(m_current_epoch) + 1);
+   }
+
+   return msg;
+}
+
+std::vector<MarshalledHandshakeMessageFragment> DTLS_Handshake_Layer::fragment_message(
+   Handshake_Type type,
+   StrongSpan<const SerializedHandshakeMessage> msg_bytes,
+   uint16_t max_fragment_size,
+   std::optional<uint16_t> first_fragment_max_size) {
+   BOTAN_ARG_CHECK(max_fragment_size > DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH,
+                   "DTLS max fragment size must be larger than header length");
+   if(first_fragment_max_size.has_value()) {
+      BOTAN_ARG_CHECK(first_fragment_max_size > DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH,
+                      "DTLS first fragment max size must be larger than header length");
+      BOTAN_ARG_CHECK(first_fragment_max_size <= max_fragment_size,
+                      "DTLS first fragment max size must not exceed the general max fragment size");
+   }
+
+   const uint16_t message_seq = m_send_message_seq++;
+
+   std::vector<MarshalledHandshakeMessageFragment> fragments;
+
+   BufferSlicer bs(msg_bytes);
+   size_t max_bytes_per_fragment =
+      first_fragment_max_size.value_or(max_fragment_size) - DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH;
+   while(!bs.empty()) {
+      const auto bytes_in_this_fragment = std::min(bs.remaining(), max_bytes_per_fragment);
+      const auto header = DTLS_Handshake_Header{
+         .msg_type = type,
+         .message_length = static_cast<uint32_t>(msg_bytes.size()),
+         .message_sequence_number = message_seq,
+         .fragment_offset = static_cast<uint32_t>(msg_bytes.size() - bs.remaining()),
+         .fragment_length = static_cast<uint32_t>(bytes_in_this_fragment),
+      };
+      fragments.push_back(
+         concat<MarshalledHandshakeMessageFragment>(header.serialize(), bs.take(bytes_in_this_fragment)));
+
+      // All fragments after the first may use the full fragment size budget.
+      max_bytes_per_fragment = max_fragment_size - DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH;
+   }
+   BOTAN_ASSERT_NOMSG(!fragments.empty());
+   return fragments;
+}
+
+Handshake_Message_13 DTLS_Handshake_Layer::parse_handshake_message(Handshake_Type type,
+                                                                   std::span<const uint8_t> msg,
+                                                                   const Policy& policy) const {
+   switch(type) {
+      case Handshake_Type::HelloVerifyRequest:
+         // DTLS 1.2 cookie exchange; triggers a client-side downgrade when
+         // DTLS 1.2 is allowed. Acceptance is enforced by Client_Impl_13.
+         return Hello_Verify_Request(msg);
+      default:
+         return Handshake_Layer::parse_handshake_message(type, msg, policy);
+   }
+}
+
+}  // namespace Botan::TLS

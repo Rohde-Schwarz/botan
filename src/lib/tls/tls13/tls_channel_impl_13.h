@@ -3,6 +3,7 @@
 * (C) 2022 Jack Lloyd
 *     2021 Elektrobit Automotive GmbH
 *     2022 Hannes Rantzsch, René Meusel - neXenio GmbH
+*     2026 Amos Treiber, René Meusel - Rohde & Schwarz Networks and Cybersecurity GmbH
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -10,18 +11,16 @@
 #ifndef BOTAN_TLS_CHANNEL_IMPL_13_H_
 #define BOTAN_TLS_CHANNEL_IMPL_13_H_
 
-#include <botan/tls_messages_13.h>
-#include <botan/internal/stl_util.h>
 #include <botan/internal/tls_channel_impl.h>
 #include <botan/internal/tls_connection_state_13.h>
-#include <botan/internal/tls_handshake_layer_13.h>
-#include <botan/internal/tls_record_layer_13.h>
-#include <botan/internal/tls_transcript_hash_13.h>
-#include <botan/internal/tls_types_13.h>
+#include <botan/internal/tls_flight_13.h>
+#include <botan/internal/tls_record_13.h>
 
 namespace Botan::TLS {
 
 class Cipher_State;
+class Transcript_Hash_State;
+class Channel_IO;
 
 /**
 * Generic interface for TLS 1.3 endpoint
@@ -29,74 +28,7 @@ class Cipher_State;
 class Channel_Impl_13 : public Channel_Impl {
    protected:
       /**
-       * Helper class to coalesce handshake messages into a single TLS record
-       * of type 'Handshake'. This is used entirely internally in the Channel,
-       * Client and Server implementations.
-       *
-       * Note that implementations should use the derived classes that either
-       * aggregate conventional Handshake messages or Post-Handshake messages.
-       */
-      class AggregatedMessages {
-         public:
-            AggregatedMessages(Channel_Impl_13& channel, Handshake_Layer& handshake_layer);
-
-            AggregatedMessages(const AggregatedMessages&) = delete;
-            AggregatedMessages& operator=(const AggregatedMessages&) = delete;
-            AggregatedMessages(AggregatedMessages&&) = delete;
-            AggregatedMessages& operator=(AggregatedMessages&&) = delete;
-
-            ~AggregatedMessages() = default;
-
-            /**
-             * Send the messages aggregated in the message buffer.
-             */
-            void send() const;
-
-            bool contains_messages() const { return !m_message_buffer.empty(); }
-
-         protected:
-            std::vector<uint8_t> m_message_buffer;  // NOLINT(*non-private-member-variable*)
-
-            Channel_Impl_13& m_channel;          // NOLINT(*non-private-member-variable*)
-            Handshake_Layer& m_handshake_layer;  // NOLINT(*non-private-member-variable*)
-      };
-
-      /**
-       * Aggregate conventional handshake messages. This will update the given
-       * Transcript_Hash_State accordingly as individual messages are added to
-       * the aggregation.
-       */
-      class AggregatedHandshakeMessages : public AggregatedMessages {
-         public:
-            AggregatedHandshakeMessages(Channel_Impl_13& channel,
-                                        Handshake_Layer& handshake_layer,
-                                        Transcript_Hash_State& transcript_hash);
-
-            /**
-             * Adds a single handshake message to the send buffer. Note that this
-             * updates the handshake transcript hash regardless of sending the
-             * message.
-             */
-            AggregatedHandshakeMessages& add(Handshake_Message_13_Ref message);
-
-         private:
-            Transcript_Hash_State& m_transcript_hash;
-      };
-
-      /**
-       * Aggregate post-handshake messages. In contrast to ordinary handshake
-       * messages this does not maintain a Transcript_Hash_State.
-       */
-      class AggregatedPostHandshakeMessages : public AggregatedMessages {
-         public:
-            using AggregatedMessages::AggregatedMessages;
-
-            AggregatedPostHandshakeMessages& add(Post_Handshake_Message_13 message);
-      };
-
-   public:
-      /**
-      * Set up a new TLS 1.3 session
+      * Set up a new (D)TLS 1.3 session
       *
       * @param callbacks contains a set of callback function references
       *        required by the TLS endpoint.
@@ -104,15 +36,18 @@ class Channel_Impl_13 : public Channel_Impl {
       * @param credentials_manager manages application/user credentials
       * @param rng a random number generator
       * @param policy specifies other connection policy information
-      * @param is_server whether this is a server session or not
+      * @param connection_side whether this is a client or server session
+      * @param flavor whether TLS1.3 or DTLS1.3 is used
       */
       explicit Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
                                const std::shared_ptr<Session_Manager>& session_manager,
                                const std::shared_ptr<Credentials_Manager>& credentials_manager,
                                const std::shared_ptr<RandomNumberGenerator>& rng,
                                const std::shared_ptr<const Policy>& policy,
-                               bool is_server);
+                               Connection_Side connection_side,
+                               TLS_Flavor flavor);
 
+   public:
       Channel_Impl_13(const Channel_Impl_13& other) = delete;
       Channel_Impl_13(Channel_Impl_13&& other) = delete;
       Channel_Impl_13& operator=(const Channel_Impl_13& other) = delete;
@@ -183,64 +118,41 @@ class Channel_Impl_13 : public Channel_Impl {
       }
 
       /**
-      * Perform a handshake timeout check. This does nothing unless
-      * this is a DTLS channel with a pending handshake state, in
-      * which case we check for timeout and potentially retransmit
-      * handshake packets.
-      *
-      * In the TLS 1.3 implementation, this always returns false.
+      * Perform a handshake timeout check that the user can call. This is no
+      * longer relevant for DTLS 1.3.
+      * @throws for DTLS 1.3, since the callback mechanism
+      *         tls_register_deferred_operation() shall be used insead of
+      *         timeout_check.
+      * @returns false for TLS 1.3
       */
-      bool timeout_check() override { return false; }
+      bool timeout_check() override;
+
+      /**
+      * Tells the user when to call Channel::timeout_check() next. This is no
+      * longer relevant for DTLS 1.3.
+      * @throws for DTLS 1.3, since the callback mechanism
+      *         tls_register_deferred_operation() shall be used insead of
+      *         timeout_check.
+      * @returns std::nullopt for TLS 1.3
+      */
+      std::optional<std::chrono::milliseconds> next_retransmission_timeout() const override;
+
+      const Cipher_State* cipher_state() const { return m_cipher_state.get(); }
+
+      Cipher_State* cipher_state() { return m_cipher_state.get(); }
 
    protected:
+      Cipher_State& setup_cipher_state(std::unique_ptr<Cipher_State> cipher_state);
+
       virtual void process_handshake_msg(Handshake_Message_13 msg) = 0;
       virtual void process_post_handshake_msg(Post_Handshake_Message_13 msg) = 0;
       virtual void process_dummy_change_cipher_spec() = 0;
 
-      enum class Compat_Mode_Situation : uint8_t {
-         BeforeSendingAlert,
-         AfterSendingFirstClientHello,
-         BeforeSendingSecondClientHello,
-         BeforeSendingEncryptedClientFlight,
-         AfterSendingFirstServerHello,
-         AfterSendingHelloRetryRequest,
-      };
-
-      virtual void maybe_handle_compatibility_mode(Compat_Mode_Situation situation) = 0;
+      virtual bool compat_mode_ccs_requested() const = 0;
+      virtual bool compat_mode_ccs_needed_before_alert() const = 0;
       virtual void maybe_log_secret(std::string_view label, std::span<const uint8_t> secret) const = 0;
 
       void handle(const Key_Update& key_update);
-
-      /**
-       * Schedule a traffic key update to opportunistically happen before the
-       * channel sends application data the next time. Such a key update will
-       * never request a reciprocal key update from the peer.
-       */
-      void opportunistically_update_traffic_keys() { m_opportunistic_key_update = true; }
-
-      template <typename... MsgTs>
-      void send_handshake_message(const std::variant<MsgTs...>& message) {
-         aggregate_handshake_messages().add(generalize_to<Handshake_Message_13_Ref>(message)).send();
-      }
-
-      template <typename MsgT>
-      void send_handshake_message(std::reference_wrapper<MsgT> message) {
-         send_handshake_message(generalize_to<Handshake_Message_13_Ref>(message));
-      }
-
-      void send_post_handshake_message(Post_Handshake_Message_13 message) {
-         aggregate_post_handshake_messages().add(std::move(message)).send();
-      }
-
-      void send_dummy_change_cipher_spec();
-
-      AggregatedHandshakeMessages aggregate_handshake_messages() {
-         return AggregatedHandshakeMessages(*this, m_handshake_layer, m_transcript_hash);
-      }
-
-      AggregatedPostHandshakeMessages aggregate_post_handshake_messages() {
-         return AggregatedPostHandshakeMessages(*this, m_handshake_layer);
-      }
 
       Callbacks& callbacks() const { return *m_callbacks; }
 
@@ -254,10 +166,16 @@ class Channel_Impl_13 : public Channel_Impl {
 
       SecretLoggerFn secret_logger() const;
 
-   private:
-      void send_record(Record_Type record_type, const std::vector<uint8_t>& record);
+      bool is_datagram() const { return m_flavor == TLS_Flavor::DTLS; }
 
-      void process_alert(const secure_vector<uint8_t>& record);
+      void send_flight(std::vector<Flight::Message> flight);
+
+   private:
+      std::optional<BytesNeeded> process(Handshake_Message_13 handshake_msg);
+      void process(Post_Handshake_Message_13 post_handshake_msg);
+      void process(const Alert_Record& alert_record);
+      void process(const ChangeCipherSpec_Record& ccs_record);
+      void process(const ApplicationData_Record& app_data_record);
 
       /**
        * Terminate the connection (on sending or receiving an error alert) and
@@ -266,11 +184,6 @@ class Channel_Impl_13 : public Channel_Impl {
       void shutdown();
 
    protected:
-      const Connection_Side m_side;                              // NOLINT(*non-private-member-variable*)
-      Transcript_Hash_State m_transcript_hash;                   // NOLINT(*non-private-member-variable*)
-      std::unique_ptr<Cipher_State> m_cipher_state;              // NOLINT(*non-private-member-variable*)
-      std::optional<Active_Connection_State_13> m_active_state;  // NOLINT(*non-private-member-variable*)
-
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
       /**
        * Indicate that we have to expect a downgrade to TLS 1.2. In which case the current
@@ -302,6 +215,18 @@ class Channel_Impl_13 : public Channel_Impl {
        */
       void set_selected_certificate_type(Certificate_Type cert_type);
 
+   protected:
+      /* basic channel informatio */
+      const Connection_Side m_side;  // NOLINT(*non-private-member-variable*)
+      TLS_Flavor m_flavor;           // NOLINT(*-non-private-member-*)
+
+      /* handshake state */
+      std::unique_ptr<Transcript_Hash_State> m_transcript_hash;  // NOLINT(*non-private-member-variable*)
+      std::optional<Active_Connection_State_13> m_active_state;  // NOLINT(*non-private-member-variable*)
+
+      /* I/O handling */
+      std::shared_ptr<Channel_IO> m_channel_io;  // NOLINT(*-non-private-member-*)
+
    private:
       /* callbacks */
       std::shared_ptr<Callbacks> m_callbacks;
@@ -311,27 +236,12 @@ class Channel_Impl_13 : public Channel_Impl {
       std::shared_ptr<Credentials_Manager> m_credentials_manager;
       std::shared_ptr<RandomNumberGenerator> m_rng;
       std::shared_ptr<const Policy> m_policy;
-
-      /* handshake state */
-      Record_Layer m_record_layer;
-      Handshake_Layer m_handshake_layer;
+      std::shared_ptr<Cipher_State> m_cipher_state;
 
       bool m_can_read;
       bool m_can_write;
-
-      bool m_opportunistic_key_update;
-
-      /**
-       * True while a KeyUpdate with "update_requested" is outstanding, i.e.
-       * the peer has not yet replied with a KeyUpdate of its own.
-       */
-      bool m_key_update_requested;
-
-      bool m_first_message_sent;
-      bool m_first_message_received;
-
-      uint64_t m_last_key_update_ms = 0;
 };
+
 }  // namespace Botan::TLS
 
 #endif
