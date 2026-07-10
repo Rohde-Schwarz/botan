@@ -106,6 +106,7 @@
 #include <botan/internal/hmac.h>
 #include <botan/internal/int_utils.h>
 #include <botan/internal/loadstor.h>
+#include <botan/internal/mem_utils.h>
 #include <botan/internal/tls_channel_impl_13.h>
 
 namespace Botan::TLS {
@@ -734,28 +735,17 @@ secure_vector<uint8_t> Cipher_State::hkdf_expand_label(const secure_vector<uint8
                                                        std::string_view label,
                                                        const std::vector<uint8_t>& context,
                                                        const size_t length) const {
-   // assemble (serialized) HkdfLabel
-   secure_vector<uint8_t> hkdf_label;
-   hkdf_label.reserve(2 /* length */ + (label.size() + 6 /* 'tls13 ' */ + 1 /* length field*/) +
-                      (context.size() + 1 /* length field*/));
-
-   // length
    BOTAN_ARG_CHECK(length <= std::numeric_limits<uint16_t>::max(), "invalid length");
-   const auto len = static_cast<uint16_t>(length);
-   hkdf_label.push_back(get_byte<0>(len));
-   hkdf_label.push_back(get_byte<1>(len));
-
-   // label
-   const std::string prefix = "tls13 ";
-   BOTAN_ARG_CHECK(prefix.size() + label.size() <= 255, "label too large");
-   hkdf_label.push_back(static_cast<uint8_t>(prefix.size() + label.size()));
-   hkdf_label.insert(hkdf_label.end(), prefix.cbegin(), prefix.cend());
-   hkdf_label.insert(hkdf_label.end(), label.cbegin(), label.cend());
-
-   // context
    BOTAN_ARG_CHECK(context.size() <= 255, "context too large");
-   hkdf_label.push_back(static_cast<uint8_t>(context.size()));
-   hkdf_label.insert(hkdf_label.end(), context.cbegin(), context.cend());
+
+   constexpr std::string_view prefix = "tls13 ";
+
+   const auto hkdf_label = concat<secure_vector<uint8_t>>(store_be(static_cast<uint16_t>(length)),
+                                                          store_be(static_cast<uint8_t>(prefix.size() + label.size())),
+                                                          as_span_of_bytes(prefix),
+                                                          as_span_of_bytes(label),
+                                                          store_be(static_cast<uint8_t>(context.size())),
+                                                          context);
 
    // HKDF-Expand
    return m_expand->derive_key(
