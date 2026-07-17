@@ -88,7 +88,21 @@ Protocol_Version Server_Hello_Internal::version() const {
    //
    // Note: Here we just take a message parsing decision, further validation of
    //       the extension's contents is done later.
-   return (extensions().has<Supported_Versions>()) ? Protocol_Version::TLS_V13 : m_legacy_version;
+   if(const auto* sv = extensions().get<Supported_Versions>()) {
+      const auto versions = sv->versions();
+      BOTAN_ASSERT_NOMSG(versions.size() == 1);
+      const auto v = versions.front();  // May be DTLS_V13 or TLS_V13
+      if(!v.is_tls_13_or_later()) {
+         // RFC 8446 4.2.1
+         //   If the "supported_versions" extension in the ServerHello contains
+         //   a version [...] prior to TLS 1.3, the client MUST abort the
+         //   handshake with an "illegal_parameter" alert.
+         throw TLS_Exception(Alert::IllegalParameter, "supported_versions extension contains pre-TLS13 version");
+      }
+      return v;
+   }
+
+   return m_legacy_version;
 }
 
 Server_Hello::Server_Hello(std::unique_ptr<Server_Hello_Internal> data) : m_data(std::move(data)) {}

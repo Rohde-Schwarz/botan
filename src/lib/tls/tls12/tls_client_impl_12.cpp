@@ -13,6 +13,7 @@
 #include <botan/tls_callbacks.h>
 #include <botan/tls_messages_12.h>
 #include <botan/tls_policy.h>
+#include <botan/internal/loadstor.h>
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_handshake_state.h>
 #include <algorithm>
@@ -130,16 +131,46 @@ std::shared_ptr<Client_Impl_12> Client_Impl_12::create_for_downgrade(
    Channel_Impl::Downgrade_Information& downgrade_info) {
    auto self = std::make_shared<Client_Impl_12>(Private{}, downgrade_info);
 
-   Handshake_State& state = self->create_handshake_state(Protocol_Version::TLS_V12);
+   const auto version =
+      (downgrade_info.flavor == TLS_Flavor::DTLS) ? Protocol_Version::DTLS_V12 : Protocol_Version::TLS_V12;
 
    if(downgrade_info.client_hello.has_value()) {
-      // Downgrade detected after receiving a TLS 1.2 server hello. We need to
-      // recreate the state as if this implementation issued the client hello.
+      // Downgrade detected after receiving a (D)TLS 1.2 server hello. We need
+      // to recreate the state as if this implementation issued the client
+      // hello.
+
+      // For DTLS we have to initialize the record sequence numbers as
+      // transferred from the TLS 1.3 implementation.
+      BOTAN_ASSERT_IMPLICATION(downgrade_info.flavor == TLS_Flavor::DTLS,
+                               downgrade_info.epoch0_sequence_numbers.has_value(),
+                               "downgrading DTLS requires transferring the record sequence numbers");
+
+      // TODO(C++23): Use std::optional::and_then() instead
+      auto seqno_read = [](const std::optional<Epoch0_SequenceNumbers>& seq) -> std::optional<uint64_t> {
+         if(seq.has_value()) {
+            return seq->read;
+         }
+         return std::nullopt;
+      };
+      auto seqno_write = [](const std::optional<Epoch0_SequenceNumbers>& seq) -> std::optional<uint64_t> {
+         if(seq.has_value()) {
+            return seq->write;
+         }
+         return std::nullopt;
+      };
+
+      auto& state = self->create_handshake_state(version,
+                                                 false /* no epoch0 restart */,
+                                                 seqno_read(downgrade_info.epoch0_sequence_numbers),
+                                                 seqno_write(downgrade_info.epoch0_sequence_numbers));
 
       state.client_hello(std::make_unique<Client_Hello_12>(
          std::exchange(downgrade_info.client_hello, {}).value(), state.handshake_io(), state.hash()));
 
       self->secure_renegotiation_check(state.client_hello());
+      if(downgrade_info.flavor == TLS_Flavor::DTLS) {
+         state.set_expected_next(Handshake_Type::HelloVerifyRequest);  // optional
+      }
       state.set_expected_next(Handshake_Type::ServerHello);
 
       // The downgraded DTLS 1.3 session might have armed a retransmission timer
@@ -147,10 +178,17 @@ std::shared_ptr<Client_Impl_12> Client_Impl_12::create_for_downgrade(
       // but it will notice that the DTLS 1.3 state is gone and act as no-op.
       self->maybe_arm_dtls_retransmission_timer();
    } else {
-      // Downgrade initiated after a TLS 1.2 session was found. No communication
+      // Downgrade initiated after a (D)TLS 1.2 session was found. No communication
       // has happened yet but the found session should be used for resumption.
       BOTAN_ASSERT_NOMSG(downgrade_info.tls12_session.has_value() &&
                          downgrade_info.tls12_session->session.version().is_pre_tls_13());
+      BOTAN_ASSERT_NOMSG(downgrade_info.tls12_session->session.version().is_datagram_protocol() ==
+                         (downgrade_info.flavor == TLS_Flavor::DTLS));
+
+      // When resuming based on an existing session, the (D)TLS 1.3
+      // implementation won't have emitted any data prior to the downgrade.
+      // Therefore, we can start with default sequence numbers.
+      auto& state = self->create_handshake_state(version);
       self->send_client_hello(state,
                               false,
                               downgrade_info.tls12_session->session.version(),
