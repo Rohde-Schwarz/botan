@@ -13,6 +13,7 @@
 #include <botan/secmem.h>
 #include <botan/tls_magic.h>
 #include <botan/tls_version.h>
+#include <botan/internal/tls_types_13.h>
 #include <optional>
 
 namespace Botan::TLS {
@@ -25,6 +26,18 @@ struct Record_Content final {
       Record_Type type;
       std::optional<uint64_t> sequence_number;
       secure_vector<uint8_t> payload;
+
+      std::optional<Epoch_Number> epoch;  // only set for DTLS
+};
+
+/**
+ * RFC 9147 Section 4
+ */
+struct RecordNumber {
+      Epoch_Number epoch;
+      uint64_t sequence_number;
+
+      auto operator<=>(const RecordNumber&) const = default;
 };
 
 /**

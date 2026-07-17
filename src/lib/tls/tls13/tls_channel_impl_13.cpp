@@ -14,6 +14,13 @@
 #include <botan/tls_messages_13.h>
 #include <botan/tls_policy.h>
 #include <botan/internal/tls_cipher_state.h>
+#include <botan/internal/tls_transcript_hash_13.h>
+
+#if defined(BOTAN_HAS_DTLS_13)
+   #include <botan/internal/tls_dtls_channel_companion_dtls13.h>
+#else
+   #include <botan/internal/tls_dtls_channel_companion.h>
+#endif
 
 namespace {
 bool is_user_canceled_alert(const Botan::TLS::Alert& alert) {
@@ -38,15 +45,18 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
                                  const std::shared_ptr<Credentials_Manager>& credentials_manager,
                                  const std::shared_ptr<RandomNumberGenerator>& rng,
                                  const std::shared_ptr<const Policy>& policy,
-                                 bool is_server) :
-      m_side(is_server ? Connection_Side::Server : Connection_Side::Client),
+                                 Connection_Side connection_side,
+                                 TLS_Flavor flavor) :
+      m_side(connection_side),
+      m_transcript_hash(std::make_unique<Transcript_Hash_State>(flavor)),
+      m_flavor(flavor),
+      m_record_layer(Record_Layer::create(m_side, flavor, policy)),
+      m_handshake_layer(Handshake_Layer::create(m_side, flavor)),
       m_callbacks(callbacks),
       m_session_manager(session_manager),
       m_credentials_manager(credentials_manager),
       m_rng(rng),
       m_policy(policy),
-      m_record_layer(m_side, m_policy),
-      m_handshake_layer(m_side),
       m_can_read(true),
       m_can_write(true),
       m_opportunistic_key_update(false),
@@ -58,6 +68,15 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
    BOTAN_ASSERT_NONNULL(m_credentials_manager);
    BOTAN_ASSERT_NONNULL(m_rng);
    BOTAN_ASSERT_NONNULL(m_policy);
+   if(is_datagram()) {
+#if defined(BOTAN_HAS_DTLS_13)
+      m_dtls_channel_companion = std::make_unique<DTLS_Channel_Companion_DTLS>(m_policy, m_callbacks, m_record_layer);
+#else
+      throw TLS_Exception(AlertType::InternalError, "DTLS 1.3 is not supported in this build of Botan");
+#endif
+   } else {
+      m_dtls_channel_companion = std::make_unique<DTLS_Channel_Companion>();
+   }
 }
 
 Channel_Impl_13::~Channel_Impl_13() = default;
@@ -78,7 +97,7 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
       }
 #endif
 
-      m_record_layer.copy_data(data);
+      m_record_layer->copy_data(data);
 
       while(true) {
          // RFC 8446 6.1
@@ -89,7 +108,7 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
             return 0;
          }
 
-         auto result = m_record_layer.next_record(m_cipher_state.get());
+         auto result = m_record_layer->next_record(m_cipher_state.get());
 
          if(std::holds_alternative<BytesNeeded>(result)) {
             return std::get<BytesNeeded>(result);
@@ -99,15 +118,30 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
 
          // RFC 8446 5.1
          //   Handshake messages MUST NOT be interleaved with other record types.
-         if(record.type != Record_Type::Handshake && m_handshake_layer.has_pending_data()) {
+         if(record.type != Record_Type::Handshake && m_handshake_layer->has_pending_data()) {
             throw Unexpected_Message("Expected remainder of a handshake message");
          }
 
          if(record.type == Record_Type::Handshake) {
-            m_handshake_layer.copy_data(record.payload);
+            if(m_handshake_layer->copy_data(policy(), record.payload)) {
+               // RFC 9147 7.
+               //    During the handshake, ACKs only cover the current outstanding flight
+               //    (this is possible because DTLS is generally a lock-step protocol).
+               //    In particular, receiving a message from a handshake flight implicitly
+               //    acknowledges all messages from the previous flight(s).
+               //
+               // Handshake_Layer::copy_data() returns true if a handshake message fragment
+               // with a previously unprocessed sequence number was received. This indicates
+               // progress and therefore ACKs our previously sent flight.
+               //
+               // Note: This assumes that we only send our flight once we fully received
+               //       a flight from the peer. This is a hard requirement in TLS 1.3.
+               m_dtls_channel_companion->clear_resend_buffer();
+            }
 
             if(!is_handshake_complete()) {
-               while(auto handshake_msg = m_handshake_layer.next_message(policy(), m_transcript_hash)) {
+               BOTAN_ASSERT_NONNULL(m_transcript_hash);
+               while(auto handshake_msg = m_handshake_layer->next_message(policy(), *m_transcript_hash)) {
                   // RFC 8446 5.1
                   //    Handshake messages MUST NOT span key changes.  Implementations
                   //    MUST verify that all messages immediately preceding a key change
@@ -128,7 +162,7 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
                                   Server_Hello_13,
                                   Hello_Retry_Request,
                                   Finished_13>(handshake_msg.value()) &&
-                     m_handshake_layer.has_pending_data()) {
+                     m_handshake_layer->has_pending_data()) {
                      throw Unexpected_Message("Unexpected additional handshake message data found in record");
                   }
 
@@ -154,12 +188,12 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
                   // layer must be more restrictive.
                   // See RFC 8446 5.1 regarding "legacy_record_version"
                   if(!m_first_message_received) {
-                     m_record_layer.disable_receiving_compat_mode();
+                     m_record_layer->disable_receiving_compat_mode();
                      m_first_message_received = true;
                   }
                }
             } else {
-               while(auto handshake_msg = m_handshake_layer.next_post_handshake_message(policy())) {
+               while(auto handshake_msg = m_handshake_layer->next_post_handshake_message(policy())) {
                   process_post_handshake_msg(std::move(handshake_msg.value()));
                }
             }
@@ -180,6 +214,8 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
             callbacks().tls_record_received(record.sequence_number.value(), record.payload);
          } else if(record.type == Record_Type::Alert) {
             process_alert(record.payload);
+         } else if(record.type == Record_Type::ACK) {
+            process_acknowledgements(record.payload);
          } else {
             throw Unexpected_Message("Unexpected record type " + std::to_string(static_cast<size_t>(record.type)) +
                                      " from counterparty");
@@ -205,7 +241,7 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
 
 void Channel_Impl_13::handle(const Key_Update& key_update) {
    // make sure Key_Update appears only at the end of a record; see description above
-   if(m_handshake_layer.has_pending_data()) {
+   if(m_handshake_layer->has_pending_data()) {
       throw Unexpected_Message("Unexpected additional post-handshake message data found in record");
    }
 
@@ -261,20 +297,53 @@ Channel_Impl_13::AggregatedHandshakeMessages::AggregatedHandshakeMessages(Channe
 Channel_Impl_13::AggregatedHandshakeMessages& Channel_Impl_13::AggregatedHandshakeMessages::add(
    const Handshake_Message_13_Ref message) {
    std::visit([&](const auto msg) { m_channel.callbacks().tls_inspect_handshake_msg(msg.get()); }, message);
-   m_message_buffer += m_handshake_layer.prepare_message(message, m_transcript_hash);
+   const auto max_payload_size =  // TODO: m_record_layer
+      m_channel.m_record_layer->record_payload_size_limit(m_channel.policy(), m_channel.m_cipher_state.get());
+
+   stash(m_handshake_layer.prepare_message(message, m_transcript_hash, max_payload_size));
    return *this;
 }
 
 Channel_Impl_13::AggregatedPostHandshakeMessages& Channel_Impl_13::AggregatedPostHandshakeMessages::add(
    Post_Handshake_Message_13 message) {
    std::visit([&](const auto& msg) { m_channel.callbacks().tls_inspect_handshake_msg(msg); }, message);
-   m_message_buffer += m_handshake_layer.prepare_post_handshake_message(message);
+   const auto max_payload_size =  // TODO: m_record_layer
+      m_channel.m_record_layer->record_payload_size_limit(m_channel.policy(), m_channel.m_cipher_state.get());
+
+   stash(m_handshake_layer.prepare_post_handshake_message(message, max_payload_size));
    return *this;
 }
 
-void Channel_Impl_13::AggregatedMessages::send() const {
+void Channel_Impl_13::AggregatedMessages::stash(PreparedHandshakeMessage message) {
+   if(!contains_messages()) {
+      std::visit(overloaded{
+                    [&](const MarshalledHandshakeMessage&) { m_buffer.emplace(MarshalledHandshakeMessageFlight()); },
+                    [&](const std::vector<MarshalledHandshakeMessageFragment>&) {
+                       m_buffer.emplace(std::vector<MarshalledHandshakeMessageFragment>());
+                    },
+                 },
+                 message);
+   }
+
+   std::visit(overloaded{
+                 [&](MarshalledHandshakeMessageFlight& buf, MarshalledHandshakeMessage msg) {
+                    buf.get().insert(buf.end(), msg.begin(), msg.end());
+                 },
+                 [&](std::vector<MarshalledHandshakeMessageFragment>& buf,
+                     std::vector<MarshalledHandshakeMessageFragment> msg) {
+                    buf.insert(buf.end(), std::make_move_iterator(msg.begin()), std::make_move_iterator(msg.end()));
+                 },
+
+                 // Invalid state: Incoming messages' variant must be consistent
+                 [](auto&&, auto&&) { BOTAN_ASSERT_NOMSG(false); },
+              },
+              *m_buffer,  // checked via contains_messages() above
+              std::move(message));
+}
+
+void Channel_Impl_13::AggregatedMessages::send() {
    BOTAN_STATE_CHECK(contains_messages());
-   m_channel.send_record(Record_Type::Handshake, m_message_buffer);
+   m_channel.send_record(*m_buffer);
 }
 
 void Channel_Impl_13::send_dummy_change_cipher_spec() {
@@ -288,7 +357,8 @@ void Channel_Impl_13::send_dummy_change_cipher_spec() {
    //    before the peer's Finished message has been received.
    BOTAN_STATE_CHECK(!is_handshake_complete());
 
-   send_record(Record_Type::ChangeCipherSpec, {0x01});
+   constexpr auto ccs_content = std::array<uint8_t, 1>{0x01};
+   send_record(Record_Type::ChangeCipherSpec, ccs_content);
 }
 
 void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
@@ -315,7 +385,7 @@ void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
          return false;
       }
 
-      if(m_cipher_state->records_encrypted_with_current_key() >= limit) {
+      if(m_cipher_state->current_write_sequence_number() >= limit) {
          return true;
       }
 
@@ -325,7 +395,7 @@ void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
       // write limit will normally have rotated its keys already, avoiding a
       // redundant key update crossing ours in flight.
       const uint64_t read_limit = limit + limit / 2;
-      return !m_key_update_requested && m_cipher_state->records_decrypted_with_current_key() >= read_limit;
+      return !m_key_update_requested && m_cipher_state->current_read_sequence_number() >= read_limit;
    };
 
    // RFC 8446 4.6.3
@@ -350,7 +420,7 @@ void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
       update_traffic_keys(!m_key_update_requested);
    }
 
-   send_record(Record_Type::ApplicationData, {data.begin(), data.end()});
+   send_record(Record_Type::ApplicationData, std::vector<uint8_t>{data.begin(), data.end()});
 }
 
 void Channel_Impl_13::send_alert(const Alert& alert) {
@@ -402,7 +472,27 @@ void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
    }
 }
 
-void Channel_Impl_13::send_record(Record_Type type, const std::vector<uint8_t>& record) {
+bool Channel_Impl_13::timeout_check() {
+   if(is_closed()) {
+      return false;
+   }
+
+   BOTAN_STATE_CHECK(!is_downgrading());
+   BOTAN_STATE_CHECK(m_can_write);
+
+   return m_dtls_channel_companion->timeout_check(m_cipher_state.get());
+}
+
+std::optional<std::chrono::milliseconds> Channel_Impl_13::next_retransmission_timeout() const {
+   if(is_closed()) {
+      return std::nullopt;
+   }
+
+   return m_dtls_channel_companion->next_retransmission_timeout();
+}
+
+void Channel_Impl_13::send_record(Record_Type record_type, std::span<const uint8_t> payload) {
+   BOTAN_ASSERT(record_type != Record_Type::Handshake, "Handshake messages are sent via another overload");
    BOTAN_STATE_CHECK(!is_downgrading());
    BOTAN_STATE_CHECK(m_can_write);
 
@@ -412,20 +502,41 @@ void Channel_Impl_13::send_record(Record_Type type, const std::vector<uint8_t>& 
    //
    // I.e. Change Cipher Spec records must always be sent unprotected, even if
    // the cipher state is already set up for handshake message encryption.
-   auto* cipher_state = (type != Record_Type::ChangeCipherSpec) ? m_cipher_state.get() : nullptr;
+   auto* cipher_state = (record_type != Record_Type::ChangeCipherSpec) ? m_cipher_state.get() : nullptr;
 
-   auto to_write = m_record_layer.prepare_records(type, record, cipher_state);
+   for(const auto& record_to_write : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
+      callbacks().tls_emit_data(record_to_write);
+   }
+}
+
+void Channel_Impl_13::send_record(const PreparedHandshakeMessageFlight& flight) {
+   BOTAN_STATE_CHECK(!is_downgrading());
+   BOTAN_STATE_CHECK(m_can_write);
+
+   // TODO: Currently, this method is called separately for the ServerHello and
+   // the encrypted handshake messages of the server's first flight. Once
+   // AggregatedMessages also aggregates the ServerHello, we could move the
+   // calls to notify_flight_state_progress() from deep inside the state machine
+   // to this call, since then we will know for certain that the state has
+   // advanced as we are sending out the next complete flight.
+   for(const auto& record_to_write : m_record_layer->prepare_records(flight, m_cipher_state.get())) {
+      callbacks().tls_emit_data(record_to_write);
+   }
+
+   m_dtls_channel_companion->notify_sent_handshake_flight();
 
    // After the initial handshake message is sent, the record layer must
    // adhere to a more strict record specification. Note that for the
    // server case this is a NOOP.
    // See (RFC 8446 5.1. regarding "legacy_record_version")
-   if(!m_first_message_sent && type == Record_Type::Handshake) {
-      m_record_layer.disable_sending_compat_mode();
+   if(!m_first_message_sent) {
+      m_record_layer->disable_sending_compat_mode();
       m_first_message_sent = true;
    }
+}
 
-   callbacks().tls_emit_data(to_write);
+void Channel_Impl_13::send_acknowledgements() {
+   send_record(Record_Type::ACK, m_dtls_channel_companion->current_ack_record());
 }
 
 void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
@@ -436,7 +547,7 @@ void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
       if(m_cipher_state) {
          m_cipher_state->clear_read_keys();
       }
-      m_record_layer.clear_read_buffer();
+      m_record_layer->clear_read_buffer();
    }
 
    // user canceled alerts are ignored
@@ -474,6 +585,10 @@ void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
    }
 }
 
+void Channel_Impl_13::process_acknowledgements(std::span<const uint8_t> record) {
+   m_dtls_channel_companion->process_acknowledgements(m_cipher_state.get(), record);
+}
+
 void Channel_Impl_13::shutdown() {
    // RFC 8446 6.2
    //    Upon transmission or receipt of a fatal alert message, both
@@ -500,8 +615,10 @@ void Channel_Impl_13::expect_downgrade(const Server_Information& server_info,
       m_credentials_manager,
       m_rng,
       m_policy,
-      false,  // received_tls_13_error_alert
-      false   // will_downgrade
+      is_datagram() ? TLS_Flavor::DTLS : TLS_Flavor::TLS,
+      false,         // received_tls_13_error_alert
+      false,         // will_downgrade
+      std::nullopt,  // epoch0_sequence_numbers
    };
    m_downgrade_info = std::make_unique<Downgrade_Information>(std::move(di));
 }
@@ -509,11 +626,11 @@ void Channel_Impl_13::expect_downgrade(const Server_Information& server_info,
 #endif
 
 void Channel_Impl_13::set_record_size_limits(const uint16_t outgoing_limit, const uint16_t incoming_limit) {
-   m_record_layer.set_record_size_limits(outgoing_limit, incoming_limit);
+   m_record_layer->set_record_size_limits(outgoing_limit, incoming_limit);
 }
 
 void Channel_Impl_13::set_selected_certificate_type(const Certificate_Type cert_type) {
-   m_handshake_layer.set_selected_certificate_type(cert_type);
+   m_handshake_layer->set_selected_certificate_type(cert_type);
 }
 
 }  // namespace Botan::TLS

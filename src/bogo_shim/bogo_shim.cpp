@@ -165,6 +165,7 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"No shared TLS version based on supported versions extension", ":UNSUPPORTED_PROTOCOL:"},
       {"Client: No certificates sent by server", ":DECODE_ERROR:"},
       {"Decoded polynomial coefficients out of range", ":BAD_ECPOINT:"},
+      {"Deprotected DTLS record had unexpected content type: 42", ":UNEXPECTED_RECORD:"},
       {"Non-PSK Client Hello did not contain supported_groups and signature_algorithms extensions",
        ":NO_SHARED_GROUP:"},
       {"No certificates sent by server", ":PEER_DID_NOT_RETURN_A_CERTIFICATE:"},
@@ -1351,6 +1352,11 @@ class Shim_Policy final : public Botan::TLS::Policy {
       bool allow_dtls12() const override {
          return m_args.flag_set("dtls") && !m_args.flag_set("no-tls12") &&
                 allow_version(Botan::TLS::Protocol_Version::DTLS_V12);
+      }
+
+      bool allow_dtls13() const override {
+         return m_args.flag_set("dtls") && !m_args.flag_set("no-tls13") &&
+                allow_version(Botan::TLS::Protocol_Version::DTLS_V13);
       }
 
       //Botan::TLS::Group_Params default_dh_group() const override;

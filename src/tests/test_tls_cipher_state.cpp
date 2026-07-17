@@ -326,10 +326,18 @@ std::vector<Test::Result> test_secret_derivation_rfc8448_rtt1() {
    // initialize Cipher_State with client_hello...server_hello
    Journaling_Secret_Logger sl_client;
    Journaling_Secret_Logger sl_server;
-   auto cs_client = Cipher_State::init_with_server_hello(
-      Connection_Side::Client, secure_vector<uint8_t>(shared_secret), cipher, th_server_hello, sl_client);
-   auto cs_server = Cipher_State::init_with_server_hello(
-      Connection_Side::Server, secure_vector<uint8_t>(shared_secret), cipher, th_server_hello, sl_server);
+   auto cs_client = Cipher_State::init_with_server_hello(Connection_Side::Client,
+                                                         secure_vector<uint8_t>(shared_secret),
+                                                         cipher,
+                                                         th_server_hello,
+                                                         sl_client,
+                                                         TLS_Flavor::TLS);
+   auto cs_server = Cipher_State::init_with_server_hello(Connection_Side::Server,
+                                                         secure_vector<uint8_t>(shared_secret),
+                                                         cipher,
+                                                         th_server_hello,
+                                                         sl_server,
+                                                         TLS_Flavor::TLS);
 
    auto CHECK_both = make_CHECK_both(cs_client.get(), &sl_client, cs_server.get(), &sl_server);
 
@@ -680,11 +688,13 @@ std::vector<Test::Result> test_secret_derivation_rfc8448_rtt0() {
    auto cs_client = Cipher_State::init_with_psk(Connection_Side::Client,
                                                 Cipher_State::PSK_Type::Resumption,
                                                 secure_vector<uint8_t>(psk.begin(), psk.end()),
-                                                cipher.prf_algo());
+                                                cipher.prf_algo(),
+                                                TLS_Flavor::TLS);
    auto cs_server = Cipher_State::init_with_psk(Connection_Side::Server,
                                                 Cipher_State::PSK_Type::Resumption,
                                                 secure_vector<uint8_t>(psk.begin(), psk.end()),
-                                                cipher.prf_algo());
+                                                cipher.prf_algo(),
+                                                TLS_Flavor::TLS);
 
    auto CHECK_both = make_CHECK_both(cs_client.get(), &sl_client, cs_server.get(), &sl_server);
 
@@ -874,9 +884,9 @@ std::vector<Test::Result> test_record_padding() {
    // Create a Cipher_State for the client side, that is capable of
    // protecting and deprotecting records.
    auto cs_client = Cipher_State::init_with_server_hello(
-      Connection_Side::Client, shared_secret(), cipher, th_server_hello, sl_client);
+      Connection_Side::Client, shared_secret(), cipher, th_server_hello, sl_client, TLS_Flavor::TLS);
    auto cs_server = Cipher_State::init_with_server_hello(
-      Connection_Side::Server, shared_secret(), cipher, th_server_hello, sl_client);
+      Connection_Side::Server, shared_secret(), cipher, th_server_hello, sl_client, TLS_Flavor::TLS);
 
    const auto plaintext = Botan::hex_decode_locked("01 02 03 04 05 06 07 08");
    const auto ciphertext_42_bytes_padding = Botan::hex_decode_locked(

@@ -963,8 +963,11 @@ class TLS_Unit_Tests final : public Test {
                policy->set("allow_dtls12", "true");
             } else if(version == Botan::TLS::Protocol_Version::TLS_V13) {
                policy->set("allow_tls13", "true");
+            } else if(version == Botan::TLS::Protocol_Version::DTLS_V13) {
+               policy->set("allow_dtls13", "true");
+            } else {
+               throw Test_Error("Unknown version " + version.to_string());
             }
-            // TODO(DTLS13): once implemented, map DTLS_V13 -> allow_dtls13 here.
          }
       }
 
@@ -976,7 +979,7 @@ class TLS_Unit_Tests final : public Test {
          policy->set("allow_tls12", "false");
          policy->set("allow_tls13", "false");
          policy->set("allow_dtls12", "false");
-         // TODO(DTLS13): once implemented, also set allow_dtls13=false here.
+         policy->set("allow_dtls13", "false");
 
          enable_versions(policy, versions);
       }
@@ -1157,6 +1160,37 @@ class TLS_Unit_Tests final : public Test {
                .offer_version = PV::TLS_V12,
                .expected_version = std::nullopt,
             },
+
+   #if defined(BOTAN_HAS_DTLS_13)
+            Case{
+               .name = "Client downgrade DTLS 1.3 to 1.2",
+               .client_versions = {PV::DTLS_V12, PV::DTLS_V13},
+               .server_versions = {PV::DTLS_V12},
+               .offer_version = PV::DTLS_V13,
+               .expected_version = PV::DTLS_V12,
+            },
+            Case{
+               .name = "Server downgrade DTLS 1.3 to 1.2",
+               .client_versions = {PV::DTLS_V12},
+               .server_versions = {PV::DTLS_V12, PV::DTLS_V13},
+               .offer_version = PV::DTLS_V12,
+               .expected_version = PV::DTLS_V12,
+            },
+            Case{
+               .name = "No shared version (client TLS 1.3 only)",
+               .client_versions = {PV::DTLS_V13},
+               .server_versions = {PV::DTLS_V12},
+               .offer_version = PV::DTLS_V13,
+               .expected_version = std::nullopt,
+            },
+            Case{
+               .name = "No shared version (server TLS 1.3 only)",
+               .client_versions = {PV::DTLS_V12},
+               .server_versions = {PV::DTLS_V13},
+               .offer_version = PV::DTLS_V12,
+               .expected_version = std::nullopt,
+            },
+   #endif
          };
 
          auto make_policy = [&](std::span<const PV> versions) {
@@ -2145,7 +2179,7 @@ class TLS_Unit_Tests final : public Test {
 
          // TLS version negotiation / downgrade (and mismatch failures)
 
-   #if defined(BOTAN_HAS_TLS_12) && defined(BOTAN_HAS_TLS_13)
+   #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
          test_version_negotiation(results, creds, rng);
    #endif
 

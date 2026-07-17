@@ -2,6 +2,7 @@
 * TLS record layer implementation for TLS 1.3
 * (C) 2022 Jack Lloyd
 *     2022 Hannes Rantzsch, René Meusel - neXenio GmbH
+*     2026 Amos Treiber, René Meusel - Rohde & Schwarz Networks and Cybersecurity GmbH
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -9,10 +10,12 @@
 #ifndef BOTAN_TLS_RECORD_LAYER_13_H_
 #define BOTAN_TLS_RECORD_LAYER_13_H_
 
+#include <botan/assert.h>
+#include <botan/exceptn.h>
 #include <botan/secmem.h>
 #include <botan/tls_magic.h>
 #include <botan/internal/tls_record_13.h>
-#include <deque>
+#include <botan/internal/tls_types_13.h>
 #include <memory>
 #include <span>
 #include <variant>
@@ -32,14 +35,22 @@ class Policy;
  * containing plaintext TLS messages and vice versa.
  */
 class BOTAN_TEST_API Record_Layer {
-   public:
-      Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy);
+   protected:
+      Record_Layer(Connection_Side side,
+                   std::shared_ptr<const Policy> policy,
+                   bool sending_compat_mode,
+                   bool receiving_compat_mode);
 
-      ~Record_Layer() = default;
+   public:
+      static std::unique_ptr<Record_Layer> create(Connection_Side side,
+                                                  TLS_Flavor flavor,
+                                                  std::shared_ptr<const Policy> policy);
+
+      virtual ~Record_Layer() = default;
       Record_Layer(const Record_Layer&) = delete;
       Record_Layer& operator=(const Record_Layer&) = delete;
-      Record_Layer(Record_Layer&&) noexcept = default;
-      Record_Layer& operator=(Record_Layer&&) noexcept = default;
+      Record_Layer(Record_Layer&&) = default;
+      Record_Layer& operator=(Record_Layer&&) = default;
 
       template <typename ResT>
       using ReadResult = std::variant<BytesNeeded, ResT>;
@@ -49,11 +60,15 @@ class BOTAN_TEST_API Record_Layer {
        * processing during the invocation of `next_record()`.
        *
        * @param data_from_peer  The data to be parsed.
+       *
+       * @returns true if the data was successfully ingested, false if something
+       *          went wrong. Typically DTLS record layers will return false if
+       *          the passed-in datagram was somehow invalid and got discarded.
        */
-      void copy_data(std::span<const uint8_t> data_from_peer);
+      virtual bool copy_data(std::span<const uint8_t> data_from_peer) = 0;
 
       /**
-       * Parses one record off the internal buffer that is being filled using `copy_data`.
+       * Parses one record off the internal buffer that is being filled using `ingest`.
        *
        * Return value contains either the number of bytes (`size_t`) needed to proceed
        * with processing TLS records or a single plaintext TLS record content containing
@@ -63,18 +78,32 @@ class BOTAN_TEST_API Record_Layer {
        *                      cipher_state should be ready to decrypt data. Pass nullptr to
        *                      process plaintext data.
        */
-      ReadResult<Record_Content> next_record(Cipher_State* cipher_state = nullptr);
+      virtual ReadResult<Record_Content> next_record(Cipher_State* cipher_state = nullptr) = 0;
 
-      std::vector<uint8_t> prepare_records(Record_Type type,
-                                           std::span<const uint8_t> data,
-                                           Cipher_State* cipher_state = nullptr) const;
+      virtual std::vector<MarshalledRecord> prepare_records(Record_Type type,
+                                                            std::span<const uint8_t> payload,
+                                                            Cipher_State* cipher_state = nullptr) const = 0;
+
+      virtual std::vector<MarshalledRecord> prepare_records(const PreparedHandshakeMessageFlight& flight,
+                                                            Cipher_State* cipher_state = nullptr) const = 0;
+
+      /**
+       * Returns the maximum number of bytes that can be put into a record.
+       *
+       * Both the specified and negotiated record size limit is taken into
+       * account. As well as the user-specified MTU for DTLS. Depending on the
+       * @p cipher_state, the size of the record overhead (e.g. MAC, padding,
+       * record header, etc.) is also considered.
+       */
+      virtual uint16_t record_payload_size_limit(const Policy& policy, Cipher_State* cipher_state = nullptr) const = 0;
 
       /**
        * Clears any data currently stored in the read buffer. This is typically
        * used for memory cleanup when the peer sent a CloseNotify alert.
        */
-      void clear_read_buffer() { m_incoming_records.clear(); }
+      virtual void clear_read_buffer() = 0;
 
+   public:
       /**
        * Set the record size limits as negotiated by the "record_size_limit"
        * extension (RFC 8449). The limits refer to the number of plaintext bytes
@@ -90,13 +119,31 @@ class BOTAN_TEST_API Record_Layer {
        */
       void set_record_size_limits(uint16_t outgoing_limit, uint16_t incoming_limit);
 
-      void disable_sending_compat_mode() { m_sending_compat_mode = false; }
+      uint16_t outgoing_record_size_limit() const noexcept { return m_outgoing_record_size_limit; }
 
-      void disable_receiving_compat_mode() { m_receiving_compat_mode = false; }
+      uint16_t incoming_record_size_limit() const noexcept { return m_incoming_record_size_limit; }
+
+      /**
+       * Extracts the current sequence numbers (before rolling over into any
+       * protected epoch). This is used to downgrade a DTLS 1.3 handshake to a
+       * DTLS 1.2 handshake.
+       */
+      virtual std::optional<Epoch0_SequenceNumbers> epoch0_sequence_numbers() const noexcept { return std::nullopt; }
+
+      void disable_sending_compat_mode() noexcept { m_sending_compat_mode = false; }
+
+      void disable_receiving_compat_mode() noexcept { m_receiving_compat_mode = false; }
+
+      bool sending_compat_mode() const noexcept { return m_sending_compat_mode; }
+
+      bool receiving_compat_mode() const noexcept { return m_receiving_compat_mode; }
+
+      Connection_Side side() const noexcept { return m_side; }
+
+   protected:
+      const Policy& policy() const noexcept { return *m_policy; }
 
    private:
-      std::deque<Record_TLS> m_incoming_records;
-
       Connection_Side m_side;
 
       // Queried for Record Padding as defined in RFC 9846 5.4

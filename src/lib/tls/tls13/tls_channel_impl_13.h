@@ -16,11 +16,12 @@
 #include <botan/internal/tls_connection_state_13.h>
 #include <botan/internal/tls_handshake_layer_13.h>
 #include <botan/internal/tls_record_layer_13.h>
-#include <botan/internal/tls_transcript_hash_13.h>
 
 namespace Botan::TLS {
 
 class Cipher_State;
+class Transcript_Hash_State;
+class DTLS_Channel_Companion;
 
 /**
  * Encapsulates the callbacks in the state machine described in RFC 8446 7.1,
@@ -72,12 +73,15 @@ class Channel_Impl_13 : public Channel_Impl,
             /**
              * Send the messages aggregated in the message buffer.
              */
-            void send() const;
+            void send();
 
-            bool contains_messages() const { return !m_message_buffer.empty(); }
+            bool contains_messages() const { return m_buffer.has_value(); }
 
          protected:
-            std::vector<uint8_t> m_message_buffer;  // NOLINT(*non-private-member-variable*)
+            void stash(PreparedHandshakeMessage message);
+
+         protected:
+            std::optional<PreparedHandshakeMessageFlight> m_buffer;  // NOLINT(*non-private-member-variable*)
 
             Channel_Impl_13& m_channel;          // NOLINT(*non-private-member-variable*)
             Handshake_Layer& m_handshake_layer;  // NOLINT(*non-private-member-variable*)
@@ -118,7 +122,7 @@ class Channel_Impl_13 : public Channel_Impl,
 
    public:
       /**
-      * Set up a new TLS 1.3 session
+      * Set up a new (D)TLS 1.3 session
       *
       * @param callbacks contains a set of callback function references
       *        required by the TLS endpoint.
@@ -126,14 +130,16 @@ class Channel_Impl_13 : public Channel_Impl,
       * @param credentials_manager manages application/user credentials
       * @param rng a random number generator
       * @param policy specifies other connection policy information
-      * @param is_server whether this is a server session or not
+      * @param connection_side whether this is a client or server session
+      * @param flavor whether TLS1.3 or DTLS1.3 is used
       */
       explicit Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
                                const std::shared_ptr<Session_Manager>& session_manager,
                                const std::shared_ptr<Credentials_Manager>& credentials_manager,
                                const std::shared_ptr<RandomNumberGenerator>& rng,
                                const std::shared_ptr<const Policy>& policy,
-                               bool is_server);
+                               Connection_Side connection_side,
+                               TLS_Flavor flavor);
 
       Channel_Impl_13(const Channel_Impl_13& other) = delete;
       Channel_Impl_13(Channel_Impl_13&& other) = delete;
@@ -212,7 +218,9 @@ class Channel_Impl_13 : public Channel_Impl,
       *
       * In the TLS 1.3 implementation, this always returns false.
       */
-      bool timeout_check() override { return false; }
+      bool timeout_check() override;
+
+      std::optional<std::chrono::milliseconds> next_retransmission_timeout() const override;
 
    protected:
       virtual void process_handshake_msg(Handshake_Message_13 msg) = 0;
@@ -256,11 +264,13 @@ class Channel_Impl_13 : public Channel_Impl,
       void send_dummy_change_cipher_spec();
 
       AggregatedHandshakeMessages aggregate_handshake_messages() {
-         return AggregatedHandshakeMessages(*this, m_handshake_layer, m_transcript_hash);
+         BOTAN_ASSERT_NONNULL(m_handshake_layer);
+         BOTAN_ASSERT_NONNULL(m_transcript_hash);
+         return AggregatedHandshakeMessages(*this, *m_handshake_layer, *m_transcript_hash);
       }
 
       AggregatedPostHandshakeMessages aggregate_post_handshake_messages() {
-         return AggregatedPostHandshakeMessages(*this, m_handshake_layer);
+         return AggregatedPostHandshakeMessages(*this, *m_handshake_layer);
       }
 
       Callbacks& callbacks() const { return *m_callbacks; }
@@ -273,10 +283,16 @@ class Channel_Impl_13 : public Channel_Impl,
 
       const Policy& policy() const { return *m_policy; }
 
-   private:
-      void send_record(Record_Type record_type, const std::vector<uint8_t>& record);
+      bool is_datagram() const { return m_flavor == TLS_Flavor::DTLS; }
 
+      void send_record(Record_Type record_type, std::span<const uint8_t> payload);
+      void send_record(const PreparedHandshakeMessageFlight& flight);
+
+      void send_acknowledgements();
+
+   private:
       void process_alert(const secure_vector<uint8_t>& record);
+      void process_acknowledgements(std::span<const uint8_t> record);
 
       /**
        * Terminate the connection (on sending or receiving an error alert) and
@@ -286,9 +302,10 @@ class Channel_Impl_13 : public Channel_Impl,
 
    protected:
       const Connection_Side m_side;                              // NOLINT(*non-private-member-variable*)
-      Transcript_Hash_State m_transcript_hash;                   // NOLINT(*non-private-member-variable*)
+      std::unique_ptr<Transcript_Hash_State> m_transcript_hash;  // NOLINT(*non-private-member-variable*)
       std::unique_ptr<Cipher_State> m_cipher_state;              // NOLINT(*non-private-member-variable*)
       std::optional<Active_Connection_State_13> m_active_state;  // NOLINT(*non-private-member-variable*)
+      TLS_Flavor m_flavor;                                       // NOLINT(*-non-private-member-*)
 
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
       /**
@@ -321,6 +338,17 @@ class Channel_Impl_13 : public Channel_Impl,
        */
       void set_selected_certificate_type(Certificate_Type cert_type);
 
+   protected:
+      /* handshake state */
+      std::shared_ptr<Record_Layer> m_record_layer;  // NOLINT(*-non-private-member-*)
+      // For DTLS currently, handshake_layer has a ref to record_layer, so record_layer
+      // has to outlive handshake_layer. TODO: A HSL <-> RL bridge for DTLS should
+      // avoid this.
+      std::shared_ptr<Handshake_Layer> m_handshake_layer;  // NOLINT(*-non-private-member-*)
+
+      /* DTLS specific */
+      std::unique_ptr<DTLS_Channel_Companion> m_dtls_channel_companion;  // NOLINT(*-non-private-member-*)
+
    private:
       /* callbacks */
       std::shared_ptr<Callbacks> m_callbacks;
@@ -330,10 +358,6 @@ class Channel_Impl_13 : public Channel_Impl,
       std::shared_ptr<Credentials_Manager> m_credentials_manager;
       std::shared_ptr<RandomNumberGenerator> m_rng;
       std::shared_ptr<const Policy> m_policy;
-
-      /* handshake state */
-      Record_Layer m_record_layer;
-      Handshake_Layer m_handshake_layer;
 
       bool m_can_read;
       bool m_can_write;
