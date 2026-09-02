@@ -132,11 +132,17 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
                //
                // Handshake_Layer::copy_data() returns true if a handshake message fragment
                // with a previously unprocessed sequence number was received. This indicates
-               // progress and therefore ACKs our previously sent flight.
+               // progress and therefore ACKs our previously sent flight implicitly. Note
+               // that this doesn't hold for post-handshake messages; for instance some
+               // NewSessionTicket message _does not_ acknowledge the Client's Finished!
                //
                // Note: This assumes that we only send our flight once we fully received
                //       a flight from the peer. This is a hard requirement in TLS 1.3.
-               m_dtls_channel_companion->clear_resend_buffer();
+               const bool is_post_handshake_traffic =
+                  record.epoch.has_value() && record.epoch.value() >= Epoch_Number::ApplicationTraffic_0;
+               if(!is_post_handshake_traffic) {
+                  m_dtls_channel_companion->clear_resend_buffer();
+               }
             }
 
             if(!is_handshake_complete()) {

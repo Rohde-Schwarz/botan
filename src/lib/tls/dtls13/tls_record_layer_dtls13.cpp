@@ -244,16 +244,25 @@ Record_Layer::ReadResult<Record_Content> DTLS_Record_Layer::next_record(Cipher_S
          //    itself serve as a timing channel for the record number.
          auto& window = replay_window_for_epoch(maybe_next_record->epoch.value());
          if(window.accept(maybe_next_record->sequence_number.value())) {
-            m_record_numbers_to_ack.emplace_back(maybe_next_record->epoch.value(),
-                                                 maybe_next_record->sequence_number.value());
-
-            // RFC 9147 Section 7.1
-            //    If space is limited, implementations SHOULD favor including
-            //    records which have not yet been acknowledged.
+            // RFC 9147 Section 7.
+            //    The ACK message is used by an endpoint to indicate which
+            //    handshake records it has received and processed from the
+            //    other side.
             //
-            // Hence, we retain only the most recently received record numbers.
-            if(m_record_numbers_to_ack.size() > policy().dtls_maximum_queued_acknowledgements()) {
-               m_record_numbers_to_ack.erase(m_record_numbers_to_ack.begin());
+            // Records that don't carry handshake messages (most notably
+            // application data) are never acknowledged.
+            if(maybe_next_record->type == Record_Type::Handshake) {
+               m_record_numbers_to_ack.emplace_back(maybe_next_record->epoch.value(),
+                                                    maybe_next_record->sequence_number.value());
+
+               // RFC 9147 Section 7.1
+               //    If space is limited, implementations SHOULD favor including
+               //    records which have not yet been acknowledged.
+               //
+               // Hence, we retain only the most recently received record numbers.
+               if(m_record_numbers_to_ack.size() > policy().dtls_maximum_queued_acknowledgements()) {
+                  m_record_numbers_to_ack.erase(m_record_numbers_to_ack.begin());
+               }
             }
 
             return std::move(maybe_next_record).value();
