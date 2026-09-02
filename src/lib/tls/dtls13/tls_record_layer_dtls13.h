@@ -32,7 +32,7 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       using IncomingRecord = std::variant<PlaintextRecord_DTLS, ProtectedRecord_DTLS>;
 
       struct HandshakeRecordInfo /* NOLINT(*-member-init) */ {
-            RecordNumber record_number;
+            std::vector<RecordNumber> record_numbers;  // Includes numbers of previous transmissions
             MarshalledHandshakeMessageFragment fragment;
       };
 
@@ -83,7 +83,14 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       */
       ACKs acknowledgements() const;
 
-      void handle_acknowledgements(const ACKs& ack_payload);
+      /**
+       * Processes an incoming ACK message and removes all acknowledged records
+       * from the list of unacknowledged outgoing handshake records.
+       *
+       * @returns true if there are no more unacknowledged records left, false
+       *          otherwise
+       */
+      bool handle_acknowledgements(const ACKs& ack_payload);
 
       void clear_resend_buffer();
       void clear_outstanding_acknowledgements();
@@ -97,10 +104,10 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
 
    private:
       bool read_datagram(std::span<const uint8_t> datagram);
-      MarshalledRecord prepare_record(Record_Type type,
-                                      std::span<const uint8_t> fragment,
-                                      Cipher_State* cipher_state,
-                                      std::optional<Epoch_Number> epoch = std::nullopt) const;
+      std::pair<MarshalledRecord, RecordNumber> prepare_record(Record_Type type,
+                                                               std::span<const uint8_t> fragment,
+                                                               Cipher_State* cipher_state,
+                                                               std::optional<Epoch_Number> epoch = std::nullopt) const;
 
       IncomingRecord next_incoming_record();
 

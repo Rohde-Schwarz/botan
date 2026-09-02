@@ -337,10 +337,11 @@ class BOTAN_TEST_API Cipher_State {
        *
        * @throws if the provided epoch is not available
        */
-      [[nodiscard]] MarshalledRecord protect_record_dtls(Record_Type type,
-                                                         std::span<const uint8_t> payload,
-                                                         size_t padding_bytes,
-                                                         std::optional<Epoch_Number> epoch = std::nullopt);
+      [[nodiscard]] std::pair<MarshalledRecord, RecordNumber> protect_record_dtls(
+         Record_Type type,
+         std::span<const uint8_t> payload,
+         size_t padding_bytes,
+         std::optional<Epoch_Number> epoch = std::nullopt);
 
       std::optional<std::reference_wrapper<Epoch>> latest_epoch_matching_epoch_hint(uint8_t epoch_hint) const;
 

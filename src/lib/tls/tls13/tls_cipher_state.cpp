@@ -1112,10 +1112,10 @@ std::optional<Record_Content> Cipher_State::deprotect_record(ProtectedRecord_DTL
    return result;
 }
 
-MarshalledRecord Cipher_State::protect_record_dtls(Record_Type type,
-                                                   std::span<const uint8_t> payload,
-                                                   size_t padding_bytes,
-                                                   std::optional<Epoch_Number> epoch_number) {
+std::pair<MarshalledRecord, RecordNumber> Cipher_State::protect_record_dtls(Record_Type type,
+                                                                            std::span<const uint8_t> payload,
+                                                                            size_t padding_bytes,
+                                                                            std::optional<Epoch_Number> epoch_number) {
    BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
    BOTAN_ARG_CHECK(!epoch_number.has_value() || *epoch_number > Epoch_Number::Unprotected,
                    "epoch_number must implicate record protection");
@@ -1208,7 +1208,7 @@ MarshalledRecord Cipher_State::protect_record_dtls(Record_Type type,
       epoch, *m_ciphersuite, std::span{result}.subspan(header_size), unified_header.sequence_number);
    unified_header.serialize_to(std::span{result}.first(header_size));
 
-   return result;
+   return {result, {.epoch = epoch.number, .sequence_number = write_seq_no}};
 }
 
 std::optional<std::reference_wrapper<Cipher_State::Epoch>> Cipher_State::latest_epoch_matching_epoch_hint(

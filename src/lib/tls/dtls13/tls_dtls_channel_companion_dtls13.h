@@ -85,7 +85,10 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
          }
 
          const auto acks = ACKs(ack_record);
-         m_record_layer->handle_acknowledgements(acks);
+         if(m_record_layer->handle_acknowledgements(acks)) {
+            // Nothing left to retransmit, stop the timer
+            m_retransmission_timer.stop();
+         }
 
          // RFC 9147 7.2
          //    Upon receipt of an ACK that leaves it with only some messages from
