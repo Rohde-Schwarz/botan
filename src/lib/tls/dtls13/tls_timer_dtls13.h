@@ -9,6 +9,7 @@
 #ifndef BOTAN_TLS_TIMER_DTLS13_H_
 #define BOTAN_TLS_TIMER_DTLS13_H_
 
+#include <botan/assert.h>
 #include <botan/tls_callbacks.h>
 #include <botan/tls_policy.h>
 #include <chrono>
@@ -42,6 +43,18 @@ class DTLS_Retransmission_Timer {
       bool expired() const { return started() && now() >= m_next_deadline.value(); }
 
       /**
+       * Disarm the timer and reset the retransmission counter. This is done
+       * when the peer has acknowledged the last flight and no further
+       * retransmissions are needed. Note that this doesn't necesarily mean
+       * that the handshake is complete!
+       */
+      void stop() {
+         m_next_deadline.reset();
+         m_next_timeout_span = std::chrono::milliseconds(0);
+         m_retransmissions = 0;
+      }
+
+      /**
        * @returns true if the policy's retransmission limit was reached;
        *          always false if the policy sets no limit or the timer is not armed
        */
@@ -53,7 +66,7 @@ class DTLS_Retransmission_Timer {
       }
 
       /**
-       *  Arm (or reset) the timer when a *new* flight was just sent.
+       *  Arm (or restart) the timer when a *new* flight was just sent.
        *  Resets the timeout span to the initial value and the retransmission
        *  counter to zero.
        */
@@ -68,6 +81,7 @@ class DTLS_Retransmission_Timer {
        *  span (capped at the policy's maximum) and counts the retransmission.
        */
       void retransmitted() {
+         BOTAN_STATE_CHECK(started());
          m_next_timeout_span = std::min(2 * m_next_timeout_span, m_max_timeout);
          m_next_deadline = now() + m_next_timeout_span;
          m_retransmissions++;

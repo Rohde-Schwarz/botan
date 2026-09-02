@@ -264,10 +264,10 @@ Record_Layer::ReadResult<Record_Content> DTLS_Record_Layer::next_record(Cipher_S
    return BytesNeeded(0);
 }
 
-MarshalledRecord DTLS_Record_Layer::prepare_record(Record_Type type,
-                                                   std::span<const uint8_t> fragment,
-                                                   Cipher_State* cipher_state,
-                                                   std::optional<Epoch_Number> epoch) const {
+std::pair<MarshalledRecord, RecordNumber> DTLS_Record_Layer::prepare_record(Record_Type type,
+                                                                            std::span<const uint8_t> fragment,
+                                                                            Cipher_State* cipher_state,
+                                                                            std::optional<Epoch_Number> epoch) const {
    // RFC 8446 5.1
    //    The length MUST NOT exceed 2^14 bytes.
    BOTAN_ARG_CHECK(fragment.size() <= MAX_PLAINTEXT_SIZE, "length must not exceed 2^14 bytes");
@@ -308,7 +308,8 @@ MarshalledRecord DTLS_Record_Layer::prepare_record(Record_Type type,
          .length = static_cast<uint16_t>(fragment.size()),
       };
 
-      return concat<MarshalledRecord>(header.serialize(), fragment);
+      return {concat<MarshalledRecord>(header.serialize(), fragment),
+              {.epoch = Epoch_Number::Unprotected, .sequence_number = write_seq_no}};
    } else {
       BOTAN_ARG_CHECK(cipher_state != nullptr, "cipher_state must be provided for protected records");
       BOTAN_DEBUG_ASSERT(!epoch.has_value() || *epoch > Epoch_Number::Unprotected);
@@ -339,7 +340,7 @@ MarshalledRecord DTLS_Record_Layer::prepare_record(Record_Type type,
 std::vector<MarshalledRecord> DTLS_Record_Layer::prepare_records(Record_Type type,
                                                                  std::span<const uint8_t> fragment,
                                                                  Cipher_State* cipher_state) const {
-   return {prepare_record(type, fragment, cipher_state)};
+   return {prepare_record(type, fragment, cipher_state).first};
 }
 
 std::vector<MarshalledRecord> DTLS_Record_Layer::prepare_records(const PreparedHandshakeMessageFlight& flight,
@@ -354,20 +355,13 @@ std::vector<MarshalledRecord> DTLS_Record_Layer::prepare_records(const PreparedH
    // marshalled handshake messages so that each fragment fits into a single
    // DTLS record. Therefore, we simply prepare a record for each fragment.
    for(const auto& fragment : *fragments) {
-      const auto record_number = [&]() -> RecordNumber {
-         if(cipher_state != nullptr) {
-            return {cipher_state->current_write_epoch_number(), cipher_state->current_write_sequence_number()};
-         } else {
-            return {Epoch_Number::Unprotected, m_unprotected_write_seq_no};
-         }
-      }();
-
+      auto [marshalled_record, record_number] = prepare_record(Record_Type::Handshake, fragment, cipher_state);
       m_unacked_outgoing_handshake_records.push_back({
-         .record_number = record_number,
+         .record_numbers = {record_number},
          .fragment = fragment,
       });
 
-      prepared_records.emplace_back(prepare_record(Record_Type::Handshake, fragment, cipher_state));
+      prepared_records.emplace_back(std::move(marshalled_record));
    }
    return prepared_records;
 }
@@ -376,9 +370,11 @@ std::vector<MarshalledRecord> DTLS_Record_Layer::prepare_unacknowledged_records(
    std::vector<MarshalledRecord> prepared_records;
    prepared_records.reserve(m_unacked_outgoing_handshake_records.size());
 
-   for(const auto& record_info : m_unacked_outgoing_handshake_records) {
-      prepared_records.emplace_back(
-         prepare_record(Record_Type::Handshake, record_info.fragment, cipher_state, record_info.record_number.epoch));
+   for(auto& record_info : m_unacked_outgoing_handshake_records) {
+      auto [marshalled_record, retransmission_record_number] = prepare_record(
+         Record_Type::Handshake, record_info.fragment, cipher_state, record_info.record_numbers.back().epoch);
+      record_info.record_numbers.push_back(retransmission_record_number);
+      prepared_records.push_back(std::move(marshalled_record));
    }
 
    return prepared_records;
@@ -414,10 +410,14 @@ ACKs DTLS_Record_Layer::acknowledgements() const {
    return ACKs(m_record_numbers_to_ack);
 }
 
-void DTLS_Record_Layer::handle_acknowledgements(const ACKs& acks) {
+bool DTLS_Record_Layer::handle_acknowledgements(const ACKs& acks) {
    std::erase_if(m_unacked_outgoing_handshake_records, [&](const auto& record_info) {
-      return value_exists(acks.record_numbers(), record_info.record_number);
+      return std::any_of(
+         acks.record_numbers().begin(), acks.record_numbers().end(), [&](const auto& acked_record_number) {
+            return value_exists(record_info.record_numbers, acked_record_number);
+         });
    });
+   return m_unacked_outgoing_handshake_records.empty();
 }
 
 void DTLS_Record_Layer::clear_resend_buffer() {
