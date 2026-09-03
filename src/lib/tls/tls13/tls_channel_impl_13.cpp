@@ -479,22 +479,23 @@ void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
 }
 
 bool Channel_Impl_13::timeout_check() {
-   if(is_closed()) {
+   if(!is_datagram()) {
       return false;
    }
 
-   BOTAN_STATE_CHECK(!is_downgrading());
-   BOTAN_STATE_CHECK(m_can_write);
-
-   return m_dtls_channel_companion->timeout_check(m_cipher_state.get());
+   throw Not_Implemented(
+      "timeout_check() is not implemented for DTLS 1.3, please implement "
+      "TLS::Callbacks::tls_register_deferred_operation() instead");
 }
 
 std::optional<std::chrono::milliseconds> Channel_Impl_13::next_retransmission_timeout() const {
-   if(is_closed()) {
+   if(!is_datagram()) {
       return std::nullopt;
    }
 
-   return m_dtls_channel_companion->next_retransmission_timeout();
+   throw Not_Implemented(
+      "next_retransmission_timeout() is not implemented for DTLS 1.3, please "
+      "implement TLS::Callbacks::tls_register_deferred_operation() instead");
 }
 
 void Channel_Impl_13::send_record(Record_Type record_type, std::span<const uint8_t> payload) {
@@ -530,6 +531,7 @@ void Channel_Impl_13::send_record(const PreparedHandshakeMessageFlight& flight) 
    }
 
    m_dtls_channel_companion->notify_sent_handshake_flight();
+   maybe_arm_dtls_retransmission_timer();
 
    // After the initial handshake message is sent, the record layer must
    // adhere to a more strict record specification. Note that for the
@@ -593,6 +595,68 @@ void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
 
 void Channel_Impl_13::process_acknowledgements(std::span<const uint8_t> record) {
    m_dtls_channel_companion->process_acknowledgements(m_cipher_state.get(), record);
+}
+
+void Channel_Impl_13::maybe_arm_dtls_retransmission_timer(TimerGeneration generation_policy) {
+   if(!is_datagram()) {
+      return;
+   }
+
+   const auto next_timeout = m_dtls_channel_companion->next_retransmission_timeout();
+
+   // If there is no timeout, the handshake is complete or there is no handshake
+   // in progress, so there is nothing to arm a timer for.
+   if(!next_timeout.has_value()) {
+      return;
+   }
+
+   // If a new timer generation was requested, we increment the channel-wide
+   // generation counter to invalidate any other timer chain that might still be
+   // running from a backoff interval that has been cut short by incoming data
+   // from the peer.
+   if(generation_policy == TimerGeneration::Advance) {
+      ++m_retransmission_timer_generation;
+   }
+
+   // The actual asynchronous operation:
+   auto on_timer = [self = weak_from_this(), generation = m_retransmission_timer_generation]() mutable {
+      // If this operation is called after the channel implementation is gone,
+      // the channel magically became some other type, or the operation was
+      // called more than once (see below) just return.
+      auto channel = std::dynamic_pointer_cast<Channel_Impl_13>(self.lock());
+      if(!channel) {
+         return;
+      }
+
+      // Drop the reference to the channel in this deferred operation. If the
+      // user accidentally calls the operation more than once, the second
+      // invocation will be a harmless no-op.
+      self.reset();
+
+      // This timer-chain may have been superseded by a newer one, when a
+      // backoff interval was reset by the arrival of a belated handshake
+      // message. This generation is no longer active and ends here.
+      if(generation != channel->m_retransmission_timer_generation) {
+         return;
+      }
+
+      // Now we know that we're on the active retransmission/backoff
+      // chain...
+      if(channel->m_dtls_channel_companion->timeout_check(channel->m_cipher_state.get())) {
+         // ... and a retransmission was performed: Spawn the next timer
+         // generation for the next backoff interval in this chain.
+         channel->maybe_arm_dtls_retransmission_timer(TimerGeneration::Advance);
+      } else {
+         // ... but no retransmission was performed. Either, because the user
+         // invoked the operation too early, in which case we will just reset
+         // the timer for the remaining time until the next deadline, or a
+         // retransmission was not needed anymore (because the peer's flight
+         // arrived), then maybe_arm_* will not re-arm the timer.
+         channel->maybe_arm_dtls_retransmission_timer(TimerGeneration::Keep);
+      }
+   };
+
+   m_callbacks->tls_register_deferred_operation(next_timeout->count(), on_timer);
 }
 
 void Channel_Impl_13::shutdown() {
