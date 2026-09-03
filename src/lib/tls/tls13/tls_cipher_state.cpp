@@ -1034,8 +1034,6 @@ std::optional<Record_Content> Cipher_State::deprotect_record(ProtectedRecord_DTL
       return std::nullopt;
    }
 
-   BOTAN_ASSERT_NOMSG(result.payload.size() <= MAX_PLAINTEXT_SIZE + 1 /* content_type byte */);
-
    // --------------------------------------------------------------------------
    // BEYOND THIS LINE WE DEAL WITH AUTHENTICATED DATA.
    // Hence, errors are fatal and we throw TLS exceptions with appropriate

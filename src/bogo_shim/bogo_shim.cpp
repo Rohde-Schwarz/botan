@@ -280,6 +280,7 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"Server selected a key exchange group we didn't offer.", ":WRONG_CURVE:"},
       {"TLS 1.3 Server Hello selected a different version", ":SECOND_SERVERHELLO_VERSION_MISMATCH:"},
       {"TLS signature extension did not allow for RSA_PSS_SHA256 signature", ":WRONG_SIGNATURE_TYPE:"},
+      {"Truncated DTLS handshake fragment received", ":BAD_HANDSHAKE_RECORD:"},
       {"Version downgrade received after Hello Retry", ":SECOND_SERVERHELLO_VERSION_MISMATCH:"},
       {"Server sent an unsupported extension", ":UNEXPECTED_EXTENSION:"},
       {"Unsupported extension found in Server Hello", ":UNEXPECTED_EXTENSION:"},

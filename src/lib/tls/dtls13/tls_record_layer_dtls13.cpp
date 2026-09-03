@@ -216,30 +216,41 @@ Replay_Window_13& DTLS_Record_Layer::replay_window_for_epoch(Epoch_Number epoch)
 
 Record_Layer::ReadResult<Record_Content> DTLS_Record_Layer::next_record(Cipher_State* cipher_state) {
    while(!m_incoming_records.empty()) {
-      auto maybe_next_record =
-         std::visit(overloaded{
-                       [&](PlaintextRecord_DTLS record) -> std::optional<Record_Content> {
-                          return Record_Content{
-                             .type = record.header.type,
-                             .sequence_number = record.header.sequence_number,
-                             .payload = std::move(record.payload),
-                             .epoch = Epoch_Number::Unprotected,  // ossified (RFC 9147 Section 4 Figure 2)
-                          };
-                       },
-                       [&](ProtectedRecord_DTLS record) -> std::optional<Record_Content> {
-                          if(cipher_state != nullptr) {
-                             return cipher_state->deprotect_record(std::move(record), incoming_record_size_limit());
-                          } else {
-                             // RFC 9147 Section 4.5.2
-                             //     In general, invalid records SHOULD be silently discarded [...].
-                             //
-                             // If we received a protected record but don't have a
-                             // cipher state to decrypt it, we silently discard it.
-                             return std::nullopt;
-                          }
-                       },
-                    },
-                    next_incoming_record());
+      auto maybe_next_record = std::visit(
+         overloaded{
+            [&](PlaintextRecord_DTLS record) -> std::optional<Record_Content> {
+               if(cipher_state == nullptr || cipher_state->current_read_epoch_number() == Epoch_Number::Unprotected) {
+                  return Record_Content{
+                     .type = record.header.type,
+                     .sequence_number = record.header.sequence_number,
+                     .payload = std::move(record.payload),
+                     .epoch = Epoch_Number::Unprotected,  // ossified (RFC 9147 Section 4 Figure 2)
+                  };
+               } else {
+                  // RFC 9147 Section 4.2.1
+                  //     Implementations SHOULD discard records from
+                  //     earlier epochs [...].
+                  //
+                  // Here, we received an unprotected record while we
+                  // already hold key material for record protection.
+                  return std::nullopt;
+               }
+            },
+            [&](ProtectedRecord_DTLS record) -> std::optional<Record_Content> {
+               if(cipher_state != nullptr) {
+                  return cipher_state->deprotect_record(std::move(record), incoming_record_size_limit());
+               } else {
+                  // RFC 9147 Section 4.5.2
+                  //     In general, invalid records SHOULD be silently
+                  //     discarded [...].
+                  //
+                  // If we received a protected record but don't have a
+                  // cipher state to decrypt it, we silently discard it.
+                  return std::nullopt;
+               }
+            },
+         },
+         next_incoming_record());
 
       if(maybe_next_record.has_value()) {
          BOTAN_DEBUG_ASSERT(maybe_next_record->epoch.has_value() && maybe_next_record->sequence_number.has_value());

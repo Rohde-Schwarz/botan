@@ -64,18 +64,12 @@ struct DTLS_Handshake_Header {
 }  // namespace
 
 bool DTLS_Handshake_Layer::copy_data(const Policy& policy, std::span<const uint8_t> bytes) {
-   try {
-      return read_fragments(policy, bytes);
-   } catch(const std::exception& ex) {
-      // Something is wrong with the message, silently drop it
-      std::cout << "ERROR: " << ex.what() << std::endl;  // TODO: remove me
-      return false;
-   }
-}
-
-bool DTLS_Handshake_Layer::read_fragments(const Policy& policy, std::span<const uint8_t> bytes) {
    BufferSlicer bs(bytes);
    while(!bs.empty()) {
+      if(bs.remaining() < header_length) {
+         throw TLS_Exception(AlertType::DecodeError, "Bad lengths in DTLS header");
+      }
+
       const auto header_bytes = bs.take(header_length);
 
       // TODO: Implement the parsing in DTLS_Handshake_Header
@@ -110,6 +104,10 @@ bool DTLS_Handshake_Layer::read_fragments(const Policy& policy, std::span<const 
       m_current_read_message.try_emplace(
          msg_seq,
          ReassembledMessage{
+            // TODO: Parse the header already now and error-out if the header
+            //       appears bogus. Note: There's also a commented-out test
+            //       for that in test_tls_dtls13_handshake_layer.cpp, called
+            //       "parse ClientHello detects incoming garbage data with invalid message type".
             .header = {header_bytes[0], header_bytes[1], header_bytes[2], header_bytes[3]},
             .payload = DTLSPayload(msg_len),
             .received_bytes = bitvector(msg_len),
@@ -120,8 +118,7 @@ bool DTLS_Handshake_Layer::read_fragments(const Policy& policy, std::span<const 
 
       if(reassembled.payload.size() != msg_len || reassembled.received_bytes.size() != msg_len ||
          load_be(header_bytes.first<4>()) != load_be(reassembled.header)) {
-         // Inconsistent fragment, silently drop it.
-         throw TLS_Exception(Alert::IllegalParameter, "Inconsistent DTLS handshake fragment received");
+         throw TLS_Exception(Alert::IllegalParameter, "Inconsistent values in fragmented DTLS handshake header");
       }
 
       // RFC 9147 5.5
@@ -139,6 +136,9 @@ bool DTLS_Handshake_Layer::read_fragments(const Policy& policy, std::span<const 
       // in the transcript hash check.
 
       // Advance bs and copy the fragment into the reassembled message
+      if(bs.remaining() < frag_len) {
+         throw TLS_Exception(AlertType::DecodeError, "Truncated DTLS handshake fragment received");
+      }
       copy_mem(std::span(reassembled.payload).subspan(frag_offset, frag_len), bs.take(frag_len));
 
       for(size_t i = frag_offset; i < frag_offset + frag_len; ++i) {
