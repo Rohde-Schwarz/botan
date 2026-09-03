@@ -56,9 +56,6 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
                                                    const Policy& policy) const override;
 
    private:
-      bool read_fragments(const Policy& policy, std::span<const uint8_t> bytes);
-
-   private:
       uint16_t m_send_message_seq = 0;
       uint16_t m_read_message_seq = 0;
 
