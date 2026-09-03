@@ -294,6 +294,13 @@ class Channel_Impl_13 : public Channel_Impl,
       void process_alert(const secure_vector<uint8_t>& record);
       void process_acknowledgements(std::span<const uint8_t> record);
 
+      enum class TimerGeneration : bool {
+         Advance,
+         Keep,
+      };
+
+      void maybe_arm_dtls_retransmission_timer(TimerGeneration generation_policy = TimerGeneration::Advance);
+
       /**
        * Terminate the connection (on sending or receiving an error alert) and
        * clear secrets
@@ -348,6 +355,7 @@ class Channel_Impl_13 : public Channel_Impl,
 
       /* DTLS specific */
       std::unique_ptr<DTLS_Channel_Companion> m_dtls_channel_companion;  // NOLINT(*-non-private-member-*)
+      uint64_t m_retransmission_timer_generation = 0;                    // NOLINT(*-non-private-member-*)
 
    private:
       /* callbacks */
