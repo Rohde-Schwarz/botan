@@ -227,7 +227,16 @@ Record_Layer::ReadResult<Record_Content> DTLS_Record_Layer::next_record(Cipher_S
                           };
                        },
                        [&](ProtectedRecord_DTLS record) -> std::optional<Record_Content> {
-                          return cipher_state->deprotect_record(std::move(record), incoming_record_size_limit());
+                          if(cipher_state != nullptr) {
+                             return cipher_state->deprotect_record(std::move(record), incoming_record_size_limit());
+                          } else {
+                             // RFC 9147 Section 4.5.2
+                             //     In general, invalid records SHOULD be silently discarded [...].
+                             //
+                             // If we received a protected record but don't have a
+                             // cipher state to decrypt it, we silently discard it.
+                             return std::nullopt;
+                          }
                        },
                     },
                     next_incoming_record());

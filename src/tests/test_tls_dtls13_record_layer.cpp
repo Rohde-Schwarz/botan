@@ -318,6 +318,20 @@ std::vector<Test::Result> protected_records() {
                result.test_enum_eq("type is Handshake", record.type, TLS::Record_Type::Handshake);
             }),
 
+      CHECK("reading protected record without key state should drop the record",
+            [&](Test::Result& result) {
+               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+               auto rl_server = TLS::Record_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS, policy);
+
+               const auto wire = Botan::hex_decode(
+                  "2e 76 cf 00 1b 9a c7 72 ae 54 cb f8 cc 7b 09 72"
+                  "9d 4a 6f 78 89 c9 3b ff 4e 62 a5 3f 4f 34 c4 fb");
+               result.require("parsing success", rl_server->copy_data(wire));
+
+               auto records = rl_server->next_record(nullptr);
+               result.require("produced no record", std::holds_alternative<TLS::BytesNeeded>(records));
+            }),
+
       CHECK("read multiple protected records from one datagram",
             [&](Test::Result& result) {
                auto cs_server = make_cipher_state(TLS::Connection_Side::Client);
