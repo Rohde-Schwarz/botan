@@ -143,6 +143,8 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
                if(!is_post_handshake_traffic) {
                   m_dtls_channel_companion->clear_resend_buffer();
                }
+
+               maybe_arm_dtls_acknowledgement_timer();
             }
 
             if(!is_handshake_complete()) {
@@ -531,6 +533,7 @@ void Channel_Impl_13::send_record(const PreparedHandshakeMessageFlight& flight) 
    }
 
    m_dtls_channel_companion->notify_sent_handshake_flight();
+   maybe_cancel_dtls_acknowledgement_timer();
    maybe_arm_dtls_retransmission_timer();
 
    // After the initial handshake message is sent, the record layer must
@@ -657,6 +660,43 @@ void Channel_Impl_13::maybe_arm_dtls_retransmission_timer(TimerGeneration genera
    };
 
    m_callbacks->tls_register_deferred_operation(next_timeout->count(), on_timer);
+}
+
+class AcknowledgementTimer : public std::enable_shared_from_this<AcknowledgementTimer> {
+   public:
+      explicit AcknowledgementTimer(std::shared_ptr<Channel_Impl> channel) :
+            m_channel(std::dynamic_pointer_cast<Channel_Impl_13>(std::move(channel))) {}
+
+      std::shared_ptr<Channel_Impl_13> channel() const { return m_channel.lock(); }
+
+   private:
+      std::weak_ptr<Channel_Impl_13> m_channel;
+};
+
+void Channel_Impl_13::maybe_arm_dtls_acknowledgement_timer() {
+   const auto ack_time = m_policy->dtls_initial_timeout() / 4;
+
+   if(!m_ack_timer) {
+      m_ack_timer = std::make_shared<AcknowledgementTimer>(shared_from_this());
+
+      m_callbacks->tls_register_deferred_operation(ack_time, [self = std::weak_ptr(m_ack_timer)] {
+         auto handle = self.lock();
+         if(!handle) {
+            return;
+         }
+
+         auto channel = handle->channel();
+         if(!channel) {
+            return;
+         }
+
+         channel->send_acknowledgements();
+      });
+   }
+}
+
+void Channel_Impl_13::maybe_cancel_dtls_acknowledgement_timer() {
+   m_ack_timer.reset();
 }
 
 void Channel_Impl_13::shutdown() {

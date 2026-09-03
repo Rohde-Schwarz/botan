@@ -22,6 +22,7 @@ namespace Botan::TLS {
 class Cipher_State;
 class Transcript_Hash_State;
 class DTLS_Channel_Companion;
+class AcknowledgementTimer;
 
 /**
  * Encapsulates the callbacks in the state machine described in RFC 8446 7.1,
@@ -301,6 +302,9 @@ class Channel_Impl_13 : public Channel_Impl,
 
       void maybe_arm_dtls_retransmission_timer(TimerGeneration generation_policy = TimerGeneration::Advance);
 
+      void maybe_arm_dtls_acknowledgement_timer();
+      void maybe_cancel_dtls_acknowledgement_timer();
+
       /**
        * Terminate the connection (on sending or receiving an error alert) and
        * clear secrets
@@ -356,6 +360,7 @@ class Channel_Impl_13 : public Channel_Impl,
       /* DTLS specific */
       std::unique_ptr<DTLS_Channel_Companion> m_dtls_channel_companion;  // NOLINT(*-non-private-member-*)
       uint64_t m_retransmission_timer_generation = 0;                    // NOLINT(*-non-private-member-*)
+      std::shared_ptr<AcknowledgementTimer> m_ack_timer;                 // NOLINT(*-non-private-member-*)
 
    private:
       /* callbacks */
