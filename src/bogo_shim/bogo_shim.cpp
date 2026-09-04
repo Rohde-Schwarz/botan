@@ -27,6 +27,7 @@
 #include <botan/tls_exceptn.h>
 #include <botan/tls_extensions.h>
 #include <botan/tls_external_psk.h>
+#include <botan/tls_magic.h>
 #include <botan/tls_messages.h>
 #include <botan/tls_policy.h>
 #include <botan/tls_server.h>
@@ -2194,7 +2195,8 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
       // bit early makes the retransmission happen.
       void fire_due_deferred_operations() {
          const uint64_t now_ms = tls_current_monotonic_clock_ms();
-         const uint64_t fudge_ms = std::min<uint64_t>(15, m_policy.dtls_initial_timeout() / 2);
+         const uint64_t fudge_ms =
+            std::min<uint64_t>(Botan::TLS::DTLS_RETRANSMISSION_TIMER_FUDGE, m_policy.dtls_initial_timeout() / 2);
 
          std::stable_sort(m_deferred_operations.begin(), m_deferred_operations.end());
 

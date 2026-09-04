@@ -11,6 +11,7 @@
 
 #include <botan/assert.h>
 #include <botan/tls_callbacks.h>
+#include <botan/tls_magic.h>
 #include <botan/tls_policy.h>
 #include <chrono>
 #include <optional>
@@ -40,7 +41,15 @@ class DTLS_Retransmission_Timer {
       /**
        * @returns true if the deadline was reached; false if the timer was never armed
        */
-      bool expired() const { return started() && now() >= m_next_deadline.value(); }
+      bool expired() const {
+         if(!started()) {
+            return false;
+         }
+
+         constexpr auto fudge_ms = std::chrono::milliseconds(DTLS_RETRANSMISSION_TIMER_FUDGE);
+         const auto ref = m_next_deadline.value() - std::min(fudge_ms, m_next_deadline.value());
+         return now() >= ref;
+      }
 
       /**
        * Disarm the timer and reset the retransmission counter. This is done
