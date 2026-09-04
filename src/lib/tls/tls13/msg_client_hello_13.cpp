@@ -255,6 +255,10 @@ Client_Hello_13::Client_Hello_13(const Policy& policy,
       m_data->extensions().add(new Application_Layer_Protocol_Notification(std::move(next_protocols)));
    }
 
+   if(flavor == TLS_Flavor::DTLS) {
+      m_data->extensions().add(new SRTP_Protection_Profiles(policy.srtp_profiles()));
+   }
+
 #if defined(BOTAN_HAS_TLS_12)
    if(offers_pre_tls_13) {
       m_data->extensions().add(new Renegotiation_Extension());
