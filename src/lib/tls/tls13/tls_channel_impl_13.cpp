@@ -547,7 +547,9 @@ void Channel_Impl_13::send_record(const PreparedHandshakeMessageFlight& flight) 
 }
 
 void Channel_Impl_13::send_acknowledgements() {
-   send_record(Record_Type::ACK, m_dtls_channel_companion->current_ack_record());
+   send_record(Record_Type::ACK,
+               m_dtls_channel_companion->current_ack_record(
+                  m_record_layer->record_payload_size_limit(policy(), m_cipher_state.get())));
 }
 
 void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {

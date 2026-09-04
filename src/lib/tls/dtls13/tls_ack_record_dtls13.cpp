@@ -58,20 +58,30 @@ ACKs::ACKs(std::span<const uint8_t> ack_record) {
    BOTAN_ASSERT_NOMSG(m_record_numbers.size() == length / record_number_size);
 }
 
-std::vector<uint8_t> ACKs::serialize() const {
+std::vector<uint8_t> ACKs::serialize(size_t max_plaintext_length) const {
    std::vector<uint8_t> result;
 
-   const auto ack_bytes = m_record_numbers.size() * record_number_size;
-   result.reserve(sizeof(uint16_t) /* length */ + ack_bytes);
+   BOTAN_ARG_CHECK(max_plaintext_length >= length_field_size + record_number_size,
+                   "max_plaintext_length has to allow accomodating at least one ACKed record");
+
+   const auto max_ack_records = (max_plaintext_length - length_field_size) / record_number_size;
+   BOTAN_DEBUG_ASSERT(max_ack_records > 0);
+
+   const auto acks_to_serialize = std::min<size_t>(m_record_numbers.size(), max_ack_records);
+
+   const auto ack_bytes = acks_to_serialize * record_number_size;
+   const auto total_bytes = length_field_size + ack_bytes;
+   result.reserve(total_bytes);
 
    const auto length = store_be(checked_cast_to<uint16_t>(ack_bytes));
    result.insert(result.end(), length.begin(), length.end());
-   for(const auto& record_number : m_record_numbers) {
+   for(const auto& record_number : std::span{m_record_numbers}.last(acks_to_serialize)) {
       auto one_ack = concat(store_be(record_number.epoch),  //
                             store_be(record_number.sequence_number));
       result.insert(result.end(), one_ack.begin(), one_ack.end());
    }
 
+   BOTAN_ASSERT_NOMSG(result.size() <= max_plaintext_length);
    return result;
 }
 
