@@ -45,7 +45,17 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
          m_ack_timer.reset();
       }
 
-      void clear_resend_buffer() override { m_record_layer->clear_resend_buffer(); }
+      bool protocol_version_committed() const override { return m_dtls_version_committed; }
+
+      void maybe_clear_resend_buffer() override {
+         if(m_dtls_version_committed) {
+            // If we're not sure that the peer is using DTLS 1.3, we must not
+            // clear the resend buffer as soon as we received any fragment of
+            // the peer's flight. If some fragment got lost, we can't ACK and
+            // therefore are forced to retransmit our entire previous flight.
+            m_record_layer->clear_resend_buffer();
+         }
+      }
 
       void clear_outstanding_acknowledgements() override { m_record_layer->clear_outstanding_acknowledgements(); }
 
