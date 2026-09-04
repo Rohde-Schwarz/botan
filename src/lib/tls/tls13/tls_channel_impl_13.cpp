@@ -97,7 +97,9 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
       }
 #endif
 
-      m_record_layer->copy_data(data);
+      const bool has_cryptographic_association =
+         m_cipher_state && m_cipher_state->current_read_epoch_number() > Epoch_Number::Unprotected;
+      m_record_layer->copy_data(data, has_cryptographic_association);
 
       while(true) {
          // RFC 8446 6.1

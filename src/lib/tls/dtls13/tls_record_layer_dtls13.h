@@ -44,11 +44,13 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
        * each individual datagram received from the peer.
        *
        * @param data_from_peer  A complete and single datagram from the peer
+       * @param has_cryptographic_association  Indicates whether the data was received
+       *                                       while the connection has key material.
        *
        * @returns false if the datagram got discarded due to some error
        *          (e.g., invalid formatting), true otherwise
        */
-      bool copy_data(std::span<const uint8_t> data_from_peer) override;
+      bool copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) override;
 
       ReadResult<Record_Content> next_record(Cipher_State* cipher_state = nullptr) override;
 

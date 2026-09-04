@@ -46,7 +46,7 @@ class TLS_Record_Layer final : public Record_Layer {
    public:
       explicit TLS_Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy);
 
-      bool copy_data(std::span<const uint8_t> data_from_peer) override;
+      bool copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) override;
       ReadResult<Record_Content> next_record(Cipher_State* cipher_state = nullptr) override;
       std::vector<MarshalledRecord> prepare_records(Record_Type type,
                                                     std::span<const uint8_t> payload,
@@ -88,7 +88,9 @@ TLS_Record_Layer::TLS_Record_Layer(Connection_Side side, std::shared_ptr<const P
                    /* sending_compat_mode = */ side == Connection_Side::Client,
                    /* receiving_compat_mode = */ true) {}
 
-bool TLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer) {
+bool TLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) {
+   BOTAN_UNUSED(has_cryptographic_association);
+
    while(!data_from_peer.empty()) {
       auto& record = [&]() -> Record_TLS& {
          if(m_incoming_records.empty() || m_incoming_records.back().complete()) {
