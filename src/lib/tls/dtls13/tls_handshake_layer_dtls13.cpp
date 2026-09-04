@@ -174,20 +174,13 @@ std::optional<Handshake_Message_13> DTLS_Handshake_Layer::next_message(const Pol
       return std::nullopt;
    }
 
-   try {
-      // Parsing may fail
-      auto msg =
-         parse_handshake_message(read_handshake_message_type(reassembled.header[0]), reassembled.payload, policy);
+   auto msg = parse_handshake_message(read_handshake_message_type(reassembled.header[0]), reassembled.payload, policy);
 
-      // Update the transcript hash and remove the reassembled message from the map in case of successful parsing
-      transcript_hash.update(reassembled.header, reassembled.payload);
-      m_current_read_message.erase(m_read_message_seq++);
-      return msg;
-   } catch(const std::exception&) {
-      // Something is wrong with the message, silently drop it
-      m_current_read_message.erase(m_read_message_seq);
-      return std::nullopt;
-   }
+   // Update the transcript hash and remove the reassembled message from the map in case of successful parsing
+   transcript_hash.update(reassembled.header, reassembled.payload);
+   m_current_read_message.erase(m_read_message_seq++);
+
+   return msg;
 }
 
 std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handshake_message(const Policy& policy) {
@@ -203,17 +196,10 @@ std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handsha
       return std::nullopt;
    }
 
-   try {
-      // Parsing may fail
-      auto msg = parse_post_handshake_message(read_handshake_message_type(reassembled.header[0]), reassembled.payload);
+   auto msg = parse_post_handshake_message(read_handshake_message_type(reassembled.header[0]), reassembled.payload);
 
-      m_current_read_message.erase(m_read_message_seq++);
-      return msg;
-   } catch(const std::exception&) {
-      // Something is wrong with the message, silently drop it
-      m_current_read_message.erase(m_read_message_seq);
-      return std::nullopt;
-   }
+   m_current_read_message.erase(m_read_message_seq++);
+   return msg;
 }
 
 namespace {
