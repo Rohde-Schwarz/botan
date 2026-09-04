@@ -47,7 +47,9 @@ class DTLS_Channel_Companion {
 
       virtual void notify_sent_handshake_flight() {}
 
-      virtual void clear_resend_buffer() {}
+      virtual bool protocol_version_committed() const { return false; }
+
+      virtual void maybe_clear_resend_buffer() {}
 
       virtual void clear_outstanding_acknowledgements() {}
 

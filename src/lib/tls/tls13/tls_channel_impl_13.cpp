@@ -143,7 +143,7 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
                const bool is_post_handshake_traffic =
                   record.epoch.has_value() && record.epoch.value() >= Epoch_Number::ApplicationTraffic_0;
                if(!is_post_handshake_traffic) {
-                  m_dtls_channel_companion->clear_resend_buffer();
+                  m_dtls_channel_companion->maybe_clear_resend_buffer();
                }
 
                maybe_arm_dtls_acknowledgement_timer();
@@ -170,6 +170,7 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
                   if(holds_any_of<Client_Hello_12_Shim,
                                   Client_Hello_13 /*, EndOfEarlyData,*/,
                                   Server_Hello_13,
+                                  Hello_Verify_Request,  // DTLS 1.3 -> 1.2 downgrade
                                   Hello_Retry_Request,
                                   Finished_13>(handshake_msg.value()) &&
                      m_handshake_layer->has_pending_data()) {
@@ -181,6 +182,7 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
                   if(is_downgrading()) {
                      // Downgrade to TLS 1.2 was detected. Stop everything we do and await being replaced by a 1.2 implementation.
+                     m_ack_timer.reset();
                      return 0;
                   } else if(m_downgrade_info != nullptr) {
                      // We received a TLS 1.3 error alert that could have been a TLS 1.2 warning alert.
@@ -680,7 +682,7 @@ class AcknowledgementTimer : public std::enable_shared_from_this<Acknowledgement
 void Channel_Impl_13::maybe_arm_dtls_acknowledgement_timer() {
    const auto ack_time = m_policy->dtls_initial_timeout() / 4;
 
-   if(!m_ack_timer) {
+   if(!m_ack_timer && m_dtls_channel_companion->protocol_version_committed()) {
       m_ack_timer = std::make_shared<AcknowledgementTimer>(shared_from_this());
 
       m_callbacks->tls_register_deferred_operation(ack_time, [self = std::weak_ptr(m_ack_timer)] {

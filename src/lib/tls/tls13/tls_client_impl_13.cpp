@@ -43,6 +43,13 @@ std::shared_ptr<Client_Impl_13> Client_Impl_13::create(const std::shared_ptr<Cal
    }
 #endif
 
+   if(!self->expects_downgrade()) {
+      // If we don't expect to downgrade, we can already enable all DTLS-only
+      // features (e.g. record ACKing), because we know that we won't ever
+      // talk to a legacy peer and succeed a handshake.
+      self->m_dtls_channel_companion->notify_protocol_version_committed();
+   }
+
    if(auto session = self->find_session_for_resumption()) {
       if(session->session.version().is_tls_13_or_later()) {
          self->m_handshake->resumed_session = std::move(session);

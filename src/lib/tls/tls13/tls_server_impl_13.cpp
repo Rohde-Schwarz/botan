@@ -36,6 +36,13 @@ std::shared_ptr<Server_Impl_13> Server_Impl_13::create(const std::shared_ptr<Cal
    }
 #endif
 
+   if(!self->expects_downgrade()) {
+      // If we don't expect to downgrade, we can already enable all DTLS-only
+      // features (e.g. record ACKing), because we know that we won't ever
+      // talk to a legacy peer and succeed a handshake.
+      self->m_dtls_channel_companion->notify_protocol_version_committed();
+   }
+
    self->m_handshake->transitions.set_expected_next(Handshake_Type::ClientHello);
 
    return self;
