@@ -166,6 +166,7 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"Client: No certificates sent by server", ":DECODE_ERROR:"},
       {"Decoded polynomial coefficients out of range", ":BAD_ECPOINT:"},
       {"Deprotected DTLS record had unexpected content type: 42", ":UNEXPECTED_RECORD:"},
+      {"DTLS record type had unexpected value: 23", ":UNEXPECTED_RECORD:"},
       {"Non-PSK Client Hello did not contain supported_groups and signature_algorithms extensions",
        ":NO_SHARED_GROUP:"},
       {"No certificates sent by server", ":PEER_DID_NOT_RETURN_A_CERTIFICATE:"},

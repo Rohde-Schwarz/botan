@@ -93,31 +93,31 @@ ProtectedRecord_DTLS read_protected_record(BufferSlicer& bs, size_t incoming_rec
 DTLS_Record_Layer::DTLS_Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy) :
       Record_Layer(side, std::move(policy), false, true) {}
 
-bool DTLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer) {
+bool DTLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) {
    try {
       return read_datagram(data_from_peer);
-   } catch(const std::exception& ex) {
-      std::cout << "ERROR: " << ex.what() << std::endl;
-
+   } catch(const Botan::Exception&) {
       // RFC 9147 Section 4.5.2
       //    Unlike TLS, DTLS is resilient in the face of invalid records
       //    (e.g., invalid formatting, length, MAC, etc.). In general,
       //    invalid records SHOULD be silently discarded, thus preserving the
       //    association [...].
       //
-      // In this implementation, every throw in `read_datagram` stems from
-      // operations on data_from_peer, which is *unauthenticated*. Therefore,
-      // every exception here results in the silent rejection of the incoming
-      // datagram.
+      // If we didn't establish a cryptographic association yet, there is
+      // nothing to preserve in the sense of the RFC and we propagate errors.
+      // Otherwise, we silently discard all invalid records (causing exceptions
+      // in read_datagram()) before even trying to deprotect them.
       //
-      // Exceptions on authenticated plaintexts (i.e. _after_ successful
-      // deprotection by the AEAD) result in an error/alert and typically
-      // the termination of the DTLS association. See `next_record` and
-      // `deprotect_record`.
-      BOTAN_UNUSED(ex);
-   }
+      // Exceptions on deprotected records result in an error/alert and
+      // typically the termination of the DTLS association. See `next_record`
+      // and `deprotect_record`.
 
-   return false;
+      if(!has_cryptographic_association) {
+         throw;
+      }
+
+      return false;
+   }
 }
 
 bool DTLS_Record_Layer::read_datagram(std::span<const uint8_t> datagram) {
