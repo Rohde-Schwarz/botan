@@ -77,8 +77,8 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
          return m_retransmission_timer.next_timeout();
       }
 
-      std::vector<uint8_t> current_ack_record() const override {
-         return m_record_layer->acknowledgements().serialize();
+      std::vector<uint8_t> current_ack_record(size_t max_plaintext_length) const override {
+         return m_record_layer->acknowledgements().serialize(max_plaintext_length);
       }
 
       void process_acknowledgements(Cipher_State* cipher_state, std::span<const uint8_t> ack_record) override {

@@ -58,7 +58,8 @@ class DTLS_Channel_Companion {
 
       virtual std::optional<std::chrono::milliseconds> next_retransmission_timeout() const { return std::nullopt; }
 
-      virtual std::vector<uint8_t> current_ack_record() const {
+      virtual std::vector<uint8_t> current_ack_record(size_t max_plaintext_length) const {
+         BOTAN_UNUSED(max_plaintext_length);
          throw TLS_Exception(AlertType::InternalError, "Requested an ACK record despite not being DTLS");
       }
 

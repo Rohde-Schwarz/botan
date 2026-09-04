@@ -18,7 +18,7 @@ class ACKs {
       explicit ACKs(std::vector<RecordNumber> record_numbers);
       explicit ACKs(std::span<const uint8_t> ack_record);
 
-      std::vector<uint8_t> serialize() const;
+      std::vector<uint8_t> serialize(size_t max_plaintext_length) const;
 
       const std::vector<RecordNumber>& record_numbers() const { return m_record_numbers; }
 
