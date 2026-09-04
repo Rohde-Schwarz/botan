@@ -20,12 +20,14 @@
 #include <botan/mem_ops.h>
 #include <botan/ocsp.h>
 #include <botan/pkcs8.h>
+#include <botan/system_rng.h>
 #include <botan/tls_algos.h>
 #include <botan/tls_callbacks.h>
 #include <botan/tls_client.h>
 #include <botan/tls_exceptn.h>
 #include <botan/tls_extensions.h>
 #include <botan/tls_external_psk.h>
+#include <botan/tls_magic.h>
 #include <botan/tls_messages.h>
 #include <botan/tls_policy.h>
 #include <botan/tls_server.h>
@@ -130,6 +132,7 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"Certificate usage constraints do not allow signing", ":KEY_USAGE_BIT_INCORRECT:"},
       {"Can't agree on a ciphersuite with client", ":NO_SHARED_CIPHER:"},
       {"Can't interleave application and handshake data", ":UNEXPECTED_RECORD:"},
+      {"Unexpected new DTLS handshake message", ":UNEXPECTED_RECORD:"},
       {"Certificate chain exceeds policy specified maximum size", ":EXCESSIVE_MESSAGE_SIZE:"},
       {"Certificate key type did not match ciphersuite", ":WRONG_CERTIFICATE_TYPE:"},
       {"Certificate usage constraints do not allow this ciphersuite", ":KEY_USAGE_BIT_INCORRECT:"},
@@ -163,6 +166,8 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"No shared TLS version based on supported versions extension", ":UNSUPPORTED_PROTOCOL:"},
       {"Client: No certificates sent by server", ":DECODE_ERROR:"},
       {"Decoded polynomial coefficients out of range", ":BAD_ECPOINT:"},
+      {"Deprotected DTLS record had unexpected content type: 42", ":UNEXPECTED_RECORD:"},
+      {"Received DTLSPlaintext with unexpected content type: 23", ":UNEXPECTED_RECORD:"},
       {"Non-PSK Client Hello did not contain supported_groups and signature_algorithms extensions",
        ":NO_SHARED_GROUP:"},
       {"No certificates sent by server", ":PEER_DID_NOT_RETURN_A_CERTIFICATE:"},
@@ -170,6 +175,7 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"Not enough PSK binders", ":PSK_IDENTITY_BINDER_COUNT_MISMATCH:"},
       {"Counterparty sent inconsistent key and sig types", ":WRONG_SIGNATURE_TYPE:"},
       {"Downgrade attack detected", ":TLS13_DOWNGRADE:"},
+      {"DTLS handshake timed out: maximum retransmissions exceeded", ":READ_TIMEOUT_EXPIRED:"},
       {"Empty ALPN protocol not allowed", ":PARSE_TLSEXT:"},
       {"Empty PSK binders list", ":DECODE_ERROR: "},
       {"Encoding error: Cannot encode PSS string, output length too small", ":NO_COMMON_SIGNATURE_ALGORITHMS:"},
@@ -205,6 +211,7 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"Invalid SessionTicket: Extra bytes at end of message", ":DECODE_ERROR:"},
       {"Invalid authentication tag: ChaCha20Poly1305 tag check failed", ":DECRYPTION_FAILED_OR_BAD_RECORD_MAC:"},
       {"Invalid authentication tag: GCM tag check failed", ":DECRYPTION_FAILED_OR_BAD_RECORD_MAC:"},
+      {"Invalid ECDH public key encoding", ":BAD_ECPOINT:"},
       {"Invalid encapsulated key length", ":BAD_ECPOINT:"},
       {"Invalid handshake message type", ":UNEXPECTED_RECORD:"},
       {"Invalid hybrid KEM ciphertext", ":BAD_ECPOINT:"},
@@ -228,11 +235,14 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"PSK and ciphersuite selected by server are not compatible", ":OLD_SESSION_PRF_HASH_MISMATCH:"},
       {"Received an unexpectedly non-empty Certificate_Status_Request", ":DECODE_ERROR:"},
       {"Received a record that exceeds maximum size", ":ENCRYPTED_LENGTH_TOO_LONG:"},
-      {"Received an encrypted record that exceeds maximum size", ":ENCRYPTED_LENGTH_TOO_LONG:"},
+      {"Received a protected record that exceeds maximum size", ":ENCRYPTED_LENGTH_TOO_LONG:"},
       {"received an illegal handshake message", ":UNEXPECTED_MESSAGE:"},
       {"Received a legacy Client Hello", ":UNSUPPORTED_PROTOCOL:"},
+      {"Received an unsupported Client Hello", ":UNSUPPORTED_PROTOCOL:"},
       {"Received an unexpected legacy Server Hello", ":UNSUPPORTED_PROTOCOL:"},
+      {"Received an unsupported Server Hello", ":UNSUPPORTED_PROTOCOL:"},
       {"Received application data after connection closure", ":APPLICATION_DATA_ON_SHUTDOWN:"},
+      {"Received DTLSPlaintext with empty payload", ":UNEXPECTED_RECORD:"},
       {"Received handshake data after connection closure", ":NO_RENEGOTIATION:"},
       {"Received multiple key share entries for the same group", ":DUPLICATE_KEY_SHARE:"},
       {"Received unexpected record version in initial record", ":WRONG_VERSION_NUMBER:"},
@@ -273,8 +283,8 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"Server selected a key exchange group we didn't offer.", ":WRONG_CURVE:"},
       {"TLS 1.3 Server Hello selected a different version", ":SECOND_SERVERHELLO_VERSION_MISMATCH:"},
       {"TLS signature extension did not allow for RSA_PSS_SHA256 signature", ":WRONG_SIGNATURE_TYPE:"},
+      {"Truncated DTLS handshake fragment received", ":BAD_HANDSHAKE_RECORD:"},
       {"Version downgrade received after Hello Retry", ":SECOND_SERVERHELLO_VERSION_MISMATCH:"},
-      {"protected change cipher spec received", ":UNEXPECTED_RECORD:"},
       {"Server sent an unsupported extension", ":UNEXPECTED_EXTENSION:"},
       {"Unsupported extension found in Server Hello", ":UNEXPECTED_EXTENSION:"},
       {"Unexpected extension received", ":UNEXPECTED_EXTENSION:"},
@@ -292,6 +302,7 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"TLS plaintext record is larger than allowed maximum", ":DATA_LENGTH_TOO_LONG:"},
       {"Received an encrypted record that exceeds maximum plaintext size", ":DATA_LENGTH_TOO_LONG:"},
       {"TLS record type had unexpected value", ":UNEXPECTED_RECORD:"},
+      {"protected TLS record type had unexpected value", ":UNEXPECTED_RECORD:"},
       {"TLS record version had unexpected value", ":WRONG_VERSION_NUMBER:"},
       {"Test requires rejecting cert", ":CERTIFICATE_VERIFY_FAILED:"},
       {"Too many PSK binders", ":PSK_IDENTITY_BINDER_COUNT_MISMATCH:"},
@@ -1165,7 +1176,7 @@ class Shim_Policy final : public Botan::TLS::Policy {
             if(!m_args.flag_set("server")) {
                schemes.emplace_back(Botan::TLS::Signature_Scheme::RSA_PKCS1_SHA256);
                schemes.emplace_back(Botan::TLS::Signature_Scheme::RSA_PSS_SHA256);
-               schemes.emplace_back(Botan::TLS::Signature_Scheme::ECDSA_SHA256);
+               schemes.emplace_back(Botan::TLS::Signature_Scheme::ECDSA_SECP256R1_TLS13_SHA256);
             }
 
             return schemes;
@@ -1347,6 +1358,11 @@ class Shim_Policy final : public Botan::TLS::Policy {
                 allow_version(Botan::TLS::Protocol_Version::DTLS_V12);
       }
 
+      bool allow_dtls13() const override {
+         return m_args.flag_set("dtls") && !m_args.flag_set("no-tls13") &&
+                allow_version(Botan::TLS::Protocol_Version::DTLS_V13);
+      }
+
       //Botan::TLS::Group_Params default_dh_group() const override;
 
       //size_t minimum_dh_group_size() const override;
@@ -1412,9 +1428,11 @@ class Shim_Policy final : public Botan::TLS::Policy {
 
       size_t dtls_default_mtu() const override { return m_args.get_int_opt_or_else("mtu", 1500); }
 
-      //size_t dtls_initial_timeout() const override;
-
-      //size_t dtls_maximum_timeout() const override;
+      size_t dtls_initial_timeout() const override {
+         // BoGo's default expectation is 400ms; tests that override pass
+         // -initial-timeout-duration-ms (typically 250ms for the Short variant).
+         return m_args.get_int_opt_or_else("initial-timeout-duration-ms", 400);
+      }
 
       bool abort_connection_on_undesired_renegotiation() const override {
          return !m_args.flag_set("renegotiate-ignore");
@@ -2147,6 +2165,51 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
          return g_now + m_clock_skew;
       }
 
+      // The DTLS retransmit timer reads this. BoGo's AdvanceClock opcode ('T')
+      // bumps the virtual clock forward so the runner can fire timeouts
+      // deterministically without real-time waits.
+      uint64_t tls_current_monotonic_clock_ms() override { return m_dtls_timer_ns / 1'000'000; }
+
+      void advance_dtls_timer_ns(uint64_t ns) { m_dtls_timer_ns += ns; }
+
+      // A DTLS server requires a non-empty peer network identity to bind the
+      // HelloVerifyRequest cookie to (RFC 6347 4.2.1). BoGo drives each test from
+      // a single peer, so a constant identity is sufficient; without this the
+      // cookie path throws and every DTLS server test fails.
+      std::string tls_peer_network_identity() override { return "bogo-shim-peer"; }
+
+      // Botan registers DTLS retransmission timers here. They are only queued:
+      // the runner must not see packets between AdvanceClock ('T') and its 't'
+      // ACK, so ops are invoked from fire_due_deferred_operations() after the
+      // ACK, never from this callback (also not for a zero delay).
+      void tls_register_deferred_operation(uint64_t monotonic_delay_ms, std::function<void()> op) override {
+         const uint64_t deadline_ms = tls_current_monotonic_clock_ms() + monotonic_delay_ms;
+         m_deferred_operations.emplace_back(Deferred_Operation{deadline_ms, std::move(op)});
+      }
+
+      // Invoke every queued operation whose deadline is within the fudge
+      // interval of the current virtual clock time, earliest first. BoGo's
+      // DTLS-Retransmit-Fudge test advances the clock to timeout-10ms and
+      // expects a retransmit; the library's next_retransmission_timeout()
+      // already treats a <=15ms remainder as expired, so firing the op a
+      // bit early makes the retransmission happen.
+      void fire_due_deferred_operations() {
+         const uint64_t now_ms = tls_current_monotonic_clock_ms();
+         const uint64_t fudge_ms =
+            std::min<uint64_t>(Botan::TLS::DTLS_RETRANSMISSION_TIMER_FUDGE, m_policy.dtls_initial_timeout() / 2);
+
+         std::stable_sort(m_deferred_operations.begin(), m_deferred_operations.end());
+
+         while(!m_deferred_operations.empty() && m_deferred_operations.front().deadline_ms <= now_ms + fudge_ms) {
+            // Pop the operation from the queue only, then invoke it. op() might
+            // throw an exception or register new deferred operations. Both of
+            // which must happen only after m_deferred_operations got updated.
+            auto op = std::move(m_deferred_operations.front().op);
+            m_deferred_operations.erase(m_deferred_operations.begin());
+            op();
+         }
+      }
+
       void tls_inspect_handshake_msg(const Botan::TLS::Handshake_Message& msg) override {
          if(msg.type() == Botan::TLS::Handshake_Type::HelloRetryRequest) {
             m_hello_retry_request = true;
@@ -2154,6 +2217,15 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
       }
 
    private:
+      struct Deferred_Operation {
+            uint64_t deadline_ms;
+            std::function<void()> op;
+
+            friend auto operator<=>(const Deferred_Operation& lhs, const Deferred_Operation& rhs) {
+               return lhs.deadline_ms <=> rhs.deadline_ms;
+            }
+      };
+
       Botan::TLS::Channel* m_channel;
       const Shim_Arguments& m_args;
       Shim_Policy& m_policy;
@@ -2165,6 +2237,10 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
       bool m_got_close;
       bool m_hello_retry_request;
       std::chrono::seconds m_clock_skew;
+      // Virtual clock for the DTLS retransmit timer. Tracked in nanoseconds
+      // (BoGo's wire unit) to avoid rounding errors
+      uint64_t m_dtls_timer_ns = 0;
+      std::vector<Deferred_Operation> m_deferred_operations;
 };
 
 }  // namespace
@@ -2183,7 +2259,7 @@ int main(int /*argc*/, char* argv[]) {
       const bool is_datagram = args->flag_set("dtls");
       const size_t buf_size = args->get_int_opt_or_else("read-size", 18 * 1024);
 
-      auto rng = std::make_shared<Botan::ChaCha_RNG>(Botan::secure_vector<uint8_t>(64));
+      auto rng = std::make_shared<Botan::ChaCha_RNG>(Botan::system_rng().random_vec(64));
       auto creds = std::make_shared<Shim_Credentials>(*args);
       auto session_manager = [&]() -> std::shared_ptr<Botan::TLS::Session_Manager> {
          if(args->flag_set("no-ticket") || args->flag_set("on-resume-no-ticket")) {
@@ -2270,18 +2346,40 @@ int main(int /*argc*/, char* argv[]) {
 
                      chan->received_data(buf.data(), packet_len);
                   } else if(opcode == 'T') {
-                     const uint8_t timeout_ack = 't';
-
+                     // AdvanceClock: bump the virtual DTLS timer, ACK, and
+                     // THEN fire any deferred retransmission ops. Packets
+                     // emitted between 'T' and the 't' ACK are treated by the
+                     // runner as unexpected; retransmits must arrive only
+                     // after the ACK, where ReadRetransmit picks them up.
                      uint8_t timeout_bytes[8];
                      socket.read_exactly(timeout_bytes, sizeof(timeout_bytes));
-
                      const uint64_t nsec = Botan::load_be<uint64_t>(timeout_bytes, 0);
-
-                     shim_log("Timeout nsec " + std::to_string(nsec));
-
-                     // FIXME handle this!
-
-                     socket.write(&timeout_ack, 1);  // ack it anyway
+                     shim_log("AdvanceClock " + std::to_string(nsec) + "ns");
+                     callbacks->advance_dtls_timer_ns(nsec);
+                     const uint8_t timeout_ack = 't';
+                     socket.write(&timeout_ack, 1);
+                     callbacks->fire_due_deferred_operations();
+                  } else if(opcode == 'E') {
+                     // ExpectNextTimeout: runner-side self-check that the next
+                     // timeout matches its model. Botan doesn't expose the
+                     // pending timer to the application; consume the bytes and
+                     // skip. AdvanceClock failures (unexpected packets / no
+                     // packets) still catch incorrect timing.
+                     uint8_t bytes[8];
+                     socket.read_exactly(bytes, sizeof(bytes));
+                  } else if(opcode == 'M') {
+                     // SetPeerMTU: Botan's MTU is fixed at handshake
+                     // construction; consume and ignore.
+                     uint8_t bytes[4];
+                     socket.read_exactly(bytes, sizeof(bytes));
+                     shim_log(Botan::fmt("SetPeerMTU({}), currently ignored!", Botan::load_be<uint32_t>(bytes)));
+                  } else if(opcode == 'U') {
+                     // SetPeerTimeout: not yet plumbed through Botan's IO
+                     // (no API to override the running m_next_timeout).
+                     // Consume and ignore; SetTimeout-* tests will fail.
+                     uint8_t bytes[4];
+                     socket.read_exactly(bytes, sizeof(bytes));
+                     shim_log(Botan::fmt("SetPeerTimeout({}), currently ignored!", Botan::load_be<uint32_t>(bytes)));
                   } else {
                      shim_exit_with_error("Unknown opcode " + std::to_string(opcode));
                   }

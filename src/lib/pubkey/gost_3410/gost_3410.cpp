@@ -9,6 +9,7 @@
 
 #include <botan/gost_3410.h>
 
+#include <botan/assert.h>
 #include <botan/ber_dec.h>
 #include <botan/der_enc.h>
 #include <botan/internal/ec_key_data.h>
@@ -25,6 +26,84 @@ EC_Group check_domain(EC_Group domain) {
       throw Decoding_Error(fmt("GOST-34.10-2012 is not defined for parameters of size {}", p_bits));
    }
    return domain;
+}
+
+bool is_gost_3410_key_oid(const OID& oid) {
+   return oid == OID::from_string("GOST-34.10") || oid == OID::from_string("GOST-34.10-2012-256") ||
+          oid == OID::from_string("GOST-34.10-2012-512");
+}
+
+const AlgorithmIdentifier& assert_gost_algorithm_identifier(const AlgorithmIdentifier& alg_id) {
+   if(!is_gost_3410_key_oid(alg_id.oid())) {
+      throw Decoding_Error(
+         fmt("Unexpected AlgorithmIdentifier OID {} in association with GOST 34.10 key", alg_id.oid()));
+   }
+
+   return alg_id;  // NOLINT(*-return-const-ref-from-parameter)
+}
+
+OID decode_gost_key_parameters(const AlgorithmIdentifier& alg_id) {
+   OID ecc_param_id;
+
+   auto outer = BER_Decoder(alg_id.parameters(), BER_Decoder::Limits::DER());
+   auto params = outer.start_sequence();
+   params.decode(ecc_param_id);
+
+   if(params.more_items()) {
+      OID digest_param_id;
+      params.decode(digest_param_id);
+
+      if(alg_id.oid() == OID::from_string("GOST-34.10-2012-256") &&
+         digest_param_id != OID::from_string("Streebog-256")) {
+         throw Decoding_Error("Unexpected digest parameters for GOST-34.10-2012-256 public key");
+      }
+
+      if(alg_id.oid() == OID::from_string("GOST-34.10-2012-512") &&
+         digest_param_id != OID::from_string("Streebog-512")) {
+         throw Decoding_Error("Unexpected digest parameters for GOST-34.10-2012-512 public key");
+      }
+   }
+
+   if(params.more_items()) {
+      if(alg_id.oid() != OID::from_string("GOST-34.10")) {
+         throw Decoding_Error("Unexpected extra parameters for GOST-34.10-2012 public key");
+      }
+
+      OID encryption_param_id;
+      params.decode(encryption_param_id);
+   }
+
+   params.verify_end();
+   outer.verify_end();
+
+   return ecc_param_id;
+}
+
+void check_gost_key_oid_matches_group(const OID& key_oid, const EC_Group& group) {
+   if(key_oid == OID::from_string("GOST-34.10-2012-256") && group.get_p_bits() != 256) {
+      throw Decoding_Error("GOST-34.10-2012-256 public key has unexpected parameters");
+   }
+
+   if(key_oid == OID::from_string("GOST-34.10-2012-512") && group.get_p_bits() != 512) {
+      throw Decoding_Error("GOST-34.10-2012-512 public key has unexpected parameters");
+   }
+}
+
+AlgorithmIdentifier gost_private_key_alg_id(const AlgorithmIdentifier& alg_id) {
+   assert_gost_algorithm_identifier(alg_id);
+
+   OID ecc_param_id;
+   BER_Decoder decoder(alg_id.parameters(), BER_Decoder::Limits::DER());
+   if(decoder.peek_next_object().type_tag() == ASN1_Type::ObjectId) {
+      decoder.decode(ecc_param_id).verify_end();
+   } else {
+      ecc_param_id = decode_gost_key_parameters(alg_id);
+   }
+
+   auto group = check_domain(EC_Group::from_OID(ecc_param_id));
+   check_gost_key_oid_matches_group(alg_id.oid(), group);
+
+   return AlgorithmIdentifier(alg_id.oid(), group.DER_encode());
 }
 
 }  // namespace
@@ -71,17 +150,12 @@ AlgorithmIdentifier GOST_3410_PublicKey::algorithm_identifier() const {
 }
 
 GOST_3410_PublicKey::GOST_3410_PublicKey(const AlgorithmIdentifier& alg_id, std::span<const uint8_t> key_bits) {
-   OID ecc_param_id;
+   assert_gost_algorithm_identifier(alg_id);
 
-   // The parameters also includes hash and cipher OIDs
-   BER_Decoder(alg_id.parameters(), BER_Decoder::Limits::DER())
-      .start_sequence()
-      .decode(ecc_param_id)
-      .discard_remaining()
-      .end_cons()
-      .verify_end();
+   const OID ecc_param_id = decode_gost_key_parameters(alg_id);
 
    auto group = check_domain(EC_Group::from_OID(ecc_param_id));
+   check_gost_key_oid_matches_group(alg_id.oid(), group);
 
    std::vector<uint8_t> bits;
    BER_Decoder(key_bits, BER_Decoder::Limits::DER()).decode(bits, ASN1_Type::OctetString).verify_end();
@@ -111,6 +185,9 @@ GOST_3410_PrivateKey::GOST_3410_PrivateKey(RandomNumberGenerator& rng, EC_Group 
 GOST_3410_PrivateKey::GOST_3410_PrivateKey(RandomNumberGenerator& rng, const EC_Group& domain, const BigInt& x) :
       EC_PrivateKey(rng, check_domain(domain), x) {}
 
+GOST_3410_PrivateKey::GOST_3410_PrivateKey(const AlgorithmIdentifier& alg_id, std::span<const uint8_t> key_bits) :
+      EC_PrivateKey(gost_private_key_alg_id(alg_id), key_bits) {}
+
 std::unique_ptr<Public_Key> GOST_3410_PrivateKey::public_key() const {
    return std::make_unique<GOST_3410_PublicKey>(domain(), _public_ec_point());
 }
@@ -133,8 +210,8 @@ EC_Scalar gost_msg_to_scalar(const EC_Group& group, std::span<const uint8_t> msg
 */
 class GOST_3410_Signature_Operation final : public PK_Ops::Signature_with_Hash {
    public:
-      GOST_3410_Signature_Operation(const GOST_3410_PrivateKey& gost_3410, std::string_view hash_fn) :
-            PK_Ops::Signature_with_Hash(hash_fn), m_group(gost_3410.domain()), m_x(gost_3410._private_key()) {}
+      GOST_3410_Signature_Operation(const GOST_3410_PrivateKey& gost_3410, const PK_Signature_Options& options) :
+            PK_Ops::Signature_with_Hash(options), m_group(gost_3410.domain()), m_x(gost_3410._private_key()) {}
 
       size_t signature_length() const override { return 2 * m_group.get_order_bytes(); }
 
@@ -184,20 +261,20 @@ std::vector<uint8_t> GOST_3410_Signature_Operation::raw_sign(std::span<const uin
    return EC_Scalar::serialize_pair(s, r);
 }
 
-std::string gost_hash_from_algid(const AlgorithmIdentifier& alg_id) {
+PK_Signature_Options gost_hash_from_algid(const AlgorithmIdentifier& alg_id) {
    if(!alg_id.parameters_are_empty()) {
       throw Decoding_Error("Unexpected non-empty AlgorithmIdentifier parameters for GOST 34.10 signature");
    }
 
    if(const auto name = alg_id.oid().registered_name()) {
       if(*name == "GOST-34.10/GOST-R-34.11-94") {
-         return "GOST-R-34.11-94";
+         return PK_Signature_Options().with_hash("GOST-R-34.11-94");
       } else if(*name == "GOST-34.10-2012-256/Streebog-256") {
-         return "Streebog-256";
+         return PK_Signature_Options().with_hash("Streebog-256");
       } else if(*name == "GOST-34.10-2012-512/Streebog-512") {
-         return "Streebog-512";
+         return PK_Signature_Options().with_hash("Streebog-512");
       } else if(*name == "GOST-34.10-2012-256/SHA-256") {
-         return "SHA-256";
+         return PK_Signature_Options().with_hash("SHA-256");
       } else {
          throw Decoding_Error(fmt("Unknown OID ({}, {}) for GOST 34.10 signatures", alg_id.oid(), *name));
       }
@@ -211,8 +288,8 @@ std::string gost_hash_from_algid(const AlgorithmIdentifier& alg_id) {
 */
 class GOST_3410_Verification_Operation final : public PK_Ops::Verification_with_Hash {
    public:
-      GOST_3410_Verification_Operation(const GOST_3410_PublicKey& gost, std::string_view padding) :
-            PK_Ops::Verification_with_Hash(padding), m_group(gost.domain()), m_gy_mul(gost._public_ec_point()) {}
+      GOST_3410_Verification_Operation(const GOST_3410_PublicKey& gost, const PK_Signature_Options& options) :
+            PK_Ops::Verification_with_Hash(options), m_group(gost.domain()), m_gy_mul(gost._public_ec_point()) {}
 
       GOST_3410_Verification_Operation(const GOST_3410_PublicKey& gost, const AlgorithmIdentifier& alg_id) :
             PK_Ops::Verification_with_Hash(gost_hash_from_algid(alg_id)),
@@ -249,12 +326,12 @@ std::unique_ptr<Private_Key> GOST_3410_PublicKey::generate_another(RandomNumberG
    return std::make_unique<GOST_3410_PrivateKey>(rng, domain());
 }
 
-std::unique_ptr<PK_Ops::Verification> GOST_3410_PublicKey::create_verification_op(std::string_view params,
-                                                                                  std::string_view provider) const {
-   if(provider == "base" || provider.empty()) {
-      return std::make_unique<GOST_3410_Verification_Operation>(*this, params);
+std::unique_ptr<PK_Ops::Verification> GOST_3410_PublicKey::_create_verification_op(
+   const PK_Signature_Options& options) const {
+   if(!options.using_provider()) {
+      return std::make_unique<GOST_3410_Verification_Operation>(*this, options);
    }
-   throw Provider_Not_Found(algo_name(), provider);
+   throw Provider_Not_Found(algo_name(), options.provider().value());
 }
 
 std::unique_ptr<PK_Ops::Verification> GOST_3410_PublicKey::create_x509_verification_op(
@@ -266,13 +343,14 @@ std::unique_ptr<PK_Ops::Verification> GOST_3410_PublicKey::create_x509_verificat
    throw Provider_Not_Found(algo_name(), provider);
 }
 
-std::unique_ptr<PK_Ops::Signature> GOST_3410_PrivateKey::create_signature_op(RandomNumberGenerator& /*rng*/,
-                                                                             std::string_view params,
-                                                                             std::string_view provider) const {
-   if(provider == "base" || provider.empty()) {
-      return std::make_unique<GOST_3410_Signature_Operation>(*this, params);
+std::unique_ptr<PK_Ops::Signature> GOST_3410_PrivateKey::_create_signature_op(
+   RandomNumberGenerator& rng, const PK_Signature_Options& options) const {
+   BOTAN_UNUSED(rng);
+
+   if(!options.using_provider()) {
+      return std::make_unique<GOST_3410_Signature_Operation>(*this, options);
    }
-   throw Provider_Not_Found(algo_name(), provider);
+   throw Provider_Not_Found(algo_name(), options.provider().value());
 }
 
 }  // namespace Botan

@@ -42,7 +42,8 @@ PSKImporter::PSKImporter(std::span<const uint8_t> key,
 }
 
 ExternalPSK PSKImporter::derive_imported_psk(Protocol_Version version, std::string_view target_hash) const {
-   BOTAN_ARG_CHECK(version == Protocol_Version::TLS_V13, "PSK importer is only defined for TLS 1.3");
+   BOTAN_ARG_CHECK(version == Protocol_Version::TLS_V13 || version == Protocol_Version::DTLS_V13,
+                   "PSK importer is only defined for (D)TLS 1.3");
    BOTAN_ARG_CHECK(target_hash == "SHA-256" || target_hash == "SHA-384",
                    "PSK importer target hash must be SHA-256 or SHA-384");
 

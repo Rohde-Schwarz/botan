@@ -1,14 +1,100 @@
 Release Notes
 ========================================
 
-Version 3.13.0, Not Yet Released
+Version 3.14.0, Not Yet Released
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* Add new type ``PK_Signature_Options`` which allows precisely controlling how
+  signatures are created and verified. (GH #5849)
+
+* By default, ECDSA signatures are now randomized rather than deterministic even
+  when RFC 6979 support is available at build time. Deterministic signatures can
+  be requested using the API ``PK_Signature_Options::with_deterministic_signature``
+  or by appending ",Deterministic" to the normal hash specifier string. (GH #5849)
+
+* The Python binding now can adapt itself to any version of Botan3. (GH #5851)
+
+* Add support for parallel hash function invocations, including AVX2/AVX512
+  implementations of SHA-256, SHA-512, and SHAKE (GH #5865 #5867 #5869 #5871
+  #5872 #5873)
+
+* Optimize SLH-DSA, XMSS, HSS-LSM, FrodoKEM, and ML-KEM using parallel hash
+  function execution. (GH #5866 #5868 #5870 #5876 #5878)
+
+* In TLS 1.3 send KeyUpdate requests when the number of records sent or
+  received approaches a policy-set limit. (GH #5877)
+
+* Modify the bitsliced AES implementation to use the native word size of the
+  processor, instead of always 32 bits. (GH #5826)
+
+* Enable support for NEON/ARMv8 codepaths on Windows aarch64 (GH #5863)
+
+* Optimize multiprecision integer division operations, and convert all
+  such divisions to be constant time with respect to their inputs.
+  (GH #5849 #5880 #5883 #5884)
+
+* Optimize base58 encoding and decoding (GH #5858)
+
+* ``Jitter_RNG`` now accepts the compliance mode and the oversampling rate which
+  should be used by the jitterentropy library. AIS 20/31 NTG.1 compliance can be
+  requested with ``Jitter_RNG::Mode::NTG1`` if jitterentropy 3.7.0 or later is
+  used. Note that ``Jitter_RNG`` no longer forces the FIPS mode of jitterentropy
+  by default; use ``Jitter_RNG::Mode::FIPS`` to retain the previous behavior.
+  (GH #5832)
+
+* CI updates including moving most builds to Ubuntu 26.04, adding Windows Aarch64
+  builders, and updating dependencies used in CI (GH #5846 #5848 #5860 #5861)
+
+Version 3.13.0, 2026-08-13
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* Fix a blind SSRF during OCSP request processing. A malicious OCSP responder or
+  network attacker could cause the application to perform a blind GET to an
+  internal service. (GH #5815)
+
+* Fix a bug in ``AutoSeeded_RNG``, affecting only platforms without a system
+  RNG, where an API sequence of calling first ``clear``, followed by ``randomize``
+  writing to an empty buffer, resulted in the RNG object being considered seeded
+  even though it was not. (GH #5839 #5838)
+
+* Fix an integer overflow in Scrypt parameter handling, affecting 32-bit platforms.
+  (GH #5820 #5629)
+
+* Fix a bug where certain DN name constraints were not correctly enforced.
+
+* Fix an integer overflow in the FFI interface which might be exploitable
+  in unusual scenarios involving attacker-control cipher specifiers and
+  the raw block cipher (ECB) APIs. (GH #5805)
 
 * Add URI and email name constraint processing to X509 path validation (GH #5598)
 
-* Add ``DNSName``, ``URI``, and ``EmailAddress`` types. (GH #5598 #5601 #5622)
+* Add ``DNSName``, ``URI``, and ``EmailAddress`` types. (GH #5598 #5601 #5622 #5663
+  #5683 #5750)
+
+* The default policy for TLS now no longer lists finite field Diffie-Hellman.
+  If required for compatibility it must be enabled by the application. (GH #5782)
+
+* By default OCSP no longer accepts soft-fail conditions such as network failure.
+  (GH #5785 #5804)
+
+* DTLS 1.2 servers now must either set a DTLS cookie secret and provide the peer
+  network identity, or explicitly opt out of the cookie exchange by overriding
+  ``dtls_server_require_cookie_exchange`` to return false. (GH #5792)
+
+* Fix DTLS 1.2 handshake edge cases, including pacing of repeated timeout checks,
+  replay of final flights after local activation, partial server-flight delivery,
+  and delayed server-side flight handling. (GH #2310 #2498 #4022 #4036 #5696 #5790
+  #5791 #5792 #5793 #5800 #5801 #5802 #5803 #5811 #5829 #5834 #5835 #5836)
+
+* Add support for SPAKE2+ from RFC 9383 (GH #5711)
+
+* Add support for PKCS #12 (GH #5478 #5625)
+
+* Add support for GCM-SIV from RFC 8452 (GH #5770)
 
 * Add support for the RFC 9608 No Revocation Available extension (GH #5595)
+
+* Add support for encoding name constraint extensions (GH #5734)
 
 * Add ``X509_DN::parse`` and improve the parsing and printing of Distinguished
   Name strings, including capturing RDN groupings and escaping control
@@ -21,32 +107,111 @@ Version 3.13.0, Not Yet Released
   seven days old. Previously any age was accepted as long as it preceded the
   response's ``nextUpdate``. (GH #5623)
 
-* Various X509/PKIX hardenings, bug fixes, and additional sanity checks.
-  (GH #5593 #5598 #5605 #5611 #5633 #5637 #5643 #5660)
+* Improve OCSP request and response serialization (GH #5678 #5741)
+
+* Improve handling of the authority and subject key identifier extensions (GH #5735 #5737)
+
+* Properly decode and handle the X509 CRL Distribution Point and Authority Information Access
+  extensions (GH #5712)
+
+* Add an explicit ``X509_Serial_Number`` type (GH #5740)
+
+* Improve CRL decoding and encoding, including support for CRL numbers larger than
+  32 bits (GH #5687 #5694 #5697)
+
+* Various X509/PKIX hardenings, optimizations, bug fixes, and additional sanity checks.
+  (GH #5593 #5598 #5605 #5611 #5633 #5637 #5643 #5660 #5668 #5670 #5682 #5685 #5689 #5698)
+
+* Various ASN.1 hardening and decoder strictness improvements (GH #5693 #5703 #5710 #5720)
 
 * Various BigInt and number-theoretic hardening and bug fixes.
-  (GH #5581 #5585 #5586 #5588 #5592 #5650)
+  (GH #5581 #5585 #5586 #5588 #5592 #5650 #5688)
 
-* Add support for the PKCS #12 KDF (GH #5478)
+* Reject RSA signature and ciphertext values which are not exactly the length of
+  the modulus (GH #5592 #5630 #5675)
+
+* Introduce ``PK_Decryptor::ciphertext_length`` (GH #5717)
+
+* Fix several bugs in ISO 9796-2 signature verification, and deprecate the
+  ``iso9796`` module (GH #5680)
+
+* Fix several edge cases in stateful hash-based signatures, including rejecting HSS
+  public keys with L = 0 and detecting ``fork`` in the stateful key index
+  (GH #5662 #5666 #5723)
+
+* Add support for parsing EC keys which contain the ECC domain parameters within
+  the key rather than in the algorithm identifier (GH #5532)
+
+* Various fixes and improvements for SLH-DSA (GH #5730)
+
+* Various fixes for SM2 signatures and encryption (GH #5713)
+
+* Improve input validation in the McEliece implementations, and avoid using
+  ``bool`` for secret data in Classic McEliece (GH #5667 #5676)
+
+* In Ed25519 verification also reject the non-canonical encoding of the identity
+  element (GH #5731)
+
+* Add hash to curve support for brainpool256r1, brainpool384r1, brainpool512r1,
+  and numsp512d1 (GH #5754)
+
+* The hash to curve and and hash to scalar functions now enforce RFC 9380's rules
+  on hash function security, namely that the hash must have a security level at
+  least as strong as the curve itself. (GH #5758)
 
 * Improve the HTTP 1.0 client used for OCSP and CRL fetching (GH #5609)
 
-* Fix various edge case bugs in AEAD, cipher mode, and stream cipher implementations
-  (GH #5610 #5628 #5659)
+* Extend Blowfish to support keys up to 72 bytes in length (GH #5714)
 
-* Reject RSA signature and ciphertext values which are not exactly the length of
-  the modulus (GH #5592 #5630)
+* Fix various edge case bugs in AEAD, cipher mode, stream cipher, MACs, and KDFs
+  (GH #5610 #5628 #5642 #5659 #5665 #5672 #5674 #5742 #5743)
+
+* Add ``HashFunction::security_level`` (GH #5746)
 
 * Add an AVX-512/GFNI implementation of the Streebog compression function (GH #5655)
 
+* Add optimized Salsa20 implementations using 128-bit SIMD (SSSE3, NEON), AVX2, and AVX-512
+  (GH #5759)
+
+* Add an AVX-512/GFNI implementation of ZFEC, optimize the existing vperm code (GH #5747)
+
 * Convert the SM4 key schedule to constant time code, including hwaes variant (GH #5638 #5639)
 
-* Improve cache prefetching in table-based cipher implementations (GH #5642)
+* In the default TLS policy, prefer ECDSA over RSA signatures (GH #5727)
+
+* Add support for the Brainpool ECDH/ECDSA groups in TLS 1.3 as specified in RFC 8734
+  (GH #5691 #5771 #5772)
+
+* Add ``TLS::Policy::record_padding_bytes``, which allows padding TLS 1.3
+  records, for example out to a minimum plaintext size or to a multiple of
+  some block size (GH #5752 #5843)
+
+* TLS 1.3 handshake hardening and various minor TLS fixes (GH #5664 #5721 #5767 #5810)
 
 * Improve ``Database`` abstraction type and make it easier to support databases
-  other than SQLite. (GH #5607)
+  other than SQLite, and validate SQL table names. (GH #5607 #5673)
 
 * Fix various bugs in the PKCS #11 wrapper (GH #5602)
+
+* Fix various bugs in the Pipe/Filter library (GH #5724 #5809)
+
+* Fix several issues in the compression wrappers (GH #5733)
+
+* Fix several errors in the Python binding (GH #5722 #5796 #5807 #5814)
+
+* Add getters for the RFC 3779 extensions to the FFI interface and Python binding
+  (GH #5491)
+
+* Add ``PublicKey.load_x25519`` and ``PublicKey.load_x448`` to the Python binding
+  (GH #5748)
+
+* The Python binding documentation is now generated from the docstrings in
+  ``botan3.py`` using Sphinx (GH #5233 #5765)
+
+* Add missing, or correct erroneous, documentation comments in many headers
+  (GH #5760 #5761 #5762 #5763 #5764 #5766 #5774)
+
+* On MSVC, deprecation warnings now include the file and line number (GH #5749)
 
 * Upgrade to TLS-Anvil 1.5 (GH #5630)
 

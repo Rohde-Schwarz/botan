@@ -42,7 +42,11 @@ X509_CA::~X509_CA() = default;
 
 Extensions X509_CA::choose_extensions(const PKCS10_Request& req,
                                       const X509_Certificate& ca_cert,
-                                      std::string_view hash_fn) {
+                                      std::string_view /*hash_fn*/) {
+   return choose_extensions(req, ca_cert);
+}
+
+Extensions X509_CA::choose_extensions(const PKCS10_Request& req, const X509_Certificate& ca_cert) {
    const auto constraints = req.is_CA() ? Key_Constraints::ca_constraints() : req.constraints();
 
    auto key = req.subject_public_key();
@@ -60,7 +64,7 @@ Extensions X509_CA::choose_extensions(const PKCS10_Request& req,
    }
 
    extensions.replace(std::make_unique<Cert_Extension::Authority_Key_ID>(ca_cert.subject_key_id()));
-   extensions.replace(std::make_unique<Cert_Extension::Subject_Key_ID>(req.raw_public_key(), hash_fn));
+   extensions.replace(std::make_unique<Cert_Extension::Subject_Key_ID>(*key));
 
    extensions.replace(std::make_unique<Cert_Extension::Subject_Alternative_Name>(req.subject_alt_name()));
 
@@ -74,7 +78,7 @@ X509_Certificate X509_CA::sign_request(const PKCS10_Request& req,
                                        const BigInt& serial_number,
                                        const X509_Time& not_before,
                                        const X509_Time& not_after) const {
-   auto extensions = choose_extensions(req, m_ca_cert, m_hash_fn);
+   auto extensions = choose_extensions(req, m_ca_cert);
 
    return make_cert(*m_signer,
                     rng,
@@ -95,7 +99,7 @@ X509_Certificate X509_CA::sign_request(const PKCS10_Request& req,
                                        RandomNumberGenerator& rng,
                                        const X509_Time& not_before,
                                        const X509_Time& not_after) const {
-   auto extensions = choose_extensions(req, m_ca_cert, m_hash_fn);
+   auto extensions = choose_extensions(req, m_ca_cert);
 
    return make_cert(*m_signer,
                     rng,
@@ -117,11 +121,10 @@ X509_Certificate X509_CA::make_cert(PK_Signer& signer,
                                     const X509_DN& issuer_dn,
                                     const X509_DN& subject_dn,
                                     const Extensions& extensions) {
-   const size_t SERIAL_BITS = 128;
-   const BigInt serial_no(rng, SERIAL_BITS);
+   const auto serial_no = X509_Serial_Number::random(rng);
 
    return make_cert(
-      signer, rng, serial_no, sig_algo, pub_key, not_before, not_after, issuer_dn, subject_dn, extensions);
+      signer, rng, serial_no.to_bigint(), sig_algo, pub_key, not_before, not_after, issuer_dn, subject_dn, extensions);
 }
 
 /*

@@ -15,65 +15,77 @@
 #include <botan/tls_messages_13.h>
 #include <botan/tls_policy.h>
 #include <botan/x509cert.h>
+#include <botan/internal/concat_util.h>
+#include <botan/internal/loadstor.h>
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_channel_impl_13.h>
 #include <botan/internal/tls_cipher_state.h>
+#include <botan/internal/tls_dtls_channel_companion.h>
 
 #include <utility>
 
 namespace Botan::TLS {
 
-Client_Impl_13::Client_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
-                               const std::shared_ptr<Session_Manager>& session_manager,
-                               const std::shared_ptr<Credentials_Manager>& creds,
-                               const std::shared_ptr<const Policy>& policy,
-                               const std::shared_ptr<RandomNumberGenerator>& rng,
-                               Server_Information info,
-                               const std::vector<std::string>& next_protocols) :
-      Channel_Impl_13(callbacks, session_manager, creds, rng, policy, false /* is_server */),
-      m_info(std::move(info)),
-      m_handshake(std::make_unique<Pending_Handshake>()) {
-#if defined(BOTAN_HAS_TLS_12)
-   if(policy->allow_tls12()) {
-      expect_downgrade(m_info, next_protocols);
+std::shared_ptr<Client_Impl_13> Client_Impl_13::create(const std::shared_ptr<Callbacks>& callbacks,
+                                                       const std::shared_ptr<Session_Manager>& session_manager,
+                                                       const std::shared_ptr<Credentials_Manager>& creds,
+                                                       const std::shared_ptr<const Policy>& policy,
+                                                       const std::shared_ptr<RandomNumberGenerator>& rng,
+                                                       TLS_Flavor flavor,
+                                                       Server_Information server_info,
+                                                       const std::vector<std::string>& next_protocols) {
+   auto self = std::make_shared<Client_Impl_13>(
+      Private{}, callbacks, session_manager, creds, policy, rng, flavor, std::move(server_info));
+
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+   if(self->is_datagram() ? policy->allow_dtls12() : policy->allow_tls12()) {
+      self->expect_downgrade(self->m_info, next_protocols);
    }
 #endif
 
-   if(auto session = find_session_for_resumption()) {
-      if(!session->session.version().is_pre_tls_13()) {
-         m_handshake->resumed_session = std::move(session);
-      } else if(expects_downgrade()) {
-         // If we found a session that was created with TLS 1.2, we downgrade
-         // the implementation right away, before even issuing a Client Hello.
-         request_downgrade_for_resumption(std::move(session.value()));
-         return;
-      }
+   if(!self->expects_downgrade()) {
+      // If we don't expect to downgrade, we can already enable all DTLS-only
+      // features (e.g. record ACKing), because we know that we won't ever
+      // talk to a legacy peer and succeed a handshake.
+      self->m_dtls_channel_companion->notify_protocol_version_committed();
    }
 
-   auto msg = send_handshake_message(m_handshake->state.sending(
+   if(auto session = self->find_session_for_resumption()) {
+      if(session->session.version().is_tls_13_or_later()) {
+         self->m_handshake->resumed_session = std::move(session);
+      }
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+      else if(self->expects_downgrade()) {
+         // If we found a session that was created with (D)TLS 1.2, we downgrade
+         // the implementation right away, before even issuing a Client Hello.
+         self->request_downgrade_for_resumption(std::move(session.value()));
+         return self;
+      }
+#endif
+   }
+
+   self->send_handshake_message(self->m_handshake->state.sending(
       Client_Hello_13(*policy,
                       *callbacks,
                       *rng,
-                      m_info.hostname(),
+                      self->m_info.hostname(),
                       next_protocols,
-                      m_handshake->resumed_session,
-                      creds->find_preshared_keys(m_info.hostname(), Connection_Side::Client))));
+                      self->m_handshake->resumed_session,
+                      creds->find_preshared_keys(self->m_info.hostname(), Connection_Side::Client),
+                      flavor)));
 
-   if(expects_downgrade()) {
-      preserve_client_hello(msg);
+   self->maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingFirstClientHello);
+
+   // on a pure TLS connection.
+   if(self->is_datagram() && self->expects_downgrade()) {
+      self->m_handshake->transitions.set_expected_next(
+         {Handshake_Type::HelloVerifyRequest, Handshake_Type::ServerHello, Handshake_Type::HelloRetryRequest});
+   } else {
+      self->m_handshake->transitions.set_expected_next(
+         {Handshake_Type::ServerHello, Handshake_Type::HelloRetryRequest});
    }
 
-   // RFC 8446 Appendix D.4
-   //    If not offering early data, the client sends a dummy change_cipher_spec
-   //    record [...] immediately before its second flight. This may either be before
-   //    its second ClientHello or before its encrypted handshake flight.
-   //
-   // TODO: don't schedule ccs here when early data is used
-   if(policy->tls_13_middlebox_compatibility_mode()) {
-      m_handshake->should_send_ccs = true;
-   }
-
-   m_handshake->transitions.set_expected_next({Handshake_Type::ServerHello, Handshake_Type::HelloRetryRequest});
+   return self;
 }
 
 void Client_Impl_13::process_handshake_msg(Handshake_Message_13 message) {
@@ -163,6 +175,11 @@ void Client_Impl_13::handle(const Server_Hello_12_Shim& server_hello_msg) {
       throw TLS_Exception(Alert::UnexpectedMessage, "Version downgrade received after Hello Retry");
    }
 
+#if !defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+   BOTAN_UNUSED(server_hello_msg);
+   throw TLS_Exception(Alert::ProtocolVersion, "Received an unsupported Server Hello");
+#else
+
    // RFC 8446 Appendix D.1
    //    If the version chosen by the server is not supported by the client
    //    (or is not acceptable), the client MUST abort the handshake with a
@@ -205,7 +222,11 @@ void Client_Impl_13::handle(const Server_Hello_12_Shim& server_hello_msg) {
       throw TLS_Exception(Alert::ProtocolVersion, "Protocol version was not offered");
    }
 
-   if(policy().tls_13_middlebox_compatibility_mode() &&
+   // RFC 9147 5
+   //    DTLS implementations do not use the TLS 1.3 "compatibility mode"
+   //    described in Appendix E.4 of [RFC 9846]. DTLS servers MUST NOT echo the
+   //    "legacy_session_id" value from the client [...].
+   if(policy().tls_13_middlebox_compatibility_mode() && !is_datagram() &&
       m_handshake->state.client_hello().session_id() == server_hello_msg.session_id()) {
       // In compatibility mode, the server will reflect the session ID we sent in the client hello.
       // However, a TLS 1.2 server that wants to downgrade cannot have found the random session ID
@@ -214,11 +235,42 @@ void Client_Impl_13::handle(const Server_Hello_12_Shim& server_hello_msg) {
       throw TLS_Exception(Alert::IllegalParameter, "Unexpected session ID during downgrade");
    }
 
+   preserve_client_hello(m_handshake->state.take_client_hello());
+   preserve_sequence_numbers(m_record_layer->epoch0_sequence_numbers());
    request_downgrade();
 
    // After this, no further messages are expected here because this instance will be replaced
    // by a Client_Impl_12.
    m_handshake->transitions.set_expected_next({});
+#endif
+}
+
+void Client_Impl_13::handle(const Hello_Verify_Request& /*hello_verify_request*/) {
+   BOTAN_ASSERT_NONNULL(m_handshake);
+
+   // HelloVerifyRequest exists only in DTLS. A TLS peer must never reach this
+   // handler because HelloVerifyRequest is not among the TLS expected messages.
+   BOTAN_STATE_CHECK(is_datagram());
+
+   if(m_handshake->state.has_hello_retry_request()) {
+      throw TLS_Exception(Alert::UnexpectedMessage, "Hello Verify Request received after Hello Retry");
+   }
+
+   if(!expects_downgrade()) {
+      throw TLS_Exception(Alert::UnexpectedMessage, "Received an unexpected Hello Verify Request");
+   }
+
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+   BOTAN_ASSERT_NOMSG(expects_downgrade());
+
+   preserve_client_hello(m_handshake->state.take_client_hello());
+   preserve_sequence_numbers(m_record_layer->epoch0_sequence_numbers());
+   request_downgrade();
+
+   // After this, no further messages are expected here because this instance will be replaced
+   // by a Client_Impl_12.
+   m_handshake->transitions.set_expected_next({});
+#endif
 }
 
 namespace {
@@ -255,6 +307,7 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
    // Note: Basic checks (that do not require contextual information) were already
    //       performed during the construction of the Server_Hello_13 object.
    BOTAN_ASSERT_NONNULL(m_handshake);
+   BOTAN_ASSERT_NONNULL(m_transcript_hash);
 
    const auto& ch = m_handshake->state.client_hello();
 
@@ -297,6 +350,8 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
       if(hrr.selected_version() != sh.selected_version()) {
          throw TLS_Exception(Alert::IllegalParameter, "server changed its chosen protocol version");
       }
+   } else {
+      m_dtls_channel_companion->notify_protocol_version_committed();
    }
 
    auto cipher = Ciphersuite::by_id(sh.ciphersuite());
@@ -328,7 +383,7 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
    auto* my_keyshare = ch.extensions().get<Key_Share>();
    auto shared_secret = my_keyshare->decapsulate(*sh.extensions().get<Key_Share>(), policy(), callbacks(), rng());
 
-   m_transcript_hash.set_algorithm(cipher.value().prf_algo());
+   m_transcript_hash->set_algorithm(cipher.value().prf_algo());
 
    if(sh.extensions().has<PSK>()) {
       std::tie(m_handshake->psk_identity, m_cipher_state) =
@@ -344,13 +399,15 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
       // TODO: When implementing early data, `advance_with_client_hello` must
       //       happen _before_ encrypting any early application data.
       //       Same when we want to support early key export.
-      m_cipher_state->advance_with_client_hello(m_transcript_hash.previous(), *this);
+      m_cipher_state->advance_with_client_hello(m_transcript_hash->previous(), *this);
       m_cipher_state->advance_with_server_hello(
-         cipher.value(), std::move(shared_secret), m_transcript_hash.current(), *this);
+         cipher.value(), std::move(shared_secret), m_transcript_hash->current(), *this);
+
+      // TODO: Early data
    } else {
       m_handshake->resumed_session.reset();  // might have been set if we attempted a resumption
       m_cipher_state = Cipher_State::init_with_server_hello(
-         m_side, std::move(shared_secret), cipher.value(), m_transcript_hash.current(), *this);
+         m_side, std::move(shared_secret), cipher.value(), m_transcript_hash->current(), *this, m_flavor);
    }
 
    callbacks().tls_examine_extensions(sh.extensions(), Connection_Side::Server, Handshake_Type::ServerHello);
@@ -363,6 +420,14 @@ void Client_Impl_13::handle(const Hello_Retry_Request& hrr) {
    //       performed during the construction of the Hello_Retry_Request object as
    //       a subclass of Server_Hello_13.
    BOTAN_ASSERT_NONNULL(m_handshake);
+   BOTAN_ASSERT_NONNULL(m_transcript_hash);
+
+   // RFC 9147 7.
+   //    During the handshake, ACKs only cover the current outstanding flight
+   //    [...]. Implementations can accomplish this by clearing their ACK list
+   //    upon receiving the start of the next flight.
+   m_dtls_channel_companion->clear_outstanding_acknowledgements();
+   m_dtls_channel_companion->notify_protocol_version_committed();
 
    auto& ch = m_handshake->state.client_hello();
 
@@ -389,12 +454,13 @@ void Client_Impl_13::handle(const Hello_Retry_Request& hrr) {
    }
 
    m_transcript_hash =
-      Transcript_Hash_State::recreate_after_hello_retry_request(cipher.value().prf_algo(), m_transcript_hash);
+      Transcript_Hash_State::recreate_after_hello_retry_request(cipher.value().prf_algo(), *m_transcript_hash);
 
-   ch.retry(hrr, m_transcript_hash, callbacks(), rng());
+   ch.retry(hrr, *m_transcript_hash, callbacks(), rng());
 
    callbacks().tls_examine_extensions(hrr.extensions(), Connection_Side::Server, Handshake_Type::HelloRetryRequest);
 
+   maybe_handle_compatibility_mode(Compat_Mode_Situation::BeforeSendingSecondClientHello);
    send_handshake_message(std::reference_wrapper(ch));
 
    // RFC 8446 4.1.4
@@ -520,6 +586,7 @@ void Client_Impl_13::handle(const Certificate_13& certificate_msg) {
 
 void Client_Impl_13::handle(const Certificate_Verify_13& certificate_verify_msg) {
    BOTAN_ASSERT_NONNULL(m_handshake);
+   BOTAN_ASSERT_NONNULL(m_transcript_hash);
 
    // RFC 8446 4.4.3
    //    If the CertificateVerify message is sent by a server, the signature
@@ -537,7 +604,7 @@ void Client_Impl_13::handle(const Certificate_Verify_13& certificate_verify_msg)
    }
 
    const bool sig_valid = certificate_verify_msg.verify(
-      *m_handshake->state.server_certificate().public_key(), callbacks(), m_transcript_hash.previous());
+      *m_handshake->state.server_certificate().public_key(), callbacks(), m_transcript_hash->previous());
 
    if(!sig_valid) {
       throw TLS_Exception(Alert::DecryptError, "Server certificate verification failed");
@@ -547,6 +614,8 @@ void Client_Impl_13::handle(const Certificate_Verify_13& certificate_verify_msg)
 }
 
 void Client_Impl_13::send_client_authentication(Channel_Impl_13::AggregatedHandshakeMessages& flight) {
+   BOTAN_ASSERT_NONNULL(m_handshake);
+   BOTAN_ASSERT_NONNULL(m_transcript_hash);
    BOTAN_ASSERT_NOMSG(m_handshake->state.has_certificate_request());
    const auto& cert_request = m_handshake->state.certificate_request();
 
@@ -593,7 +662,7 @@ void Client_Impl_13::send_client_authentication(Channel_Impl_13::AggregatedHands
       flight.add(m_handshake->state.sending(Certificate_Verify_13(m_handshake->state.client_certificate(),
                                                                   cert_request.signature_schemes(),
                                                                   m_info.hostname(),
-                                                                  m_transcript_hash.current(),
+                                                                  m_transcript_hash->current(),
                                                                   Connection_Side::Client,
                                                                   credentials_manager(),
                                                                   policy(),
@@ -604,12 +673,19 @@ void Client_Impl_13::send_client_authentication(Channel_Impl_13::AggregatedHands
 
 void Client_Impl_13::handle(const Finished_13& finished_msg) {
    BOTAN_ASSERT_NONNULL(m_handshake);
+   BOTAN_ASSERT_NONNULL(m_transcript_hash);
+
+   // RFC 9147 7.
+   //    During the handshake, ACKs only cover the current outstanding flight
+   //    [...]. Implementations can accomplish this by clearing their ACK list
+   //    upon receiving the start of the next flight.
+   m_dtls_channel_companion->clear_outstanding_acknowledgements();
 
    // RFC 8446 4.4.4
    //    Recipients of Finished messages MUST verify that the contents are
    //    correct and if incorrect MUST terminate the connection with a
    //    "decrypt_error" alert.
-   if(!finished_msg.verify(m_cipher_state.get(), m_transcript_hash.previous())) {
+   if(!finished_msg.verify(m_cipher_state.get(), m_transcript_hash->previous())) {
       throw TLS_Exception(Alert::DecryptError, "Finished message didn't verify");
    }
 
@@ -628,7 +704,7 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
 
    // Derives the secrets for receiving application data but defers
    // the derivation of sending application data.
-   m_cipher_state->advance_with_server_finished(m_transcript_hash.current(), *this);
+   m_cipher_state->advance_with_server_finished(m_transcript_hash->current(), *this);
 
    auto flight = aggregate_handshake_messages();
 
@@ -640,12 +716,13 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    }
 
    // send client finished handshake message (still using handshake traffic secrets)
-   flight.add(m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash.current())));
+   flight.add(m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash->current())));
 
+   maybe_handle_compatibility_mode(Compat_Mode_Situation::BeforeSendingEncryptedClientFlight);
    flight.send();
 
    // derives the sending application traffic secrets
-   m_cipher_state->advance_with_client_finished(m_transcript_hash.current());
+   m_cipher_state->advance_with_client_finished(m_transcript_hash->current());
 
    // TODO: Create a dummy session object and invoke tls_session_established.
    //       Alternatively, consider changing the expectations described in the
@@ -689,7 +766,7 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    }
 
    m_handshake.reset();
-   m_transcript_hash = Transcript_Hash_State();
+   m_transcript_hash.reset();
    callbacks().tls_session_activated();
 }
 
@@ -774,8 +851,71 @@ std::optional<std::string> Client_Impl_13::external_psk_identity() const {
    return std::nullopt;
 }
 
-bool Client_Impl_13::prepend_ccs() {
-   return m_handshake && std::exchange(m_handshake->should_send_ccs, false);
+void Client_Impl_13::maybe_handle_compatibility_mode(Compat_Mode_Situation situation) {
+   // RFC 9147 Section 5
+   //    DTLS implementations do not use the TLS 1.3 "compatibility mode" [...].
+   if(is_datagram()) {
+      return;
+   }
+
+   // RFC 9846 E.4
+   //    This "compatibility mode" is partially negotiated: the client can opt
+   //    [in] or not [...].
+   if(!policy().tls_13_middlebox_compatibility_mode()) {
+      return;
+   }
+
+   // RFC 9846 5.
+   //    An implementation [...] which receives a protected change_cipher_spec
+   //    record MUST abort the handshake with an "unexpected_message" alert.
+   if(m_handshake == nullptr) {
+      return;
+   }
+
+   switch(situation) {
+      case Compat_Mode_Situation::AfterSendingFirstClientHello:
+         // RFC 9846 E.4
+         //    If offering early data, the record is placed immediately after
+         //    the first ClientHello.
+         //
+         // TODO: Implement early data support
+         break;
+
+      case Compat_Mode_Situation::BeforeSendingSecondClientHello:
+         // RFC 9846 E.4
+         //    [...] the client sends a dummy change_cipher_spec record [...]
+         //    immediately before its second flight. This may either be before
+         //    its second ClientHello [...].
+         BOTAN_ASSERT_NOMSG(m_handshake->state.has_hello_retry_request());
+         send_dummy_change_cipher_spec();
+         break;
+
+      case Compat_Mode_Situation::BeforeSendingEncryptedClientFlight:
+         // RFC 9846 E.4
+         //    [...] or before its encrypted handshake flight.
+         BOTAN_ASSERT_NOMSG(m_handshake->state.has_server_finished());
+         if(!m_handshake->state.has_hello_retry_request()) {
+            send_dummy_change_cipher_spec();
+         }
+         break;
+
+      case Compat_Mode_Situation::BeforeSendingAlert:
+         // RFC 9846 E.4
+         //    [...] or before its encrypted handshake flight.
+         //
+         // Note that an encrypted alert message also counts as an encrypted
+         // handshake flight, so we also send a dummy CCS in that case. Except
+         // if we did receive a HelloRetryRequest, in which case we already sent
+         // a dummy CCS before the second ClientHello.
+         if(m_cipher_state != nullptr && !m_handshake->state.has_hello_retry_request()) {
+            send_dummy_change_cipher_spec();
+         }
+         break;
+
+      case Compat_Mode_Situation::AfterSendingFirstServerHello:
+      case Compat_Mode_Situation::AfterSendingHelloRetryRequest:
+         BOTAN_ASSERT_UNREACHABLE();  // These situations occur on the server side.
+   }
 }
 
 void Client_Impl_13::maybe_log_secret(std::string_view label, std::span<const uint8_t> secret) const {

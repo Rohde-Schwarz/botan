@@ -9,7 +9,10 @@
 
 #if defined(BOTAN_HAS_OCSP)
    #include "test_arb_eq.h"
+   #include <botan/ber_dec.h>
    #include <botan/certstor.h>
+   #include <botan/der_enc.h>
+   #include <botan/hex.h>
    #include <botan/ocsp.h>
    #include <botan/x509path.h>
    #include <botan/internal/calendar.h>
@@ -30,6 +33,35 @@ class OCSP_Tests final : public Test {
 
       static Botan::OCSP::Response load_test_OCSP_resp(const std::string& path) {
          return Botan::OCSP::Response(Test::read_binary_data_file(path));
+      }
+
+      static Test::Result test_certid_serial_sign() {
+         Test::Result result("OCSP CertID serial matching respects sign");
+
+         const std::string base = "x509/serial_numbers/";
+         const auto ca = load_test_X509_cert(base + "ca.pem");
+         const auto pos = load_test_X509_cert(base + "pos255.pem");
+         const auto neg = load_test_X509_cert(base + "neg255.pem");
+
+         const Botan::OCSP::CertID neg_id(ca, neg.serial());
+         result.test_is_true("CertID matches its own cert", neg_id.is_id_for(ca, neg));
+         result.test_is_false("CertID does not match same-magnitude positive serial", neg_id.is_id_for(ca, pos));
+
+         const Botan::OCSP::CertID pos_id(ca, pos.serial());
+         result.test_is_true("positive CertID matches its own cert", pos_id.is_id_for(ca, pos));
+         result.test_is_false("positive CertID does not match negative serial", pos_id.is_id_for(ca, neg));
+
+         // The sign survives an encode/decode round trip
+         std::vector<uint8_t> der;
+         Botan::DER_Encoder enc(der);
+         neg_id.encode_into(enc);
+         Botan::OCSP::CertID neg_id_rt;
+         Botan::BER_Decoder dec(der);
+         neg_id_rt.decode_from(dec);
+         result.test_is_true("round-tripped CertID matches its own cert", neg_id_rt.is_id_for(ca, neg));
+         result.test_is_false("round-tripped CertID does not match positive serial", neg_id_rt.is_id_for(ca, pos));
+
+         return result;
       }
 
       static Test::Result test_response_parsing() {
@@ -128,6 +160,151 @@ class OCSP_Tests final : public Test {
          } catch(Botan::Exception& e) {
             result.test_failure("Parsing failed", e.what());
          }
+
+         return result;
+      }
+
+      static Test::Result test_revoked_response_decoding() {
+         Test::Result result("OCSP revoked response decoding");
+
+         const auto resp = load_test_OCSP_resp("x509/ocsp/randombit_ocsp_forged_revoked.der");
+         result.test_enum_eq("response parses", resp.status(), Botan::OCSP::Response_Status_Code::Successful);
+
+         if(result.test_sz_eq("one SingleResponse", resp.responses().size(), 1)) {
+            const auto& sr = resp.responses()[0];
+
+            const auto ee = load_test_X509_cert("x509/ocsp/randombit.pem");
+            const auto ca = load_test_X509_cert("x509/ocsp/letsencrypt.pem");
+            result.test_is_true("certid matches the subject cert", sr.certid().is_id_for(ca, ee));
+
+            result.test_sz_eq("revoked cert status", sr.cert_status(), 1);
+            if(result.test_is_true("revocation time is set", sr.revocation_time().has_value())) {
+               result.test_str_eq("revocation time", sr.revocation_time()->to_string(), "20161118120000Z");
+            }
+            result.test_is_false("no revocation reason was provided", sr.revocation_reason().has_value());
+            result.test_str_eq("thisUpdate", sr.this_update().to_string(), "20161118110000Z");
+            result.test_str_eq("nextUpdate", sr.next_update().to_string(), "20161123110000Z");
+         }
+
+         return result;
+      }
+
+      static Test::Result test_single_response_encoding() {
+         Test::Result result("OCSP SingleResponse encoding");
+
+         // The CertID, times, and revoked encoding below appear verbatim in
+         // x509/ocsp/randombit_ocsp_forged_revoked.der, which was produced by OpenSSL
+         const std::string certid_hex =
+            "304B300906052B0E03021A050004147EE66AE7729AB3FCF8A220646C16A12D6071085D"
+            "0414A84A6A63047DDDBAE6D139B7A64565EFF3A8ECA1021203E89ED07A424B72A35FAD167F48A4F25AD2";
+
+         const std::string this_update_hex = "180F32303136313131383131303030305A";
+         const std::string next_update_hex = "A011180F32303136313132333131303030305A";
+         const std::string revocation_time_hex = "180F32303136313131383132303030305A";
+
+         Botan::OCSP::CertID certid;
+         Botan::BER_Decoder(Botan::hex_decode(certid_hex)).decode(certid);
+
+         const Botan::X509_Time this_update("20161118110000Z", Botan::ASN1_Type::GeneralizedTime);
+         const Botan::X509_Time next_update("20161123110000Z", Botan::ASN1_Type::GeneralizedTime);
+         const Botan::X509_Time revocation_time("20161118120000Z", Botan::ASN1_Type::GeneralizedTime);
+
+         auto decode_single_response = [](const std::string& hex) {
+            Botan::OCSP::SingleResponse sr;
+            Botan::BER_Decoder(Botan::hex_decode(hex)).decode(sr);
+            return sr;
+         };
+
+         {
+            const auto sr = Botan::OCSP::SingleResponse::good(certid, this_update, next_update);
+            const std::string expected = "3073" + certid_hex + "8000" + this_update_hex + next_update_hex;
+            result.test_str_eq("good encoding", Botan::hex_encode(sr.BER_encode()), expected);
+
+            const auto decoded = decode_single_response(expected);
+            result.test_sz_eq("good cert status", decoded.cert_status(), 0);
+            result.test_str_eq("good thisUpdate", decoded.this_update().to_string(), "20161118110000Z");
+            result.test_str_eq("good nextUpdate", decoded.next_update().to_string(), "20161123110000Z");
+            result.test_is_false("good has no revocation time", decoded.revocation_time().has_value());
+            result.test_is_false("good has no revocation reason", decoded.revocation_reason().has_value());
+         }
+
+         {
+            const auto sr = Botan::OCSP::SingleResponse::unknown(certid, this_update, Botan::X509_Time());
+            const std::string expected = "3060" + certid_hex + "8200" + this_update_hex;
+            result.test_str_eq("unknown encoding omits unset nextUpdate", Botan::hex_encode(sr.BER_encode()), expected);
+
+            const auto decoded = decode_single_response(expected);
+            result.test_sz_eq("unknown cert status", decoded.cert_status(), 2);
+            result.test_is_false("unknown nextUpdate is unset", decoded.next_update().time_is_set());
+         }
+
+         const std::string revoked_no_reason_hex =
+            "308184" + certid_hex + "A111" + revocation_time_hex + this_update_hex + next_update_hex;
+
+         {
+            const auto sr =
+               Botan::OCSP::SingleResponse::revoked(certid, revocation_time, std::nullopt, this_update, next_update);
+            result.test_str_eq("revoked encoding", Botan::hex_encode(sr.BER_encode()), revoked_no_reason_hex);
+
+            const auto ocsp_bits = Test::read_binary_data_file("x509/ocsp/randombit_ocsp_forged_revoked.der");
+            result.test_is_true("revoked encoding matches the OpenSSL-produced SingleResponse",
+                                Botan::hex_encode(ocsp_bits).find(revoked_no_reason_hex) != std::string::npos);
+
+            const auto decoded = decode_single_response(revoked_no_reason_hex);
+            result.test_sz_eq("revoked cert status", decoded.cert_status(), 1);
+            if(result.test_is_true("revoked has revocation time", decoded.revocation_time().has_value())) {
+               result.test_str_eq("revocation time", decoded.revocation_time()->to_string(), "20161118120000Z");
+            }
+            result.test_is_false("revoked has no revocation reason", decoded.revocation_reason().has_value());
+         }
+
+         {
+            const auto sr = Botan::OCSP::SingleResponse::revoked(
+               certid, revocation_time, Botan::CRL_Code::KeyCompromise, this_update, next_update);
+            const std::string expected =
+               "308189" + certid_hex + "A116" + revocation_time_hex + "A0030A0101" + this_update_hex + next_update_hex;
+            result.test_str_eq("revoked encoding with reason", Botan::hex_encode(sr.BER_encode()), expected);
+
+            const auto decoded = decode_single_response(expected);
+            result.test_sz_eq("revoked cert status", decoded.cert_status(), 1);
+            if(result.test_is_true("revoked has revocation reason", decoded.revocation_reason().has_value())) {
+               result.test_enum_eq(
+                  "reason is keyCompromise", *decoded.revocation_reason(), Botan::CRL_Code::KeyCompromise);
+            }
+         }
+
+         {
+            // CRLReason unspecified (0) is not encoded at all
+            const auto sr = Botan::OCSP::SingleResponse::revoked(
+               certid, revocation_time, Botan::CRL_Code::Unspecified, this_update, next_update);
+            result.test_str_eq(
+               "unspecified reason is omitted", Botan::hex_encode(sr.BER_encode()), revoked_no_reason_hex);
+         }
+
+         const Botan::X509_Time utc_time("161118110000Z", Botan::ASN1_Type::UtcTime);
+
+         result.test_throws<Botan::Invalid_Argument>("UTCTime thisUpdate is rejected", [&] {
+            const auto sr = Botan::OCSP::SingleResponse::good(certid, utc_time, next_update);
+         });
+
+         result.test_throws<Botan::Invalid_Argument>("UTCTime revocationTime is rejected", [&] {
+            const auto sr =
+               Botan::OCSP::SingleResponse::revoked(certid, utc_time, std::nullopt, this_update, next_update);
+         });
+
+         result.test_throws<Botan::Decoding_Error>("Unknown CRLReason enumeration is rejected", [&] {
+            decode_single_response("308189" + certid_hex + "A116" + revocation_time_hex + "A0030A0107" +
+                                   this_update_hex + next_update_hex);
+         });
+
+         result.test_throws<Botan::Decoding_Error>("UTCTime revocationTime is rejected when decoding", [&] {
+            decode_single_response("308182" + certid_hex + "A10F170D3136313131383132303030305A" + this_update_hex +
+                                   next_update_hex);
+         });
+
+         result.test_throws<Botan::Decoding_Error>("good status with contents is rejected", [&] {
+            decode_single_response("3075" + certid_hex + "80020500" + this_update_hex + next_update_hex);
+         });
 
          return result;
       }
@@ -558,6 +735,56 @@ class OCSP_Tests final : public Test {
          return result;
       }
 
+   #if defined(BOTAN_HAS_ML_DSA) || defined(BOTAN_HAS_SLH_DSA_WITH_SHA2)
+      static Test::Result test_pqc_signed_ocsp_response(const std::string& algo, const std::string& prefix) {
+         Test::Result result("OCSP response signed with " + algo);
+
+         // The response is signed by the issuing CA itself. See
+         // `src/scripts/dev_tools/gen_pqc_ocsp_testdata.sh` for a helper script
+         // to recreate the test data.
+         auto ee = load_test_X509_cert("x509/ocsp/" + prefix + "_ee.pem");
+         auto trust_root = load_test_X509_cert("x509/ocsp/" + prefix + "_root.pem");
+
+         auto ocsp = load_test_OCSP_resp("x509/ocsp/" + prefix + "_ocsp.der");
+         result.test_enum_eq("response parses", ocsp.status(), Botan::OCSP::Response_Status_Code::Successful);
+
+         test_arb_eq(result,
+                     "CA is returned as signing certificate",
+                     ocsp.find_signing_certificate(trust_root),
+                     std::optional(trust_root));
+
+         result.test_enum_eq("signature of the response verifies",
+                             ocsp.verify_signature(trust_root),
+                             Botan::Certificate_Status_Code::OCSP_SIGNATURE_OK);
+
+         // The signature BIT STRING is the last element of the response encoding
+         auto tampered_bytes = Test::read_binary_data_file("x509/ocsp/" + prefix + "_ocsp.der");
+         tampered_bytes.back() ^= 0x01;
+         const Botan::OCSP::Response tampered_ocsp(tampered_bytes);
+         result.test_enum_eq("tampered signature is rejected",
+                             tampered_ocsp.verify_signature(trust_root),
+                             Botan::Certificate_Status_Code::OCSP_SIGNATURE_ERROR);
+
+         const std::vector<Botan::X509_Certificate> cert_path = {ee, trust_root};
+
+         Botan::Certificate_Store_In_Memory certstore;
+         certstore.add_certificate(trust_root);
+
+         // Some arbitrary time within the validity period of the OCSP response
+         const auto valid_time = Botan::calendar_point(2026, 8, 13, 12, 0, 0).to_std_timepoint();
+         const auto ocsp_status =
+            Botan::PKIX::check_ocsp(cert_path, {ocsp}, {&certstore}, valid_time, Botan::Path_Validation_Restrictions());
+
+         if(result.test_sz_eq("Expected size of ocsp_status", ocsp_status.size(), 1) &&
+            result.test_sz_eq("Expected size of ocsp_status[0]", ocsp_status[0].size(), 1)) {
+            result.test_is_true("Status good",
+                                ocsp_status[0].contains(Botan::Certificate_Status_Code::OCSP_RESPONSE_GOOD));
+         }
+
+         return result;
+      }
+   #endif
+
       static Test::Result test_responder_cert_with_nocheck_extension() {
          Test::Result result("BDr's OCSP response contains certificate featuring NoCheck extension");
 
@@ -577,7 +804,10 @@ class OCSP_Tests final : public Test {
          std::vector<Test::Result> results;
 
          results.push_back(test_request_encoding());
+         results.push_back(test_certid_serial_sign());
          results.push_back(test_response_parsing());
+         results.push_back(test_revoked_response_decoding());
+         results.push_back(test_single_response_encoding());
          results.push_back(test_response_with_bykey_responder_id());
          results.push_back(test_response_certificate_access());
          results.push_back(test_response_find_signing_certificate());
@@ -590,6 +820,13 @@ class OCSP_Tests final : public Test {
          results.push_back(test_forged_ocsp_signature_is_rejected());
          results.push_back(test_partial_stapling_preserves_per_slot_gap());
          results.push_back(test_responder_cert_with_nocheck_extension());
+
+   #if defined(BOTAN_HAS_ML_DSA)
+         results.push_back(test_pqc_signed_ocsp_response("ML-DSA", "mldsa"));
+   #endif
+   #if defined(BOTAN_HAS_SLH_DSA_WITH_SHA2)
+         results.push_back(test_pqc_signed_ocsp_response("SLH-DSA", "slhdsa"));
+   #endif
 
    #if defined(BOTAN_HAS_ONLINE_REVOCATION_CHECKS)
          if(Test::options().run_online_tests()) {

@@ -15,7 +15,7 @@
 #include <span>
 
 #if defined(BOTAN_TARGET_ARCH_SUPPORTS_SSSE3)
-   #include <immintrin.h>
+   #include <tmmintrin.h>
    #define BOTAN_SIMD_USE_SSSE3
 
 #elif defined(BOTAN_TARGET_ARCH_SUPPORTS_ALTIVEC)
@@ -145,7 +145,16 @@ class SIMD_4x32 final {
 #if defined(BOTAN_SIMD_USE_SSSE3)
          return SIMD_4x32(_mm_set1_epi8(B));
 #elif defined(BOTAN_SIMD_USE_NEON)
-         return SIMD_4x32(vreinterpretq_u32_u8(vdupq_n_u8(B)));
+         /*
+         * Do not use vdupq_n_u8 here. MSVC ARM64 (VS 17.13 through at least
+         * VS 18.6) can fold vand(vdupq_n_u8(k), vdupq_n_u32(x)) into a scalar
+         * and+dup which wrongly uses the 8-bit k as the 32-bit immediate,
+         * computing dup(x & k) instead of dup(x) & splat_u8(k). This
+         * miscompiled the SM4 key schedule. Broadcasting an explicitly
+         * replicated 32-bit value avoids the bad fold; GCC and Clang generate
+         * identical code either way.
+         */
+         return SIMD_4x32(vdupq_n_u32(static_cast<uint32_t>(B) * 0x01010101U));
 #elif defined(BOTAN_SIMD_USE_LSX)
          return SIMD_4x32(__lsx_vreplgr2vr_b(B));
 #elif defined(BOTAN_SIMD_USE_SIMD128)
@@ -350,9 +359,7 @@ class SIMD_4x32 final {
          __vector unsigned int rot = {r, r, r, r};
          return SIMD_4x32(vec_rl(m_simd, rot));
 
-#elif defined(BOTAN_SIMD_USE_NEON)
-
-   #if defined(BOTAN_TARGET_ARCH_IS_ARM64)
+#elif defined(BOTAN_SIMD_USE_NEON) && defined(BOTAN_TARGET_ARCH_IS_ARM64)
 
          if constexpr(ROT == 8) {
             const uint8_t maskb[16] = {3, 0, 1, 2, 7, 4, 5, 6, 11, 8, 9, 10, 15, 12, 13, 14};
@@ -360,8 +367,11 @@ class SIMD_4x32 final {
             return SIMD_4x32(vreinterpretq_u32_u8(vqtbl1q_u8(vreinterpretq_u8_u32(m_simd), mask)));
          } else if constexpr(ROT == 16) {
             return SIMD_4x32(vreinterpretq_u32_u16(vrev32q_u16(vreinterpretq_u16_u32(m_simd))));
+         } else {
+            return SIMD_4x32(
+               vorrq_u32(vshlq_n_u32(m_simd, static_cast<int>(ROT)), vshrq_n_u32(m_simd, static_cast<int>(32 - ROT))));
          }
-   #endif
+#elif defined(BOTAN_SIMD_USE_NEON)
          return SIMD_4x32(
             vorrq_u32(vshlq_n_u32(m_simd, static_cast<int>(ROT)), vshrq_n_u32(m_simd, static_cast<int>(32 - ROT))));
 #elif defined(BOTAN_SIMD_USE_LSX)
@@ -743,6 +753,27 @@ class SIMD_4x32 final {
          B1.m_simd = wasm_i32x4_shuffle(T0, T1, 2, 6, 3, 7);
          B2.m_simd = wasm_i32x4_shuffle(T2, T3, 0, 4, 1, 5);
          B3.m_simd = wasm_i32x4_shuffle(T2, T3, 2, 6, 3, 7);
+#endif
+      }
+
+      /**
+      * Unsigned lane comparison; returns a mask with all bits set in each
+      * 32-bit lane that is (unsigned) less than the corresponding lane of
+      * @p other, and all bits cleared otherwise.
+      */
+      SIMD_4x32 BOTAN_FN_ISA_SIMD_4X32 unsigned_lt(const SIMD_4x32& other) const noexcept {
+#if defined(BOTAN_SIMD_USE_SSSE3)
+         // No unsigned comparison before AVX-512; bias into the signed domain
+         const __m128i bias = _mm_set1_epi32(static_cast<int32_t>(0x80000000));
+         return SIMD_4x32(_mm_cmpgt_epi32(_mm_xor_si128(other.raw(), bias), _mm_xor_si128(raw(), bias)));
+#elif defined(BOTAN_SIMD_USE_ALTIVEC)
+         return SIMD_4x32(reinterpret_cast<__vector unsigned int>(vec_cmplt(raw(), other.raw())));
+#elif defined(BOTAN_SIMD_USE_NEON)
+         return SIMD_4x32(vcltq_u32(raw(), other.raw()));
+#elif defined(BOTAN_SIMD_USE_LSX)
+         return SIMD_4x32(__lsx_vslt_wu(raw(), other.raw()));
+#elif defined(BOTAN_SIMD_USE_SIMD128)
+         return SIMD_4x32(wasm_u32x4_lt(raw(), other.raw()));
 #endif
       }
 

@@ -59,6 +59,8 @@ in a future major release:
 
 - All ciphersuites using static RSA key exchange
 
+- Support for CCM-8 ciphersuites
+
 - ``Credentials_Manager::psk()`` to provide various TLS-specific keys and
   secrets, most notably "session-ticket", "dtls-cookie-secret" and the actual
   TLS PSKs for given identities and hosts. Instead, use the dedicated methods in
@@ -146,6 +148,8 @@ Deprecated modules include
 
 - Dilithium R3 support: prefer ML-DSA
 
+- SPHINCS+: prefer SLH-DSA
+
 - Block cipher ``gost_28147``: This cipher was obsolete 20 years ago.
 
 - Block cipher ``noekeon``: An interesting design but not widely implemented.
@@ -225,6 +229,9 @@ release, or where a backwards incompatible change is expected.
   this only affects you if you are directly referencing
   ``Botan::Buffered_Computation`` in some way.
 
+- Using the Cascade cipher construction where the two block ciphers do
+  not have identical block lengths is deprecated.
+
 - GCM support for 64-bit tags
 
 - All built in MODP groups < 2048 bits
@@ -261,6 +268,7 @@ internal to the library in the future.
   Internal implementation headers - seemingly no reason for applications to use:
   ``assert.h``,
   ``curve_gfp.h``,
+  ``pem.h``,
   ``reducer.h``,
   ``tls_algos.h``,
   ``tls_magic.h``

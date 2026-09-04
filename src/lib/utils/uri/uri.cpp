@@ -7,7 +7,6 @@
 #include <botan/uri.h>
 
 #include <botan/assert.h>
-#include <botan/exceptn.h>
 #include <botan/internal/charset.h>
 #include <botan/internal/parsing.h>
 
@@ -161,7 +160,7 @@ bool URI::Authority::operator==(const URI::Authority& other) const {
 }
 
 //static
-std::optional<URI> URI::parse(std::string_view raw) {
+std::optional<URI> URI::from_string(std::string_view raw) {
    // Empty string is not a valid URI
    if(raw.empty()) {
       return {};
@@ -207,7 +206,7 @@ std::optional<URI> URI::parse(std::string_view raw) {
 
       // Parse and validate non-empty authority strings (hostname, IPv4, or IPv6 address)
       if(!authority.empty()) {
-         parsed_authority = Authority::parse(authority);
+         parsed_authority = Authority::from_string(authority);
          if(!parsed_authority.has_value()) {
             return {};
          }
@@ -245,7 +244,7 @@ std::optional<URI> URI::parse(std::string_view raw) {
 }
 
 //static
-std::optional<URI::Authority> URI::Authority::parse(std::string_view raw) {
+std::optional<URI::Authority> URI::Authority::from_string(std::string_view raw) {
    if(raw.empty()) {
       return {};
    }

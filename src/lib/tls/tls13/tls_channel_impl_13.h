@@ -16,11 +16,13 @@
 #include <botan/internal/tls_connection_state_13.h>
 #include <botan/internal/tls_handshake_layer_13.h>
 #include <botan/internal/tls_record_layer_13.h>
-#include <botan/internal/tls_transcript_hash_13.h>
 
 namespace Botan::TLS {
 
 class Cipher_State;
+class Transcript_Hash_State;
+class DTLS_Channel_Companion;
+class AcknowledgementTimer;
 
 /**
  * Encapsulates the callbacks in the state machine described in RFC 8446 7.1,
@@ -70,17 +72,17 @@ class Channel_Impl_13 : public Channel_Impl,
             ~AggregatedMessages() = default;
 
             /**
-             * Send the messages aggregated in the message buffer. The buffer
-             * is returned if the sender needs to also handle it somehow.
-             * Most notable use: book keeping for a potential protocol downgrade
-             * in the client implementation.
+             * Send the messages aggregated in the message buffer.
              */
-            std::vector<uint8_t> send();
+            void send();
 
-            bool contains_messages() const { return !m_message_buffer.empty(); }
+            bool contains_messages() const { return m_buffer.has_value(); }
 
          protected:
-            std::vector<uint8_t> m_message_buffer;  // NOLINT(*non-private-member-variable*)
+            void stash(PreparedHandshakeMessage message);
+
+         protected:
+            std::optional<PreparedHandshakeMessageFlight> m_buffer;  // NOLINT(*non-private-member-variable*)
 
             Channel_Impl_13& m_channel;          // NOLINT(*non-private-member-variable*)
             Handshake_Layer& m_handshake_layer;  // NOLINT(*non-private-member-variable*)
@@ -121,7 +123,7 @@ class Channel_Impl_13 : public Channel_Impl,
 
    public:
       /**
-      * Set up a new TLS 1.3 session
+      * Set up a new (D)TLS 1.3 session
       *
       * @param callbacks contains a set of callback function references
       *        required by the TLS endpoint.
@@ -129,14 +131,16 @@ class Channel_Impl_13 : public Channel_Impl,
       * @param credentials_manager manages application/user credentials
       * @param rng a random number generator
       * @param policy specifies other connection policy information
-      * @param is_server whether this is a server session or not
+      * @param connection_side whether this is a client or server session
+      * @param flavor whether TLS1.3 or DTLS1.3 is used
       */
       explicit Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
                                const std::shared_ptr<Session_Manager>& session_manager,
                                const std::shared_ptr<Credentials_Manager>& credentials_manager,
                                const std::shared_ptr<RandomNumberGenerator>& rng,
                                const std::shared_ptr<const Policy>& policy,
-                               bool is_server);
+                               Connection_Side connection_side,
+                               TLS_Flavor flavor);
 
       Channel_Impl_13(const Channel_Impl_13& other) = delete;
       Channel_Impl_13(Channel_Impl_13&& other) = delete;
@@ -215,21 +219,25 @@ class Channel_Impl_13 : public Channel_Impl,
       *
       * In the TLS 1.3 implementation, this always returns false.
       */
-      bool timeout_check() override { return false; }
+      bool timeout_check() override;
+
+      std::optional<std::chrono::milliseconds> next_retransmission_timeout() const override;
 
    protected:
       virtual void process_handshake_msg(Handshake_Message_13 msg) = 0;
       virtual void process_post_handshake_msg(Post_Handshake_Message_13 msg) = 0;
       virtual void process_dummy_change_cipher_spec() = 0;
 
-      /**
-       * @return whether a change cipher spec record should be prepended _now_
-       *
-       * This method can be used by subclasses to indicate that send_record
-       * should prepend a CCS before the actual record. This is useful for
-       * middlebox compatibility mode. See RFC 8446 D.4.
-       */
-      virtual bool prepend_ccs() { return false; }
+      enum class Compat_Mode_Situation : uint8_t {
+         BeforeSendingAlert,
+         AfterSendingFirstClientHello,
+         BeforeSendingSecondClientHello,
+         BeforeSendingEncryptedClientFlight,
+         AfterSendingFirstServerHello,
+         AfterSendingHelloRetryRequest,
+      };
+
+      virtual void maybe_handle_compatibility_mode(Compat_Mode_Situation situation) = 0;
 
       void handle(const Key_Update& key_update);
 
@@ -241,27 +249,29 @@ class Channel_Impl_13 : public Channel_Impl,
       void opportunistically_update_traffic_keys() { m_opportunistic_key_update = true; }
 
       template <typename... MsgTs>
-      std::vector<uint8_t> send_handshake_message(const std::variant<MsgTs...>& message) {
-         return aggregate_handshake_messages().add(generalize_to<Handshake_Message_13_Ref>(message)).send();
+      void send_handshake_message(const std::variant<MsgTs...>& message) {
+         aggregate_handshake_messages().add(generalize_to<Handshake_Message_13_Ref>(message)).send();
       }
 
       template <typename MsgT>
-      std::vector<uint8_t> send_handshake_message(std::reference_wrapper<MsgT> message) {
-         return send_handshake_message(generalize_to<Handshake_Message_13_Ref>(message));
+      void send_handshake_message(std::reference_wrapper<MsgT> message) {
+         send_handshake_message(generalize_to<Handshake_Message_13_Ref>(message));
       }
 
-      std::vector<uint8_t> send_post_handshake_message(Post_Handshake_Message_13 message) {
-         return aggregate_post_handshake_messages().add(std::move(message)).send();
+      void send_post_handshake_message(Post_Handshake_Message_13 message) {
+         aggregate_post_handshake_messages().add(std::move(message)).send();
       }
 
       void send_dummy_change_cipher_spec();
 
       AggregatedHandshakeMessages aggregate_handshake_messages() {
-         return AggregatedHandshakeMessages(*this, m_handshake_layer, m_transcript_hash);
+         BOTAN_ASSERT_NONNULL(m_handshake_layer);
+         BOTAN_ASSERT_NONNULL(m_transcript_hash);
+         return AggregatedHandshakeMessages(*this, *m_handshake_layer, *m_transcript_hash);
       }
 
       AggregatedPostHandshakeMessages aggregate_post_handshake_messages() {
-         return AggregatedPostHandshakeMessages(*this, m_handshake_layer);
+         return AggregatedPostHandshakeMessages(*this, *m_handshake_layer);
       }
 
       Callbacks& callbacks() const { return *m_callbacks; }
@@ -274,10 +284,26 @@ class Channel_Impl_13 : public Channel_Impl,
 
       const Policy& policy() const { return *m_policy; }
 
-   private:
-      void send_record(Record_Type record_type, const std::vector<uint8_t>& record);
+      bool is_datagram() const { return m_flavor == TLS_Flavor::DTLS; }
 
+      void send_record(Record_Type record_type, std::span<const uint8_t> payload);
+      void send_record(const PreparedHandshakeMessageFlight& flight);
+
+      void send_acknowledgements();
+
+   private:
       void process_alert(const secure_vector<uint8_t>& record);
+      void process_acknowledgements(std::span<const uint8_t> record);
+
+      enum class TimerGeneration : bool {
+         Advance,
+         Keep,
+      };
+
+      void maybe_arm_dtls_retransmission_timer(TimerGeneration generation_policy = TimerGeneration::Advance);
+
+      void maybe_arm_dtls_acknowledgement_timer();
+      void maybe_cancel_dtls_acknowledgement_timer();
 
       /**
        * Terminate the connection (on sending or receiving an error alert) and
@@ -287,10 +313,12 @@ class Channel_Impl_13 : public Channel_Impl,
 
    protected:
       const Connection_Side m_side;                              // NOLINT(*non-private-member-variable*)
-      Transcript_Hash_State m_transcript_hash;                   // NOLINT(*non-private-member-variable*)
+      std::unique_ptr<Transcript_Hash_State> m_transcript_hash;  // NOLINT(*non-private-member-variable*)
       std::unique_ptr<Cipher_State> m_cipher_state;              // NOLINT(*non-private-member-variable*)
       std::optional<Active_Connection_State_13> m_active_state;  // NOLINT(*non-private-member-variable*)
+      TLS_Flavor m_flavor;                                       // NOLINT(*-non-private-member-*)
 
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
       /**
        * Indicate that we have to expect a downgrade to TLS 1.2. In which case the current
        * implementation (i.e. Client_Impl_13 or Server_Impl_13) will need to be replaced
@@ -301,6 +329,7 @@ class Channel_Impl_13 : public Channel_Impl,
        * @sa `Channel_Impl::Downgrade_Information`
        */
       void expect_downgrade(const Server_Information& server_info, const std::vector<std::string>& next_protocols);
+#endif
 
       /**
        * Set the record size limits as negotiated by the "record_size_limit"
@@ -320,6 +349,19 @@ class Channel_Impl_13 : public Channel_Impl,
        */
       void set_selected_certificate_type(Certificate_Type cert_type);
 
+   protected:
+      /* handshake state */
+      std::shared_ptr<Record_Layer> m_record_layer;  // NOLINT(*-non-private-member-*)
+      // For DTLS currently, handshake_layer has a ref to record_layer, so record_layer
+      // has to outlive handshake_layer. TODO: A HSL <-> RL bridge for DTLS should
+      // avoid this.
+      std::shared_ptr<Handshake_Layer> m_handshake_layer;  // NOLINT(*-non-private-member-*)
+
+      /* DTLS specific */
+      std::unique_ptr<DTLS_Channel_Companion> m_dtls_channel_companion;  // NOLINT(*-non-private-member-*)
+      uint64_t m_retransmission_timer_generation = 0;                    // NOLINT(*-non-private-member-*)
+      std::shared_ptr<AcknowledgementTimer> m_ack_timer;                 // NOLINT(*-non-private-member-*)
+
    private:
       /* callbacks */
       std::shared_ptr<Callbacks> m_callbacks;
@@ -330,14 +372,17 @@ class Channel_Impl_13 : public Channel_Impl,
       std::shared_ptr<RandomNumberGenerator> m_rng;
       std::shared_ptr<const Policy> m_policy;
 
-      /* handshake state */
-      Record_Layer m_record_layer;
-      Handshake_Layer m_handshake_layer;
-
       bool m_can_read;
       bool m_can_write;
 
       bool m_opportunistic_key_update;
+
+      /**
+       * True while a KeyUpdate with "update_requested" is outstanding, i.e.
+       * the peer has not yet replied with a KeyUpdate of its own.
+       */
+      bool m_key_update_requested;
+
       bool m_first_message_sent;
       bool m_first_message_received;
 

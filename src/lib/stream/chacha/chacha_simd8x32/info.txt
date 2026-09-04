@@ -1,0 +1,17 @@
+<internal_defines>
+CHACHA_SIMD8X32 -> 20260816
+</internal_defines>
+
+<module_info>
+name -> "ChaCha20 SIMD 8x32"
+brief -> "ChaCha20 using 8x32 SIMD instructions"
+</module_info>
+
+<isa>
+avx2
+</isa>
+
+<requires>
+simd_8x32
+cpuid
+</requires>

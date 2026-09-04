@@ -11,13 +11,24 @@
    #include "test_arb_eq.h"
    #include "test_pubkey.h"
    #include <botan/asn1_obj.h>
+   #include <botan/exceptn.h>
    #include <botan/hss_lms.h>
    #include <botan/pk_algs.h>
+   #include <botan/pk_options.h>
    #include <botan/pubkey.h>
    #include <botan/internal/fmt.h>
    #include <botan/internal/hss.h>
    #include <botan/internal/loadstor.h>
    #include <limits>
+
+   #if defined(BOTAN_HAS_X509_CERTIFICATES) && defined(BOTAN_TARGET_OS_HAS_FILESYSTEM)
+      #include <botan/x509cert.h>
+   #endif
+
+   #if defined(BOTAN_TARGET_OS_HAS_POSIX1)
+      #include <sys/wait.h>
+      #include <unistd.h>
+   #endif
 
 namespace Botan_Tests {
 
@@ -130,8 +141,8 @@ class HSS_LMS_Negative_Tests final : public Test {
 
          auto sk = Botan::create_private_key("HSS-LMS", Test::rng(), "Truncated(SHA-256,192),HW(5,8)");
 
-         Botan::PK_Signer signer(*sk, Test::rng(), "");
-         Botan::PK_Verifier verifier(*sk, "");
+         Botan::PK_Signer signer(*sk, Test::rng(), Botan::PK_Signature_Options());
+         Botan::PK_Verifier verifier(*sk, Botan::PK_Signature_Options());
 
          std::vector<uint8_t> mes = {0xde, 0xad, 0xbe, 0xef};
 
@@ -157,8 +168,8 @@ class HSS_LMS_Negative_Tests final : public Test {
 
          auto sk = Botan::create_private_key("HSS-LMS", Test::rng(), "Truncated(SHA-256,192),HW(5,8)");
 
-         Botan::PK_Signer signer(*sk, Test::rng(), "");
-         Botan::PK_Verifier verifier(*sk, "");
+         Botan::PK_Signer signer(*sk, Test::rng(), Botan::PK_Signature_Options());
+         Botan::PK_Verifier verifier(*sk, Botan::PK_Signature_Options());
 
          std::vector<uint8_t> mes = {0xde, 0xad, 0xbe, 0xef};
 
@@ -243,7 +254,7 @@ class HSS_LMS_Statefulness_Test final : public Test {
          Test::Result result("HSS-LMS");
 
          auto sk = Botan::HSS_LMS_PrivateKey(Test::rng(), "Truncated(SHA-256,192),HW(5,8),HW(5,8)");
-         Botan::PK_Signer signer(sk, Test::rng(), "");
+         Botan::PK_Signer signer(sk, Test::rng(), Botan::PK_Signature_Options());
          std::vector<uint8_t> mes = {0xde, 0xad, 0xbe, 0xef};
          auto sk_bytes_begin = sk.private_key_bits();
 
@@ -278,7 +289,7 @@ class HSS_LMS_Statefulness_Test final : public Test {
          const uint64_t total_sig_count = 32;
          auto sk = create_private_key_with_idx(total_sig_count - 1);
 
-         Botan::PK_Signer signer(sk, Test::rng(), "");
+         Botan::PK_Signer signer(sk, Test::rng(), Botan::PK_Signature_Options());
          std::vector<uint8_t> mes = {0xde, 0xad, 0xbe, 0xef};
          auto sk_bytes_begin = sk.private_key_bits();
 
@@ -394,13 +405,96 @@ class HSS_LMS_Statefulness_Test final : public Test {
          return result;
       }
 
+   #if defined(BOTAN_TARGET_OS_HAS_POSIX1)
+      Test::Result test_forked_key_cannot_sign() {
+         Test::Result result("HSS-LMS fork safety");
+
+         const Botan::HSS_LMS_PrivateKey sk(Test::rng(), "Truncated(SHA-256,192),HW(5,8)");
+         const std::vector<uint8_t> mes = {0xde, 0xad, 0xbe, 0xef};
+         constexpr uint8_t child_signed = 1;
+         constexpr uint8_t child_refused = 2;
+         constexpr uint8_t child_other_exception = 3;
+
+         int fd[2];
+         if(::pipe(fd) != 0) {
+            result.test_failure("failed to create pipe");
+            return result;
+         }
+
+         const pid_t pid = ::fork();
+         if(pid == -1) {
+            ::close(fd[0]);
+            ::close(fd[1]);
+
+      #if defined(BOTAN_TARGET_OS_IS_EMSCRIPTEN)
+            result.test_note("failed to fork process");
+      #else
+            result.test_failure("failed to fork process");
+      #endif
+
+            return result;
+         } else if(pid == 0) {
+            ::close(fd[0]);
+
+            uint8_t child_status = child_signed;
+
+            try {
+               Botan::PK_Signer signer(sk, Test::rng(), "");
+               signer.sign_message(mes, Test::rng());
+            } catch(const Botan::Invalid_State&) {
+               child_status = child_refused;
+            } catch(const std::exception&) {
+               child_status = child_other_exception;
+            }
+
+            [[maybe_unused]] const ssize_t written = ::write(fd[1], &child_status, sizeof(child_status));
+            ::close(fd[1]);
+
+            ::execl("/bin/true", "true", NULL);  // NOLINT(*-vararg)
+            ::_exit(0);
+         }
+
+         ::close(fd[1]);
+
+         uint8_t child_status = 0;
+         const ssize_t got = ::read(fd[0], &child_status, sizeof(child_status));
+         if(got > 0) {
+            result.test_sz_eq("expected status byte from child", static_cast<size_t>(got), sizeof(child_status));
+            result.test_u8_eq("forked child refused to emit an index", child_status, child_refused);
+         } else {
+            result.test_failure("failed to read child status");
+         }
+         ::close(fd[0]);
+
+         int status = 0;
+         if(::waitpid(pid, &status, 0) == pid) {
+            result.test_is_true("child exited successfully", WIFEXITED(status) && WEXITSTATUS(status) == 0);
+         } else {
+            result.test_failure("failed to wait for child process");
+         }
+
+         Botan::PK_Signer signer(sk, Test::rng(), "");
+         result.test_no_throw("parent can still sign", [&]() { signer.sign_message(mes, Test::rng()); });
+
+         return result;
+      }
+   #endif
+
       std::vector<Test::Result> run() final {
-         return {test_sig_changes_state(),
-                 test_max_sig_count(),
-                 test_idx_bound_checked_on_load(),
-                 test_exhausted_key_stays_exhausted(),
-                 test_params_are_part_of_key_identity(),
-                 test_separately_loaded_copies_share_state()};
+         std::vector<Test::Result> results = {test_sig_changes_state(),
+                                              test_max_sig_count(),
+                                              test_idx_bound_checked_on_load(),
+                                              test_exhausted_key_stays_exhausted(),
+                                              test_params_are_part_of_key_identity(),
+                                              test_separately_loaded_copies_share_state()};
+
+   #if defined(BOTAN_TARGET_OS_HAS_POSIX1)
+         if(Test::options().test_threads() == 1) {
+            results.push_back(test_forked_key_cannot_sign());
+         }
+   #endif
+
+         return results;
       }
 };
 
@@ -419,14 +513,14 @@ class HSS_LMS_Missing_API_Test final : public Test {
                            3 * sizeof(uint32_t) + Botan::LMS_IDENTIFIER_LEN);
 
          // HSS_LMS_Verification_Operation::hash_function()
-         const Botan::PK_Verifier verifier(*sk, "");
+         const Botan::PK_Verifier verifier(*sk, Botan::PK_Signature_Options());
          result.test_str_eq("PK_Verifier should report the hash of the key", verifier.hash_function(), "SHA-256");
 
          // HSS_LMS_PrivateKey::raw_private_key_bits()
          result.test_bin_eq("Our BER and raw encoding is the same", sk->raw_private_key_bits(), sk->private_key_bits());
 
          // HSS_LMS_Signature_Operation::algorithm_identifier()
-         const Botan::PK_Signer signer(*sk, Test::rng(), "");
+         const Botan::PK_Signer signer(*sk, Test::rng(), Botan::PK_Signature_Options());
          result.test_is_true("signature algorithm", signer.algorithm_identifier() == sk->algorithm_identifier());
 
          // HSS_LMS_Signature_Operation::hash_function()
@@ -436,6 +530,23 @@ class HSS_LMS_Missing_API_Test final : public Test {
       }
 };
 
+   #if defined(BOTAN_HAS_X509_CERTIFICATES) && defined(BOTAN_TARGET_OS_HAS_FILESYSTEM)
+/**
+ * @brief Test with the example certificate from RFC 9802 Appendix A.
+ */
+class HSS_LMS_X509_Test final : public Test {
+      std::vector<Test::Result> run() final {
+         Test::Result result("HSS-LMS X.509");
+
+         const Botan::X509_Certificate cert(Test::data_file("x509/hss-lms/hss-lms-rfc-9802-cert.pem"));
+         auto ver_res = cert.verify_signature(*cert.subject_public_key());
+         result.test_is_true("signature of certificate verifies", ver_res.first == Botan::Certificate_Status_Code::OK);
+
+         return {result};
+      }
+};
+   #endif
+
 BOTAN_REGISTER_TEST_FN("pubkey", "hss_lms_params_parsing", test_hss_lms_params_parsing);
 BOTAN_REGISTER_TEST("pubkey", "hss_lms_sign", HSS_LMS_Signature_Generation_Test);
 BOTAN_REGISTER_TEST("pubkey", "hss_lms_verify", HSS_LMS_Signature_Verify_Tests);
@@ -444,6 +555,10 @@ BOTAN_REGISTER_TEST("pubkey", "hss_lms_keygen", HSS_LMS_Key_Generation_Test);
 BOTAN_REGISTER_TEST("pubkey", "hss_lms_negative", HSS_LMS_Negative_Tests);
 BOTAN_REGISTER_TEST("pubkey", "hss_lms_state", HSS_LMS_Statefulness_Test);
 BOTAN_REGISTER_TEST("pubkey", "hss_lms_api", HSS_LMS_Missing_API_Test);
+
+   #if defined(BOTAN_HAS_X509_CERTIFICATES) && defined(BOTAN_TARGET_OS_HAS_FILESYSTEM)
+BOTAN_REGISTER_TEST("pubkey", "hss_lms_x509", HSS_LMS_X509_Test);
+   #endif
 
 }  // namespace
 

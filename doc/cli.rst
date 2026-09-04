@@ -111,16 +111,45 @@ Public Key Cryptography
   the passphrase passed as *pass-out*. The parameters *cipher*, *pbkdf*, and
   *pbkdf-ms* work similarly to ``keygen``.
 
-``sign --der-format --passphrase= --hash=SHA-256 --padding= --provider= key file``
+``sign --der-format --passphrase= --hash= --padding= --prehash= --prehashed --context= --salt-size= --deterministic --provider= key file``
 
-  Sign the data in *file* using the PKCS #8 private key *key* and cryptographic
-  hash *hash*. If *key* is encrypted, the used passphrase must be passed as
-  *pass-in*.
+  Sign the data in *file* using the PKCS #8 private key *key*. If *key* is
+  encrypted, the used passphrase must be passed as *passphrase*.
+
+  The options map onto the library's ``PK_Signature_Options``; an option that
+  the key's signature scheme does not support is rejected rather than ignored.
+
+  The *hash* option selects the hash function for schemes which require one
+  (RSA, DSA, ECDSA, ECGDSA, ECKCDSA, GOST 34.10); if not specified SHA-256 is
+  used. Schemes which do not take a hash (Ed25519, Ed448, ML-DSA, SLH-DSA,
+  XMSS, HSS-LMS) or which fix it (SM2) must be used without this option.
 
   The *padding* option can be used to control padding for algorithms that have
   divergent methods; this mostly applies to RSA. For RSA, if the option is not
   specified PSS signatures are used. You can select generating a PKCS #1 v1.5
-  formatted signature instead by providing ``--padding=PKCS1v15``.
+  formatted signature instead by providing ``--padding=PKCS1v15``. The
+  *salt-size* option sets the PSS salt length in bytes.
+
+  The *prehash* option signs a hash of the input rather than the input itself,
+  for schemes which offer such a mode. ``--prehash=default`` selects the
+  scheme's standard prehash mode (Ed25519ph, Ed448ph); a hash function name
+  selects that specific function. The hash is computed by Botan.
+
+  The *prehashed* flag instead indicates that the input file already contains
+  a digest computed elsewhere, which is signed directly without being hashed
+  again. If *hash* is also given it names the function used to compute the
+  digest, allowing its length to be checked (and, for RSA PKCS #1 v1.5, the
+  hash to be identified in the signature); otherwise the digest is signed as
+  an opaque byte string. Only schemes which can sign a caller-provided digest
+  (RSA, DSA, ECDSA, ECGDSA, GOST 34.10, SM2) accept this flag.
+
+  The *context* option provides a context string, for schemes which accept
+  one (for example the SM2 user identifier).
+
+  The *deterministic* option requests a deterministic signature, for schemes
+  which support both randomized and deterministic signing (for example ECDSA
+  using RFC 6979). Schemes which are always deterministic accept it; schemes
+  which cannot produce a deterministic signature reject it.
 
   For ECDSA and DSA, the option ``--der-format`` outputs the signature as an
   ASN.1 encoded blob. Some other tools (including ``openssl``) default to this
@@ -128,11 +157,10 @@ Public Key Cryptography
 
   The signature is formatted for your screen using base64.
 
-``verify --der-format --hash=SHA-256 --padding= pubkey file signature``
+``verify --der-format --hash= --padding= --prehash= --prehashed --context= --salt-size= pubkey file signature``
   Verify the authenticity of the data in *file* with the provided signature
-  *signature* and the public key *pubkey*. Similarly to the signing process,
-  *padding* specifies the padding scheme and *hash* the cryptographic hash
-  function to use.
+  *signature* and the public key *pubkey*. The options have the same meaning
+  as for ``sign`` and must match those used to create the signature.
 
 ``gen_dl_group --pbits=1024 --qbits=0 --seed= --type=subgroup``
   Generate ANSI X9.42 encoded Diffie-Hellman group parameters.
@@ -218,6 +246,36 @@ X.509
 ``trust_roots --dn --dn-only --display``
   List the certificates in the system trust store.
 
+PKCS#12
+----------------------------------------------
+
+``pkcs12_export --output= --pass= --in-key-pass= --friendly-name= --key-cipher=PBES2-SHA256-AES256 --no-mac --cert-cipher= --mac-digest=SHA-256 --iterations=100000 key cert *ca_certs``
+  Bundle a PKCS#8 *key*, its end-entity *cert*, and optionally one or more CA
+  certificates (*ca_certs*) into a PKCS#12/PFX file. The PFX password is
+  taken from ``--pass``; if the input key is itself encrypted, its passphrase
+  is taken from ``--in-key-pass``.
+
+  ``--key-cipher`` selects the private-key encryption algorithm. Modern
+  choices (default): ``"PBES2-SHA256-AES256"``, ``"PBES2-SHA256-AES128"``.
+  Legacy interop: ``"PBE-SHA1-3DES"``, ``"PBE-SHA1-2DES"``.
+  ``--cert-cipher`` (empty by default) wraps the certificate bags in an
+  EncryptedData; leave empty for unencrypted certificates.
+  ``--mac-digest`` selects the integrity-MAC digest (``SHA-256`` default,
+  ``SHA-1`` for maximum interoperability). ``--no-mac`` omits the MAC
+  entirely (required when ``--pass`` is empty).
+
+``pkcs12_info --pass= --key-out= --cert-out= --chain-out= --out-key-pass= --out-key-cipher= --key-pbkdf-iter=100000 pfx_file``
+  Inspect a PKCS#12/PFX file. Without output arguments, prints a summary of
+  the contents (key algorithm, end-entity subject/issuer/serial/validity,
+  SHA-1 and SHA-256 fingerprints, CA chain, friendly name).
+
+  ``--key-out`` writes the extracted private key as PEM. When
+  ``--out-key-pass`` is set the key is re-encrypted with the algorithm from
+  ``--out-key-cipher`` (default ``AES-256/CBC``) using ``--key-pbkdf-iter``
+  PBKDF iterations. ``--cert-out`` writes the end-entity certificate as PEM,
+  and ``--chain-out`` writes the CA certificate chain (one PEM block per
+  cert) if any are present.
+
 TLS Server/Client
 -----------------------
 
@@ -245,20 +303,23 @@ from which a policy description will be read.
 ``tls_server cert key --port=443 --type=tcp --policy=default --dump-traces= --max-clients=0 --socket-id=0``
   Implements a testing TLS server, which allows TLS clients to connect and which
   echos any data that is sent to it. Binds to either TCP or UDP on port
-  *port*. The server uses the certificate *cert* and the respective PKCS #8
-  private key *key*. The server honors the TLS policy specified with *policy*.
-  *socket-id* is only available on FreeBSD and sets the *so_user_cookie* value
-  of the used socket.
+  *port*; if *port* is zero the operating system assigns a free port, which is
+  reported once the server is listening. The server uses the certificate *cert*
+  and the respective PKCS #8 private key *key*. The server honors the TLS policy
+  specified with *policy*. *socket-id* is only available on FreeBSD and sets the
+  *so_user_cookie* value of the used socket.
 
 ``tls_http_server cert key --port=443 --policy=default --threads=0 --max-clients=0 --session-db --session-db-pass=``
   Only available if Boost.Asio support was enabled. Provides a simple HTTP server
   which replies to all requests with an informational text output. The server
-  honors the TLS policy specified with *policy*.
+  honors the TLS policy specified with *policy*. If *port* is zero the operating
+  system assigns a free port, which is reported once the server is listening.
 
 ``tls_proxy listen_port target_host target_port server_cert server_key--policy=default --threads=0 --max-clients=0 --session-db= --session-db-pass=``
-  Only available if Boost.Asio support was enabled. Listens on a port and
-  forwards all connects to a target server specified at
-  ``target_host`` and ``target_port``.
+  Only available if Boost.Asio support was enabled. Listens on ``listen_port``
+  and forwards all connects to a target server specified at
+  ``target_host`` and ``target_port``. If ``listen_port`` is zero the operating
+  system assigns a free port, which is reported once the proxy is listening.
 
 ``tls_client_hello --hex input``
   Parse and print a TLS client hello message.

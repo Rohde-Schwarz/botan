@@ -62,6 +62,16 @@ std::chrono::system_clock::time_point TLS::Callbacks::tls_current_timestamp() {
    return std::chrono::system_clock::now();
 }
 
+uint64_t TLS::Callbacks::tls_current_monotonic_clock_ms() {
+   const auto now = std::chrono::steady_clock::now().time_since_epoch();
+   return std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+}
+
+void TLS::Callbacks::tls_register_deferred_operation(uint64_t monotonic_delay_ms,
+                                                     std::function<void()> op /* NOLINT(*-value-param) */) {
+   BOTAN_UNUSED(monotonic_delay_ms, op);  // no-op
+}
+
 void TLS::Callbacks::tls_modify_extensions(Extensions& /*unused*/,
                                            Connection_Side /*unused*/,
                                            Handshake_Type /*unused*/) {}
@@ -217,7 +227,20 @@ std::unique_ptr<Public_Key> TLS::Callbacks::tls_deserialize_peer_public_key(
 
    if(group_params.is_ecdh_named_curve()) {
       const auto ec_group = EC_Group::from_name(group_params.to_algorithm_spec().value());
-      return std::make_unique<ECDH_PublicKey>(ec_group, EC_AffinePoint(ec_group, key_bits));
+      // TLS 1.3 requires uncompressed points (checked when parsing the key
+      // share); TLS 1.2 may negotiate the compressed format. The deprecated
+      // hybrid encoding and the identity element are never accepted.
+
+      auto point = [&]() -> EC_AffinePoint {
+         if(auto pt_uncompressed = EC_AffinePoint::deserialize_uncompressed(ec_group, key_bits)) {
+            return std::move(pt_uncompressed).value();
+         } else if(auto pt_compressed = EC_AffinePoint::deserialize_compressed(ec_group, key_bits)) {
+            return std::move(pt_compressed).value();
+         } else {
+            throw Decoding_Error("Invalid ECDH public key encoding");
+         }
+      }();
+      return std::make_unique<ECDH_PublicKey>(ec_group, std::move(point));
    }
 
 #if defined(BOTAN_HAS_X25519)
@@ -352,7 +375,21 @@ std::unique_ptr<PK_Key_Agreement_Key> TLS::Callbacks::tls_generate_ephemeral_key
 
    if(group_params.is_ecdh_named_curve()) {
       const auto ec_group = EC_Group::from_name(group_params.to_algorithm_spec().value());
-      return std::make_unique<ECDH_PrivateKey>(rng, ec_group);
+      auto ecdh_key = std::make_unique<ECDH_PrivateKey>(rng, ec_group);
+
+      // RFC 8446 Ch. 4.2.8.2
+      //
+      //   Note: Versions of TLS prior to 1.3 permitted point format
+      //   negotiation; TLS 1.3 removes this feature in favor of a single point
+      //   format for each curve.
+      //
+      // Hence, TLS 1.3 won't take Policy::use_ecc_point_compression() or
+      // ClientHello::prefers_compressed_ec_points() into account but always use
+      // uncompressed point encoding. Note that TLS 1.2 uses the
+      // `tls12_generate_ephemeral_ecdh_key()` callback, which allows to specify
+      // the point encoding format.
+      ecdh_key->set_point_encoding(EC_Point_Format::Uncompressed);
+      return ecdh_key;
    }
 
 #if defined(BOTAN_HAS_X25519)

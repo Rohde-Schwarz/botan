@@ -154,6 +154,11 @@ If you don't already use it for all your C/C++ development, install ``ccache``
 (or on Windows, ``sccache``) right now, and configure a large cache on a fast
 disk. It allows for very quick rebuilds by caching the compiler output.
 
+With GCC or Clang, ``--enable-pch`` uses a precompiled header to speed up
+compilation. For ``ccache``, setting ``CCACHE_SLOPPINESS=pch_defines,time_macros``
+allows using both the compiler cache and precompiled headers, for best
+compilation speed.
+
 Use ``--enable-sanitizers=`` flag to enable various sanitizer checks.  Supported
 values including "address" and "undefined" for GCC and Clang. GCC also supports
 "iterator" (checked iterators), and Clang supports "memory" (MSan) and
@@ -206,6 +211,21 @@ license, for example::
 
 If you are making a substantial or non-trivial change to an existing file, add
 or update your own copyright statement at the top of each file.
+
+Notes On Comments
+----------------------------------------
+
+Comments are great. Comments are also in some sense a sign of failure; the code is doing
+something non-obvious, and the easiest way to make the behavior or reasoning more obvious
+it to leave a comment. If you find yourself leaving a long comment explaining how something
+works or why it behaves a particular way, consider if it's possible to restructure the code
+to make the long comment unnecessary.
+
+If the behavior of the code is dictated by an external standard (such as an IETF RFC or
+a NIST SP document), often the best possible comment is a direct verbatim quote from the
+relevant standard, referencing the document and section.
+
+For Doxygen doc-comments, prefer ``/** ... */`` over multi-line ``///`` comments.
 
 Style Conventions
 ----------------------------------------
@@ -271,6 +291,22 @@ use ``std::bind``. (But, don't use ``std::bind`` - use a lambda instead).
 
 Use ``::`` to explicitly refer to the global namespace (eg, when calling an OS
 or external library function like ``::select`` or ``::sqlite3_open``).
+
+Test Data
+----------------------------------------
+
+Botan heavily favors data-driven tests where possible. As of the current writing there
+are under 3 Mb of test code, and almost 30 Mb of fixed data (under ``src/tests/data``)
+which the tests consume.
+
+It is very much preferable that test data is created by a third party implementation
+where possible. Botan itself should be used to create test inputs only when there is no
+reasonable alternative. Especially for X.509 related test data such as certificates or
+CRLs, prefer using OpenSSL, python-cryptography, or (as a last resort) ascii2der to
+generate test inputs.
+
+Generating test inputs from a third party helps reduce the risk that we replicate a bug
+in the library into the test itself.
 
 Use of External Dependencies
 ----------------------------------------

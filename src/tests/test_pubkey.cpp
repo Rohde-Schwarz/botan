@@ -14,7 +14,6 @@
 
    #include <botan/data_src.h>
    #include <botan/exceptn.h>
-   #include <botan/hex.h>
    #include <botan/pk_algs.h>
    #include <botan/pkcs8.h>
    #include <botan/pubkey.h>
@@ -144,7 +143,7 @@ Test::Result PK_Signature_Generation_Test::run_one_test(const std::string& pad_h
    if(vars.has_key("Group")) {
       test_name << "-" << vars.get_req_str("Group");
    }
-   test_name << "/" << padding << " signature generation";
+   test_name << "/" << printed_params(vars, padding) << " signature generation";
 
    Test::Result result(test_name.str());
 
@@ -417,6 +416,8 @@ Test::Result PK_Encryption_Decryption_Test::run_one_test(const std::string& pad_
 
          result.test_sz_lte(
             "Plaintext within length", decrypted.size(), decryptor->plaintext_length(ciphertext.size()));
+         result.test_sz_lte(
+            "Ciphertext within length", ciphertext.size(), decryptor->ciphertext_length(plaintext.size()));
       } catch(Botan::Exception& e) {
          result.test_failure("Failed to decrypt KAT ciphertext", e.what());
       }
@@ -488,6 +489,8 @@ Test::Result PK_Decryption_Test::run_one_test(const std::string& pad_hdr, const 
       Botan::secure_vector<uint8_t> decrypted;
       try {
          decrypted = decryptor->decrypt(ciphertext);
+         result.test_sz_lte(
+            "Ciphertext within length", ciphertext.size(), decryptor->ciphertext_length(plaintext.size()));
       } catch(Botan::Exception& e) {
          result.test_failure("Failed to decrypt KAT ciphertext", e.what());
       }

@@ -14,6 +14,7 @@
 #include <botan/tls_messages_13.h>
 #include <botan/internal/stl_util.h>
 #include <optional>
+#include <utility>
 #include <variant>
 
 namespace Botan::TLS {
@@ -72,6 +73,19 @@ class BOTAN_TEST_API Handshake_State_13_Base {
 
       const Finished_13& client_finished() const { return get(m_client_finished); }
 
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+      /**
+       * This extracts the Client Hello object from the handshake state. This is
+       * a destructive operation that should only be used for protocol
+       * downgrades, where the Client Hello is transferred to the other
+       * implementation.
+       */
+      Client_Hello_13 take_client_hello() {
+         BOTAN_STATE_CHECK(m_client_hello.has_value());
+         return std::exchange(m_client_hello, {}).value();
+      }
+#endif
+
    protected:
       explicit Handshake_State_13_Base(Connection_Side whoami) : m_side(whoami) {}
 
@@ -80,6 +94,7 @@ class BOTAN_TEST_API Handshake_State_13_Base {
       Server_Hello_13& store(Server_Hello_13 server_hello, bool from_peer);
       Server_Hello_12_Shim& store(Server_Hello_12_Shim server_hello, bool from_peer);
       Hello_Retry_Request& store(Hello_Retry_Request hello_retry_request, bool from_peer);
+      Hello_Verify_Request& store(Hello_Verify_Request hello_verify_request, bool from_peer);
       Encrypted_Extensions& store(Encrypted_Extensions encrypted_extensions, bool from_peer);
       Certificate_Request_13& store(Certificate_Request_13 certificate_request, bool from_peer);
       Certificate_13& store(Certificate_13 certificate, bool from_peer);
@@ -111,6 +126,7 @@ class BOTAN_TEST_API Handshake_State_13_Base {
       std::optional<Server_Hello_13> m_server_hello;
       std::optional<Server_Hello_12_Shim> m_server_hello_12;
       std::optional<Hello_Retry_Request> m_hello_retry_request;
+      std::optional<Hello_Verify_Request> m_hello_verify_request_12;
       std::optional<Encrypted_Extensions> m_encrypted_extensions;
       std::optional<Certificate_Request_13> m_certificate_request;
       std::optional<Certificate_13> m_server_certificate;

@@ -1,0 +1,17 @@
+<internal_defines>
+CTR_BE_SIMD8X32 -> 20260816
+</internal_defines>
+
+<module_info>
+name -> "CTR-BE SIMD 8x32"
+brief -> "8x32 SIMD-accelerated CTR-BE counter management and XOR"
+</module_info>
+
+<isa>
+avx2
+</isa>
+
+<requires>
+cpuid
+simd_8x32
+</requires>

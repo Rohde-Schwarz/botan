@@ -15,6 +15,10 @@
 
 //BOTAN_FUTURE_INTERNAL_HEADER(tls_magic.h)
 
+#if defined(BOTAN_HAS_TLS_13) && defined(BOTAN_HAS_TLS_12)
+   #define BOTAN_HAS_TLS_DOWNGRADE_SUPPORT
+#endif
+
 namespace Botan::TLS {
 
 /**
@@ -57,7 +61,14 @@ enum class Record_Type : uint8_t {
    Handshake = 22,
    ApplicationData = 23,
 
-   Heartbeat = 24,  // RFC 6520 (TLS 1.3)
+   Heartbeat = 24,  // RFC 6520
+
+   ACK = 26,  // RFC 9147 (DTLS 1.3)
+};
+
+enum class TLS_Flavor : bool {
+   TLS,
+   DTLS,
 };
 
 enum class Handshake_Type : uint8_t {
@@ -126,6 +137,14 @@ constexpr uint64_t DOWNGRADE_TLS12 = 0x444F574E47524401;
 constexpr std::array<uint8_t, 32> HELLO_RETRY_REQUEST_MARKER = {
    0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
    0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C};
+
+/**
+ * BoringSSL reports a sub-15ms remainder as zero (ssl/d1_lib.cc
+ * DTLSTimer::MicrosecondsRemaining) to absorb divergence with caller
+ * scheduling; BoGo's DTLS-Retransmit-Fudge test requires it. The cap keeps the
+ * fudge from swallowing the very short timers some tests configure.
+ */
+constexpr uint64_t DTLS_RETRANSMISSION_TIMER_FUDGE = 15;
 
 }  // namespace Botan::TLS
 

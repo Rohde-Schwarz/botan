@@ -8,6 +8,7 @@ Botan is released under the Simplified BSD License (see license.txt)
 
 import sys
 
+
 def gha_linux_packages(target, compiler):
     packages = [
         'ccache',
@@ -19,6 +20,14 @@ def gha_linux_packages(target, compiler):
     if compiler in ['gcc-14']:
         packages.append('gcc-14')
 
+    if compiler in ['gcc-11']:
+        packages.append('g++-11')
+
+    if compiler in ['clang-14']:
+        packages.append('clang-14')
+        # provides the libstdc++-11 headers that clang-14 is pinned to
+        packages.append('libstdc++-11-dev')
+
     if target.startswith('valgrind'):
         packages.append('valgrind')
 
@@ -29,7 +38,10 @@ def gha_linux_packages(target, compiler):
         packages.append('clang')
 
     if target in ['cross-i386']:
-        packages.append('g++-multilib')
+        if compiler == 'gcc-11':
+            packages.append('g++-11-multilib')
+        else:
+            packages.append('g++-multilib')
         packages.append('linux-libc-dev')
         packages.append('libc6-dev-i386')
 
@@ -134,6 +146,11 @@ def gha_linux_packages(target, compiler):
         packages.append('swtpm-tools')     # CLI tools to set up the TPM simulator
         packages.append('tpm2-abrmd')      # user-space resource manager for TPM 2.0
         packages.append('libtss2-tcti-tabrmd0') # TCTI (TPM Command Transmission Interface) for the user-space resource manager
+
+    if target in ['coverage', 'clang-tidy', 'optional-rngs']:
+        # build dependencies for ESDM
+        packages.append('libprotobuf-c-dev')
+        packages.append('meson')
 
     if target in ['docs']:
         packages.append('doxygen')

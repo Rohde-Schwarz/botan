@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# coding=utf8
 
 """
 Botan CI check installation script
@@ -11,11 +10,12 @@ This script is used to validate the results of `make install`
 Botan is released under the Simplified BSD License (see license.txt)
 """
 
-import os
-import sys
 import json
+import os
 import re
 import subprocess
+import sys
+
 
 def verify_library(build_config):
     lib_dir = build_config['libdir']
@@ -23,7 +23,7 @@ def verify_library(build_config):
         print('Error: libdir "%s" is not a directory' % lib_dir)
         return False
 
-    found_libs = set([])
+    found_libs = set()
 
     major_version = int(build_config["version_major"])
 
@@ -58,7 +58,7 @@ def verify_includes(build_config):
         return False
 
     expected_headers = set(build_config['public_headers'] + build_config['external_headers'])
-    found_headers = set([])
+    found_headers = set()
 
     for (_, _, filenames) in os.walk(include_dir):
         for filename in filenames:
@@ -86,7 +86,12 @@ def verify_cmake_package(build_config):
 
     def cmake_preset():
         if build_config['os'] == 'windows':
-            return 'windows_x86_64' if build_config['arch'] == 'x86_64' else 'windows_x86'
+            if build_config['arch'] == 'x86_64':
+                return 'windows_x86_64'
+            elif build_config['arch'] in ['arm64', 'aarch64']:
+                return 'windows_arm64'
+            else:
+                return 'windows_x86'
         return 'unix'
 
     def test_target():

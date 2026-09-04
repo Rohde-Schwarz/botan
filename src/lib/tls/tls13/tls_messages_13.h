@@ -25,6 +25,7 @@ class X509_Certificate;
 namespace Botan::TLS {
 
 class Transcript_Hash_State;
+class Client_Hello_12;
 
 class BOTAN_UNSTABLE_API Client_Hello_13 final : public Client_Hello {
    public:
@@ -39,7 +40,8 @@ class BOTAN_UNSTABLE_API Client_Hello_13 final : public Client_Hello {
                       std::string_view hostname,
                       std::vector<std::string> next_protocols,
                       std::optional<Session_with_Handle>& session,
-                      std::vector<ExternalPSK> psks);
+                      std::vector<ExternalPSK> psks,
+                      TLS_Flavor flavor);
 
       static std::variant<Client_Hello_13, Client_Hello_12_Shim> parse(std::span<const uint8_t> buf);
 
@@ -64,6 +66,12 @@ class BOTAN_UNSTABLE_API Client_Hello_13 final : public Client_Hello {
 
    private:
       explicit Client_Hello_13(std::unique_ptr<Client_Hello_Internal> data);
+
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+      // This lets the TLS 1.2 implementation extract the internal data
+      // from this Client Hello object for downgrade purposes.
+      friend class Client_Hello_12;
+#endif
 
       /**
       * If the Client Hello contains a PSK extensions with identities this will
@@ -92,9 +100,13 @@ class BOTAN_UNSTABLE_API Server_Hello_13 : public Server_Hello {
       // after parsing a peer's message. They perform basic validation
       // and are therefore not suitable for constructing a message to
       // be sent to a client.
-      explicit Server_Hello_13(std::unique_ptr<Server_Hello_Internal> data, Server_Hello_Tag tag = as_server_hello);
-      explicit Server_Hello_13(std::unique_ptr<Server_Hello_Internal> data, Hello_Retry_Request_Tag tag);
-      void basic_validation() const;
+      explicit Server_Hello_13(std::unique_ptr<Server_Hello_Internal> data,
+                               TLS_Flavor flavor,
+                               Server_Hello_Tag tag = as_server_hello);
+      explicit Server_Hello_13(std::unique_ptr<Server_Hello_Internal> data,
+                               TLS_Flavor flavor,
+                               Hello_Retry_Request_Tag tag);
+      void basic_validation(TLS_Flavor flavor) const;
 
       // Instantiate a Server Hello as response to a client's Client Hello
       // (called from Server_Hello_13::create())
@@ -104,7 +116,8 @@ class BOTAN_UNSTABLE_API Server_Hello_13 : public Server_Hello {
                       Credentials_Manager& credentials_mgr,
                       RandomNumberGenerator& rng,
                       Callbacks& cb,
-                      const Policy& policy);
+                      const Policy& policy,
+                      TLS_Flavor flavor);
 
       explicit Server_Hello_13(std::unique_ptr<Server_Hello_Internal> data, Hello_Retry_Request_Creation_Tag tag);
 
@@ -115,10 +128,11 @@ class BOTAN_UNSTABLE_API Server_Hello_13 : public Server_Hello {
                                                                        Credentials_Manager& credentials_mgr,
                                                                        RandomNumberGenerator& rng,
                                                                        const Policy& policy,
-                                                                       Callbacks& cb);
+                                                                       Callbacks& cb,
+                                                                       TLS_Flavor flavor);
 
       static std::variant<Hello_Retry_Request, Server_Hello_13, Server_Hello_12_Shim> parse(
-         std::span<const uint8_t> buf);
+         std::span<const uint8_t> buf, TLS_Flavor flavor);
 
       /**
        * Return desired downgrade version indicated by hello random, if any.
@@ -134,8 +148,9 @@ class BOTAN_UNSTABLE_API Server_Hello_13 : public Server_Hello {
 class BOTAN_UNSTABLE_API Hello_Retry_Request final : public Server_Hello_13 {
    protected:
       friend class Server_Hello_13;  // to allow construction by Server_Hello_13::parse() and ::create()
-      explicit Hello_Retry_Request(std::unique_ptr<Server_Hello_Internal> data);
-      Hello_Retry_Request(const Client_Hello_13& ch, Named_Group selected_group, const Policy& policy, Callbacks& cb);
+      Hello_Retry_Request(std::unique_ptr<Server_Hello_Internal> data, TLS_Flavor flavor);
+      Hello_Retry_Request(
+         const Client_Hello_13& ch, Named_Group selected_group, const Policy& policy, Callbacks& cb, TLS_Flavor flavor);
 
    public:
       Handshake_Type type() const override { return Handshake_Type::HelloRetryRequest; }
@@ -432,10 +447,11 @@ using as_wrapped_references_t = typename as_wrapped_references<T>::type;
 
 // Handshake message types from RFC 8446 4.
 using Handshake_Message_13 = std::variant<Client_Hello_13,
-                                          Client_Hello_12_Shim,
+                                          Client_Hello_12_Shim,  // downgrade trigger: (D)TLS 1.2 Client Hello
                                           Server_Hello_13,
-                                          Server_Hello_12_Shim,
+                                          Server_Hello_12_Shim,  // downgrade trigger: (D)TLS 1.2 Server Hello
                                           Hello_Retry_Request,
+                                          Hello_Verify_Request,  // downgrade trigger: DTLS 1.2 cookie exchange
                                           // End_Of_Early_Data,
                                           Encrypted_Extensions,
                                           Certificate_13,
@@ -452,19 +468,21 @@ using Post_Handshake_Message_13 = std::variant<New_Session_Ticket_13, Key_Update
 using Server_Post_Handshake_13_Message = std::variant<New_Session_Ticket_13, Key_Update>;
 using Client_Post_Handshake_13_Message = std::variant<Key_Update>;
 
-using Server_Handshake_13_Message = std::variant<Server_Hello_13,
-                                                 Server_Hello_12_Shim,  // indicates a TLS version downgrade
-                                                 Hello_Retry_Request,
-                                                 Encrypted_Extensions,
-                                                 Certificate_13,
-                                                 Certificate_Request_13,
-                                                 Certificate_Verify_13,
-                                                 Finished_13>;
+using Server_Handshake_13_Message =
+   std::variant<Server_Hello_13,
+                Server_Hello_12_Shim,  // indicates a (D)TLS version downgrade
+                Hello_Retry_Request,
+                Hello_Verify_Request,  // indicates a DTLS peer that does not offer TLS 1.3
+                Encrypted_Extensions,
+                Certificate_13,
+                Certificate_Request_13,
+                Certificate_Verify_13,
+                Finished_13>;
 using Server_Handshake_13_Message_Ref = detail::as_wrapped_references_t<Server_Handshake_13_Message>;
 
 using Client_Handshake_13_Message =
    std::variant<Client_Hello_13,
-                Client_Hello_12_Shim,  // indicates a TLS peer that does not offer TLS 1.3
+                Client_Hello_12_Shim,  // indicates a (D)TLS peer that does not offer TLS 1.3
                 Certificate_13,
                 Certificate_Verify_13,
                 Finished_13>;

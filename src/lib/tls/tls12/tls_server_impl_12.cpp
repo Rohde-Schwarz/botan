@@ -259,28 +259,50 @@ std::map<std::string, std::vector<X509_Certificate>> get_server_certs(
    return cert_chains;
 }
 
-}  // namespace
+secure_vector<uint8_t> load_dtls_cookie_secret(Credentials_Manager& creds) {
+   auto cookie_secret = [&]() -> secure_vector<uint8_t> {
+      try {
+         return creds.psk("tls-server", "dtls-cookie-secret", "").bits_of();
+      } catch(...) {
+         return {};
+      }
+   }();
 
-Server_Impl_12::Server_Impl_12(const std::shared_ptr<Callbacks>& callbacks,
-                               const std::shared_ptr<Session_Manager>& session_manager,
-                               const std::shared_ptr<Credentials_Manager>& creds,
-                               const std::shared_ptr<const Policy>& policy,
-                               const std::shared_ptr<RandomNumberGenerator>& rng,
-                               bool is_datagram,
-                               size_t io_buf_sz) :
-      Channel_Impl_12(callbacks, session_manager, rng, policy, true, is_datagram, io_buf_sz), m_creds(creds) {
-   BOTAN_ASSERT_NONNULL(m_creds);
+   if(cookie_secret.empty()) {
+      // TODO(Botan4): Simplify this error message that was meant to ease the
+      //               burden on users running into a deliberate semver violation.
+      throw Invalid_State(
+         "Since Botan 3.13 DTLS server requires setting a non-empty cookie secret. "
+         "Either override Credentials_Manager::dtls_cookie_secret() or disable the "
+         "cookie exchange using TLS::Policy::dtls_server_require_cookie_exchange(), "
+         "if you understand the security implications of doing so.");
+   }
+
+   return cookie_secret;
 }
 
-Server_Impl_12::Server_Impl_12(const Channel_Impl::Downgrade_Information& downgrade_info) :
-      Channel_Impl_12(downgrade_info.callbacks,
-                      downgrade_info.session_manager,
-                      downgrade_info.rng,
-                      downgrade_info.policy,
-                      true /* is_server*/,
-                      false /* TLS 1.3 does not support DTLS yet */,
-                      downgrade_info.io_buffer_size),
-      m_creds(downgrade_info.creds) {}
+}  // namespace
+
+std::shared_ptr<Server_Impl_12> Server_Impl_12::create(const std::shared_ptr<Callbacks>& callbacks,
+                                                       const std::shared_ptr<Session_Manager>& session_manager,
+                                                       const std::shared_ptr<Credentials_Manager>& creds,
+                                                       const std::shared_ptr<const Policy>& policy,
+                                                       const std::shared_ptr<RandomNumberGenerator>& rng,
+                                                       bool is_datagram,
+                                                       size_t reserved_io_buffer_size)  //
+{
+   auto self = std::make_shared<Server_Impl_12>(
+      Private{}, callbacks, session_manager, creds, policy, rng, is_datagram, reserved_io_buffer_size);
+   BOTAN_ASSERT_NONNULL(self->m_creds);
+
+   // Try to load the cookie secret on initialization, rather than waiting to fail
+   // until the first client connects.
+   if(is_datagram && policy->dtls_server_require_cookie_exchange()) {
+      load_dtls_cookie_secret(*self->m_creds);
+   }
+
+   return self;
+}
 
 std::unique_ptr<Handshake_State> Server_Impl_12::new_handshake_state(std::unique_ptr<Handshake_IO> io) {
    auto state = std::make_unique<Server_Handshake_State>(std::move(io), callbacks());
@@ -420,31 +442,43 @@ void Server_Impl_12::process_client_hello_msg(Server_Handshake_State& pending_st
       throw TLS_Exception(Alert::IllegalParameter, "Client did not offer NULL compression");
    }
 
-   if(initial_handshake && datagram) {
-      SymmetricKey cookie_secret;
+   if(initial_handshake && datagram && policy().dtls_server_require_cookie_exchange()) {
+      // The cookie secret is read each time to allow for refreshing the key
+      const auto cookie_secret = load_dtls_cookie_secret(*m_creds);
 
-      try {
-         cookie_secret = m_creds->psk("tls-server", "dtls-cookie-secret", "");
-      } catch(...) {}
+      const std::string client_identity = callbacks().tls_peer_network_identity();
+      if(client_identity.empty()) {
+         // RFC 9147 Section 11: the cookie MUST depend on the client's address
+         //
+         // Without an application-supplied identity the cookie is reusable from
+         // any source address, defeating the whole point of the cookie exchange.
+         //
+         // TODO(Botan4): Remove the version hint about the breaking change.
+         throw Invalid_State(
+            "Since Botan 3.13 DTLS server requires tls_peer_network_identity() return a non-empty value");
+      }
+      const Hello_Verify_Request verify(
+         pending_state.client_hello()->cookie_input_data(), client_identity, cookie_secret);
 
-      if(!cookie_secret.empty()) {
-         const std::string client_identity = callbacks().tls_peer_network_identity();
-         const Hello_Verify_Request verify(
-            pending_state.client_hello()->cookie_input_data(), client_identity, cookie_secret);
-
-         if(!CT::is_equal<uint8_t>(pending_state.client_hello()->cookie(), verify.cookie()).as_bool()) {
-            if(epoch0_restart) {
-               pending_state.handshake_io().send_under_epoch(verify, 0);
-            } else {
-               pending_state.handshake_io().send(verify);
-            }
-
-            pending_state.client_hello(nullptr);
-            pending_state.set_expected_next(Handshake_Type::ClientHello);
-            return;
+      if(!CT::is_equal<uint8_t>(pending_state.client_hello()->cookie(), verify.cookie()).as_bool()) {
+         if(epoch0_restart) {
+            pending_state.handshake_io().send_under_epoch(verify, 0);
+         } else {
+            pending_state.handshake_io().send(verify);
          }
-      } else if(epoch0_restart) {
-         throw TLS_Exception(Alert::HandshakeFailure, "Reuse of DTLS association requires DTLS cookie secret be set");
+
+         pending_state.client_hello(nullptr);
+         pending_state.set_expected_next(Handshake_Type::ClientHello);
+
+         // RFC 6346 3.2.1
+         //    Note that timeout and retransmission do not apply to the
+         //    HelloVerifyRequest, because this would require creating state on
+         //    the server.
+         //
+         // We don't kick-off a retransmission timer for a HelloVerifyRequest,
+         // if it gets lost in transit the client will retransmit the initial
+         // ClientHello anyway.
+         return;
       }
    }
 
@@ -507,6 +541,11 @@ void Server_Impl_12::process_client_hello_msg(Server_Handshake_State& pending_st
       // new session
       this->session_create(pending_state);
    }
+
+   // We just sent our first flight that might get lost in transit. Hence, we
+   // kick-off a retransmission timer chain for users that implement the
+   // asynchronous timer callback introduced in Botan 3.14.0.
+   maybe_arm_dtls_retransmission_timer();
 }
 
 void Server_Impl_12::process_certificate_msg(Server_Handshake_State& pending_state,
@@ -629,8 +668,8 @@ void Server_Impl_12::process_finished_msg(Server_Handshake_State& pending_state,
 
       // Give the application a chance for a final veto before fully
       // establishing the connection.
-      callbacks().tls_session_established([&, this] {
-         Session_Summary summary(session_info, pending_state.is_a_resumption(), external_psk_identity());
+      callbacks().tls_session_established([&] {
+         Session_Summary summary(session_info, pending_state.is_a_resumption(), pending_state.psk_identity());
          summary.set_session_id(pending_state.server_hello()->session_id());
          return summary;
       }());
@@ -647,6 +686,8 @@ void Server_Impl_12::process_finished_msg(Server_Handshake_State& pending_state,
                handle->ticket().value(),
                static_cast<uint32_t>(policy().session_ticket_lifetime().count())));
          }
+
+         note_resumption_handle(handle);
       }
 
       if(pending_state.new_session_ticket() == nullptr && pending_state.server_hello()->supports_session_ticket()) {
@@ -763,6 +804,8 @@ void Server_Impl_12::session_resume(Server_Handshake_State& pending_state, const
          return session_manager().establish(session.session, session.handle.id());
       }
    }();
+
+   note_resumption_handle(new_handle);
 
    if(pending_state.server_hello()->supports_session_ticket()) {
       if(new_handle.has_value() && new_handle->is_ticket()) {

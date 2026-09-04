@@ -21,13 +21,11 @@
    #include <boost/asio.hpp>
    #include <boost/bind/bind.hpp>
 
-   #include <botan/hex.h>
    #include <botan/pkcs8.h>
    #include <botan/rng.h>
    #include <botan/tls_callbacks.h>
    #include <botan/tls_server.h>
    #include <botan/tls_session_manager_memory.h>
-   #include <botan/x509cert.h>
 
    #if defined(BOTAN_HAS_TLS_SQLITE3_SESSION_MANAGER)
       #include <botan/tls_session_manager_sqlite.h>
@@ -366,7 +364,7 @@ class tls_proxy_server final {
             m_policy(std::move(policy)),
             m_session_manager(std::move(session_mgr)),
             m_status(max_clients) {
-         log_info("Listening for new connections on port " + std::to_string(port));
+         log_info("Listening for new connections on port " + std::to_string(m_acceptor.local_endpoint().port()));
          serve_one_session();
       }
 

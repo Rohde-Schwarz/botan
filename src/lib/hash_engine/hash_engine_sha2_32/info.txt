@@ -1,0 +1,16 @@
+<internal_defines>
+HASH_ENGINE_SHA2_32 -> 20260705
+</internal_defines>
+
+<module_info>
+name -> "Multi-buffer SHA-256 Hash Engine"
+</module_info>
+
+<requires>
+hash_engine
+sha2_32
+</requires>
+
+<header:internal>
+hash_engine_sha2_32.h
+</header:internal>

@@ -1,0 +1,17 @@
+<internal_defines>
+SHACAL2_SIMD8X32 -> 20260816
+</internal_defines>
+
+<module_info>
+name -> "SHACAL-2 SIMD 8x32"
+brief -> "SHACAL-2 using 8x32 SIMD instructions"
+</module_info>
+
+<isa>
+avx2
+</isa>
+
+<requires>
+cpuid
+simd_8x32
+</requires>

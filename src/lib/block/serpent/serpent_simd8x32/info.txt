@@ -1,0 +1,17 @@
+<internal_defines>
+SERPENT_SIMD8X32 -> 20260816
+</internal_defines>
+
+<module_info>
+name -> "Serpent SIMD 8x32"
+brief -> "Serpent using 8x32 SIMD instructions"
+</module_info>
+
+<isa>
+avx2
+</isa>
+
+<requires>
+cpuid
+simd_8x32
+</requires>

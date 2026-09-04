@@ -19,7 +19,6 @@
 #include <botan/internal/fmt.h>
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tpm2_algo_mappings.h>
-#include <botan/internal/tpm2_hash.h>
 #include <botan/internal/tpm2_util.h>
 
 #include <tss2/tss2_esys.h>
@@ -50,10 +49,13 @@ std::pair<EC_Group, EC_AffinePoint> ecc_pubkey_from_tss2_public(const TPM2B_PUBL
    auto curve = Botan::EC_Group::from_name(curve_name.value());
    // Create an EC_AffinePoint from the x and y coordinates as SEC1 uncompressed point.
    // According to the TPM2.0 specification Part 1 C.8, each coordinate is already padded to the curve's size.
-   auto point = EC_AffinePoint::deserialize(curve,
-                                            concat(std::vector<uint8_t>({0x04}),
-                                                   as_span(public_blob->publicArea.unique.ecc.x),
-                                                   as_span(public_blob->publicArea.unique.ecc.y)));
+
+   auto point = EC_AffinePoint::deserialize_uncompressed(
+      curve,
+      concat<std::vector<uint8_t>>(std::array<uint8_t, 1>{0x04},
+                                   as_span(public_blob->publicArea.unique.ecc.x),
+                                   as_span(public_blob->publicArea.unique.ecc.y)));
+
    if(!point) {
       throw Invalid_Argument("Invalid ECC Point");
    }

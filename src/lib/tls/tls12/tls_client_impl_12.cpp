@@ -13,6 +13,7 @@
 #include <botan/tls_callbacks.h>
 #include <botan/tls_messages_12.h>
 #include <botan/tls_policy.h>
+#include <botan/internal/loadstor.h>
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_handshake_state.h>
 #include <algorithm>
@@ -54,6 +55,8 @@ class Client_Handshake_State_12 final : public Handshake_State {
 
       void mark_as_renegotiation() { m_is_reneg = true; }
 
+      size_t note_hello_verify_request() { return ++m_hello_verify_requests; }
+
       const secure_vector<uint8_t>& resume_master_secret() const {
          BOTAN_STATE_CHECK(is_a_resumption());
          return m_resumed_session->master_secret();
@@ -90,67 +93,113 @@ class Client_Handshake_State_12 final : public Handshake_State {
       // Used during session resumption
       std::optional<Session> m_resumed_session;
       bool m_is_reneg = false;
+      size_t m_hello_verify_requests = 0;
 };
 
 }  // namespace
 
-/*
-* TLS 1.2 Client  Constructor
-*/
-Client_Impl_12::Client_Impl_12(const std::shared_ptr<Callbacks>& callbacks,
-                               const std::shared_ptr<Session_Manager>& session_manager,
-                               const std::shared_ptr<Credentials_Manager>& creds,
-                               const std::shared_ptr<const Policy>& policy,
-                               const std::shared_ptr<RandomNumberGenerator>& rng,
-                               Server_Information info,
-                               bool datagram,
-                               const std::vector<std::string>& next_protocols,
-                               size_t io_buf_sz) :
-      Channel_Impl_12(callbacks, session_manager, rng, policy, false, datagram, io_buf_sz),
-      m_creds(creds),
-      m_info(std::move(info)) {
-   BOTAN_ASSERT_NONNULL(m_creds);
+std::shared_ptr<Client_Impl_12> Client_Impl_12::create(const std::shared_ptr<Callbacks>& callbacks,
+                                                       const std::shared_ptr<Session_Manager>& session_manager,
+                                                       const std::shared_ptr<Credentials_Manager>& creds,
+                                                       const std::shared_ptr<const Policy>& policy,
+                                                       const std::shared_ptr<RandomNumberGenerator>& rng,
+                                                       Server_Information server_info,
+                                                       bool datagram,
+                                                       const std::vector<std::string>& next_protocols,
+                                                       size_t reserved_io_buffer_size) {
+   auto self = std::make_shared<Client_Impl_12>(Private{},
+                                                callbacks,
+                                                session_manager,
+                                                creds,
+                                                policy,
+                                                rng,
+                                                std::move(server_info),
+                                                datagram,
+                                                reserved_io_buffer_size);
+
+   BOTAN_ASSERT_NONNULL(self->m_creds);
    const auto version = datagram ? Protocol_Version::DTLS_V12 : Protocol_Version::TLS_V12;
-   Handshake_State& state = create_handshake_state(version);
-   send_client_hello(state, false, version, std::nullopt /* no a-priori session to resume */, next_protocols);
+   Handshake_State& state = self->create_handshake_state(version);
+   self->send_client_hello(state, false, version, std::nullopt /* no a-priori session to resume */, next_protocols);
+
+   return self;
 }
 
-Client_Impl_12::Client_Impl_12(const Channel_Impl::Downgrade_Information& downgrade_info) :
-      Channel_Impl_12(downgrade_info.callbacks,
-                      downgrade_info.session_manager,
-                      downgrade_info.rng,
-                      downgrade_info.policy,
-                      false /* is_server */,
-                      false /* datagram -- not supported by Botan in TLS 1.3 */,
-                      downgrade_info.io_buffer_size),
-      m_creds(downgrade_info.creds),
-      m_info(downgrade_info.server_info) {
-   Handshake_State& state = create_handshake_state(Protocol_Version::TLS_V12);
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
 
-   if(!downgrade_info.client_hello_message.empty()) {
-      // Downgrade detected after receiving a TLS 1.2 server hello. We need to
-      // recreate the state as if this implementation issued the client hello.
-      const std::vector<uint8_t> client_hello_msg(
-         downgrade_info.client_hello_message.begin() + 4 /* handshake header length */,
-         downgrade_info.client_hello_message.end());
+std::shared_ptr<Client_Impl_12> Client_Impl_12::create_for_downgrade(
+   Channel_Impl::Downgrade_Information& downgrade_info) {
+   auto self = std::make_shared<Client_Impl_12>(Private{}, downgrade_info);
 
-      state.client_hello(std::make_unique<Client_Hello_12>(client_hello_msg));
-      state.hash().update(downgrade_info.client_hello_message);
+   const auto version =
+      (downgrade_info.flavor == TLS_Flavor::DTLS) ? Protocol_Version::DTLS_V12 : Protocol_Version::TLS_V12;
 
-      secure_renegotiation_check(state.client_hello());
+   if(downgrade_info.client_hello.has_value()) {
+      // Downgrade detected after receiving a (D)TLS 1.2 server hello. We need
+      // to recreate the state as if this implementation issued the client
+      // hello.
+
+      // For DTLS we have to initialize the record sequence numbers as
+      // transferred from the TLS 1.3 implementation.
+      BOTAN_ASSERT_IMPLICATION(downgrade_info.flavor == TLS_Flavor::DTLS,
+                               downgrade_info.epoch0_sequence_numbers.has_value(),
+                               "downgrading DTLS requires transferring the record sequence numbers");
+
+      // TODO(C++23): Use std::optional::and_then() instead
+      auto seqno_read = [](const std::optional<Epoch0_SequenceNumbers>& seq) -> std::optional<uint64_t> {
+         if(seq.has_value()) {
+            return seq->read;
+         }
+         return std::nullopt;
+      };
+      auto seqno_write = [](const std::optional<Epoch0_SequenceNumbers>& seq) -> std::optional<uint64_t> {
+         if(seq.has_value()) {
+            return seq->write;
+         }
+         return std::nullopt;
+      };
+
+      auto& state = self->create_handshake_state(version,
+                                                 false /* no epoch0 restart */,
+                                                 seqno_read(downgrade_info.epoch0_sequence_numbers),
+                                                 seqno_write(downgrade_info.epoch0_sequence_numbers));
+
+      state.client_hello(std::make_unique<Client_Hello_12>(
+         std::exchange(downgrade_info.client_hello, {}).value(), state.handshake_io(), state.hash()));
+
+      self->secure_renegotiation_check(state.client_hello());
+      if(downgrade_info.flavor == TLS_Flavor::DTLS) {
+         state.set_expected_next(Handshake_Type::HelloVerifyRequest);  // optional
+      }
       state.set_expected_next(Handshake_Type::ServerHello);
+
+      // The downgraded DTLS 1.3 session might have armed a retransmission timer
+      // before deciding to downgrade. We have no means to cancel this operation
+      // but it will notice that the DTLS 1.3 state is gone and act as no-op.
+      self->maybe_arm_dtls_retransmission_timer();
    } else {
-      // Downgrade initiated after a TLS 1.2 session was found. No communication
+      // Downgrade initiated after a (D)TLS 1.2 session was found. No communication
       // has happened yet but the found session should be used for resumption.
       BOTAN_ASSERT_NOMSG(downgrade_info.tls12_session.has_value() &&
                          downgrade_info.tls12_session->session.version().is_pre_tls_13());
-      send_client_hello(state,
-                        false,
-                        downgrade_info.tls12_session->session.version(),
-                        downgrade_info.tls12_session,
-                        downgrade_info.next_protocols);
+      BOTAN_ASSERT_NOMSG(downgrade_info.tls12_session->session.version().is_datagram_protocol() ==
+                         (downgrade_info.flavor == TLS_Flavor::DTLS));
+
+      // When resuming based on an existing session, the (D)TLS 1.3
+      // implementation won't have emitted any data prior to the downgrade.
+      // Therefore, we can start with default sequence numbers.
+      auto& state = self->create_handshake_state(version);
+      self->send_client_hello(state,
+                              false,
+                              downgrade_info.tls12_session->session.version(),
+                              downgrade_info.tls12_session,
+                              downgrade_info.next_protocols);
    }
+
+   return self;
 }
+
+#endif
 
 std::unique_ptr<Handshake_State> Client_Impl_12::new_handshake_state(std::unique_ptr<Handshake_IO> io) {
    return std::make_unique<Client_Handshake_State_12>(std::move(io), callbacks());
@@ -226,6 +275,11 @@ void Client_Impl_12::send_client_hello(Handshake_State& state_base,
    }
 
    secure_renegotiation_check(state.client_hello());
+
+   // We just sent our first message that might get lost in transit. Hence, we
+   // kick-off a retransmission timer chain for users that implement the
+   // asynchronous timer callback introduced in Botan 3.14.0.
+   maybe_arm_dtls_retransmission_timer();
 }
 
 namespace {
@@ -258,8 +312,11 @@ void Client_Impl_12::process_handshake_msg(Handshake_State& state_base,
    if(type == Handshake_Type::HelloRequest && active_state().has_value()) {
       const Hello_Request hello_request(contents);
 
+      // RFC 5246 Section 7.4.1.1
+      //    This message will be ignored by the client if the client is
+      //    currently negotiating a session.
       if(state.client_hello() != nullptr) {
-         throw TLS_Exception(Alert::HandshakeFailure, "Cannot renegotiate during a handshake");
+         return;
       }
 
       if(policy().allow_server_initiated_renegotiation()) {
@@ -289,11 +346,30 @@ void Client_Impl_12::process_handshake_msg(Handshake_State& state_base,
    }
 
    if(type == Handshake_Type::HelloVerifyRequest) {
+      // RFC 6347 4.2.1 requires tolerating more than one: "This may result in
+      // clients receiving multiple HelloVerifyRequest messages with different
+      // cookies. Clients SHOULD handle this by sending a new ClientHello with a
+      // cookie in response to the new HelloVerifyRequest."
+      //
+      // Each one makes us re-send the ClientHello, and a HelloVerifyRequest is
+      // unauthenticated epoch-zero data that resets the retransmission counter,
+      // so an unbounded stream of forged ones would have us flood the server
+      // indefinitely. Bound how many we will act on.
+      const size_t hello_verify_requests = state.note_hello_verify_request();
+      const std::optional<size_t> max_hello_verify_requests = policy().dtls_maximum_hello_verify_requests();
+
+      if(max_hello_verify_requests.has_value() && hello_verify_requests > max_hello_verify_requests.value()) {
+         throw TLS_Exception(Alert::UnexpectedMessage, "Too many DTLS HelloVerifyRequest messages");
+      }
+
       state.set_expected_next(Handshake_Type::ServerHello);
       state.set_expected_next(Handshake_Type::HelloVerifyRequest);  // might get it again
 
       const Hello_Verify_Request hello_verify_request(contents);
       state.hello_verify_request(hello_verify_request);
+
+      // Cookie ClientHello is a new outgoing flight with a fresh deadline.
+      maybe_arm_dtls_retransmission_timer();
    } else if(type == Handshake_Type::ServerHello) {
       state.server_hello(std::make_unique<Server_Hello_12>(contents));
 
@@ -660,6 +736,10 @@ void Client_Impl_12::process_handshake_msg(Handshake_State& state_base,
 
       state.client_finished(std::make_unique<Finished_12>(state.handshake_io(), state, Connection_Side::Client));
 
+      // Flight is complete, we're now waiting for the peer to respond or for
+      // our timer to cause a retransmission.
+      maybe_arm_dtls_retransmission_timer();
+
       if(state.server_hello()->supports_session_ticket()) {
          state.set_expected_next(Handshake_Type::NewSessionTicket);
       } else {
@@ -740,8 +820,8 @@ void Client_Impl_12::process_handshake_msg(Handshake_State& state_base,
 
       // Give the application a chance for a final veto before fully
       // establishing the connection.
-      callbacks().tls_session_established([&, this] {
-         Session_Summary summary(session_info, state.is_a_resumption(), external_psk_identity());
+      callbacks().tls_session_established([&] {
+         Session_Summary summary(session_info, state.is_a_resumption(), state.psk_identity());
          summary.set_session_id(state.server_hello()->session_id());
          if(const auto* nst = state.new_session_ticket()) {
             summary.set_session_ticket(nst->ticket());
@@ -775,6 +855,8 @@ void Client_Impl_12::process_handshake_msg(Handshake_State& state_base,
             }
          }
       }
+
+      note_resumption_handle(handle);
 
       activate_session();
    } else {

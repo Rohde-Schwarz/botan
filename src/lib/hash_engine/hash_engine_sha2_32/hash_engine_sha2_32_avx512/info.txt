@@ -1,0 +1,23 @@
+<internal_defines>
+HASH_ENGINE_SHA2_32_AVX512 -> 20260705
+</internal_defines>
+
+<module_info>
+name -> "Multi-buffer SHA-256 using AVX-512"
+</module_info>
+
+<isa>
+avx512
+</isa>
+
+<requires>
+cpuid
+simd_avx512
+</requires>
+
+# TODO(Botan4) this block is here just due to supporting older GCCs
+<cc>
+gcc:13
+clang
+msvc
+</cc>
