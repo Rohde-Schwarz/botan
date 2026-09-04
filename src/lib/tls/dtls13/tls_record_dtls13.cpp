@@ -36,19 +36,43 @@ constexpr std::array<uint8_t, 6> store_be48(const uint64_t value) {
 
 }  // namespace
 
-UnifiedHeader_DTLS UnifiedHeader_DTLS::parse(std::span<const uint8_t> record_bytes, std::optional<size_t> cid_length) {
-   BOTAN_ARG_CHECK(!record_bytes.empty() && (record_bytes[0] & 0b11100000) == 0b00100000,
-                   "DTLS unified header must start with 0b001xxxxx");
+UnifiedHeader_DTLS UnifiedHeader_DTLS::parse(BufferSlicer& bs, std::optional<size_t> cid_length) {
+   if(bs.empty()) {
+      throw TLS_Exception(AlertType::DecodeError, "DTLS unified header cannot be empty");
+   }
+
+   // RFC 9147 Section 4.
+   //    The three high bits of the first byte of the unified header are set to
+   //    001. [...]
+   const uint8_t first = bs.take_byte();
+   if((first & 0b11100000) != 0b00100000) {
+      throw TLS_Exception(AlertType::DecodeError, "DTLS unified header must start with 0b001xxxxx");
+   }
 
    UnifiedHeader_DTLS header;
-   BufferSlicer bs(record_bytes);
 
    // RFC 9147 Section 4 Figure 3
-   const uint8_t first = bs.take_byte();
+   //
+   //        0 1 2 3 4 5 6 7
+   //       +-+-+-+-+-+-+-+-+
+   //       |0|0|1|C|S|L|E E|
+   //       +-+-+-+-+-+-+-+-+
+   //
+   //     C: The C bit (0x10) is set if the Connection ID is present.
+   //     S: The S bit (0x08) indicates the size of the sequence number.
+   //        0 means an 8-bit sequence number, 1 means 16-bit. [...]
+   //     L: The L bit (0x04) is set if the length is present.
+   //     E: The two low bits (0x03) include the low-order two bits of
+   //        the epoch.
    const bool cid_bit = (first & 0b00010000) != 0;
    const bool seqno_bit = (first & 0b00001000) != 0;
    const bool length_bit = (first & 0b00000100) != 0;
    header.epoch_bits = first & 0b00000011;
+
+   const size_t expected_length = cid_length.value_or(0) + (seqno_bit ? 2 : 1) + (length_bit ? 2 : 0);
+   if(bs.remaining() < expected_length) {
+      throw TLS_Exception(AlertType::DecodeError, "DTLS unified header is truncated");
+   }
 
    // RFC 9147 Section 4
    //    If a Connection ID is negotiated, then it MUST be contained in all
@@ -70,9 +94,12 @@ UnifiedHeader_DTLS UnifiedHeader_DTLS::parse(std::span<const uint8_t> record_byt
 
    if(length_bit) {
       header.length = load_be(bs.take<2>());
+      if(bs.remaining() < *header.length) {
+         throw TLS_Exception(AlertType::DecodeError, "Received protected DTLS record with truncated data");
+      }
    }
 
-   BOTAN_DEBUG_ASSERT(record_bytes.size() - bs.remaining() == header.serialized_byte_length());
+   BOTAN_DEBUG_ASSERT(header.serialized_byte_length() == 1 + expected_length);
 
    return header;
 }
@@ -111,8 +138,10 @@ void UnifiedHeader_DTLS::serialize_to(std::span<uint8_t> output) const {
    BOTAN_DEBUG_ASSERT(bs.full());
 }
 
-PlaintextHeader_DTLS PlaintextHeader_DTLS::parse(std::span<const uint8_t, DTLS_HEADER_SIZE> header_bytes) {
-   BufferSlicer bs(header_bytes);
+PlaintextHeader_DTLS PlaintextHeader_DTLS::parse(BufferSlicer& bs) {
+   if(bs.remaining() < DTLS_HEADER_SIZE) {
+      throw TLS_Exception(AlertType::DecodeError, "Received DTLSPlaintext with truncated header");
+   }
 
    const auto type = static_cast<Record_Type>(bs.take_byte());
    const auto legacy_version = Protocol_Version(load_be(bs.take<2>()));
@@ -120,9 +149,24 @@ PlaintextHeader_DTLS PlaintextHeader_DTLS::parse(std::span<const uint8_t, DTLS_H
    const auto sequence_number = load_be48(bs.take<6>());
    const auto length = load_be(bs.take<2>());
 
+   if(bs.remaining() < length) {
+      throw TLS_Exception(AlertType::DecodeError, "Received DTLSPlaintext with truncated payload");
+   }
+
+   // - - - - - -  - - - - - -  - - - - - -  - - - - - -  - - - - - -  - - - - -
+   // After this point we're sure that the input buffer contained something that
+   // roughly resembles a DTLSPlaintext record. Below we're checking the
+   // semantics of the record header's fields as far as we can.
+   //
+   // * Any of the Decode_Errors above would lead to the input datagram being
+   //   discarded by the DTLS_Record_Layer, and
+   // * Any other errors below would lead to the connection being terminated
+   //   with an alert.
+   //
+
    // RFC 9147 Figure 2 DTLSPlaintext
    if(epoch != Epoch_Number::Unprotected) {
-      throw TLS_Exception(AlertType::IllegalParameter, "Received DTLSPLaintext with epoch != 0");
+      throw TLS_Exception(AlertType::IllegalParameter, "Received DTLSPlaintext with epoch != 0");
    }
 
    // RFC 9846 5.1
@@ -131,7 +175,7 @@ PlaintextHeader_DTLS PlaintextHeader_DTLS::parse(std::span<const uint8_t, DTLS_H
    //    that exceeds this length MUST terminate the connection with a
    //    "record_overflow" alert.
    if(MAX_PLAINTEXT_SIZE < length) {
-      throw TLS_Exception(AlertType::RecordOverflow, "Received DTLSPLaintext with too much plaintext data");
+      throw TLS_Exception(AlertType::RecordOverflow, "Received DTLSPlaintext with too much plaintext data");
    }
 
    // RFC 8446 5.1
@@ -145,41 +189,28 @@ PlaintextHeader_DTLS PlaintextHeader_DTLS::parse(std::span<const uint8_t, DTLS_H
    // data, the protected payload would contain at least the authentication
    // tag and won't ever be empty either.
    if(length == 0) {
-      throw TLS_Exception(Alert::DecodeError, "Received DTLSPlaintext with empty payload");
+      throw TLS_Exception(AlertType::IllegalParameter, "Received DTLSPlaintext with empty payload");
    }
 
    // The legacy major version is essentially ossified to 0xFE and anything
    // else can be rejected right away.
    if(legacy_version.major_version() != 0xFE) {
-      throw TLS_Exception(Alert::IllegalParameter, "Received DTLSPlaintext with unexpected record version");
+      throw TLS_Exception(AlertType::IllegalParameter, "Received DTLSPlaintext with unexpected record version");
    }
 
-   // RFC 9147 Section 4 Figure 5
-   //                 +----------------+
-   //                 | Outer Content  |
-   //                 |   Type (OCT)   |
-   //                 |                |
-   //                 |   OCT == 20   -+--> ChangeCipherSpec (DTLS <1.3)
-   //                 |   OCT == 21   -+--> Alert (Plaintext)
-   //                 |   OCT == 22   -+--> DTLSHandshake (Plaintext)
-   //                 |   OCT == 23   -+--> Application Data (DTLS <1.3)
-   //                 |   OCT == 24   -+--> Heartbeat (DTLS <1.3)
-   //    packet  -->  |   OCT == 25   -+--> DTLSCiphertext with CID (DTLS 1.2)
-   //                 |   OCT == 26   -+--> ACK (DTLS 1.3, Plaintext)
-   //                 |                |
-   //                 |   [...]        |
-   //                 +----------------+
+   // RFC 9147 Section 4.1 (cont'd)
+   //    If the first byte is alert(21), handshake(22), or ack(26), the
+   //    record MUST be interpreted as a DTLSPlaintext record.
    //
-   // During the plaintext header parsing here, we accept all non-ciphertext
-   // content types. Note that "DTLSCiphertext with CID" is NYI.
+   // Additionally, we let ChangeCipherSpec records pass through and
+   // handle them explicitly in `process_dummy_change_cipher_spec()`
+   // in TLS::Channel_Impl_13.
    if(type != Record_Type::ChangeCipherSpec &&  //
       type != Record_Type::Alert &&             //
       type != Record_Type::Handshake &&         //
-      type != Record_Type::ApplicationData &&   //
-      type != Record_Type::Heartbeat &&         //
       type != Record_Type::ACK) {
       throw TLS_Exception(AlertType::UnexpectedMessage,
-                          fmt("Received DTLSPLaintext with unexpected content type: {}", static_cast<uint32_t>(type)));
+                          fmt("Received DTLSPlaintext with unexpected content type: {}", static_cast<uint32_t>(type)));
    }
 
    return {

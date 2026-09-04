@@ -29,94 +29,53 @@
 
 namespace Botan::TLS {
 
-namespace {
-
-PlaintextRecord_DTLS read_plaintext_record(BufferSlicer& bs) {
-   if(bs.remaining() < DTLS_HEADER_SIZE) {
-      throw TLS_Exception(AlertType::DecodeError, "Received DTLSPlaintext with truncated header");
-   }
-
-   auto header = PlaintextHeader_DTLS::parse(bs.take<DTLS_HEADER_SIZE>());
-   if(bs.remaining() < header.length) {
-      throw TLS_Exception(AlertType::IllegalParameter, "Received DTLSPlaintext with truncated payload");
-   }
-
-   return {
-      .header = header,
-      .payload = bs.copy_as_secure_vector(header.length),
-   };
-}
-
-ProtectedRecord_DTLS read_protected_record(BufferSlicer& bs, size_t incoming_record_size_limit) {
-   auto unified_header = UnifiedHeader_DTLS::parse(bs.peek(bs.remaining()), std::nullopt /* CID NYI */);
-   bs.skip(unified_header.serialized_byte_length());
-
-   // RFC 9147 Section 4.3
-   //    The length field from DTLS records containing that field can be
-   //    used to determine the boundaries between records. The final
-   //    record in a datagram can omit the length field.
-   //
-   // RFC 9147 Section 4.
-   //    The length field MAY be omitted [...], which means that the
-   //    record consumes the entire rest of the datagram in the lower
-   //    level transport.
-   const auto fragment_length = unified_header.length.value_or(checked_cast_to<uint16_t>(bs.remaining()));
-
-   // RFC 9147 Section 4.2.3
-   //    This procedure requires the ciphertext length to be at least 16 bytes.
-   //    Receivers MUST reject shorter records as if they had failed deprotection,
-   //    as described in Section 4.5.2.
-   if(fragment_length < 16) {
-      throw TLS_Exception(Alert::DecodeError, "Received an encrypted record that is too short");
-   }
-
-   // RFC 8449 Section 4
-   //    a DTLS endpoint that receives a record larger than its advertised
-   //    limit MAY either generate a fatal "record_overflow" alert or
-   //    discard the record.
-   //
-   // We reject records that would exceed the maximum allowed size after
-   // deprotection for sure (the AEAD can only add up to 255 bytes).
-   if(fragment_length + unified_header.serialized_byte_length() >
-      incoming_record_size_limit + MAX_AEAD_EXPANSION_SIZE_TLS13) {
-      throw TLS_Exception(Alert::RecordOverflow, "Received a datagram that exceeds maximum size");
-   }
-
-   return {
-      .header = std::move(unified_header),
-      .payload = bs.copy_as_secure_vector(fragment_length),
-   };
-}
-
-}  // namespace
-
 DTLS_Record_Layer::DTLS_Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy) :
       Record_Layer(side, std::move(policy), false, true) {}
 
 bool DTLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) {
    try {
       return read_datagram(data_from_peer);
-   } catch(const Botan::Exception&) {
+   } catch(const TLS_Exception& ex) {
       // RFC 9147 Section 4.5.2
       //    Unlike TLS, DTLS is resilient in the face of invalid records
       //    (e.g., invalid formatting, length, MAC, etc.). In general,
       //    invalid records SHOULD be silently discarded, thus preserving the
       //    association [...].
       //
-      // If we didn't establish a cryptographic association yet, there is
-      // nothing to preserve in the sense of the RFC and we propagate errors.
-      // Otherwise, we silently discard all invalid records (causing exceptions
-      // in read_datagram()) before even trying to deprotect them.
+      // If low-level record parsing failed (i.e., the incoming data looked
+      // syntactically invalid, e.g. truncated), we discard the datagram
+      // regardless of the status of the cryptographic association.
       //
-      // Exceptions on deprotected records result in an error/alert and
-      // typically the termination of the DTLS association. See `next_record`
-      // and `deprotect_record`.
+      // When the records were syntactically valid, but semantically invalid
+      // (e.g., unknown record type, epoch>0 in unprotected record, etc.), we
+      // might still discard the record, if and only if this connection already
+      // established a cryptographic association. Otherwise, there is nothing
+      // to preserve in the sense of the RFC quote above and we rethrow.
+      //
+      // All of the above are checks that can be performed without access to the
+      // cryptographic key material. Any further checks (e.g., MAC verification)
+      // or checks on the deprotected plaintext are done in `next_record()` and
+      // beyond.
 
-      if(!has_cryptographic_association) {
-         throw;
+      if(ex.type() == AlertType::DecodeError) {
+         // The incoming data was syntactically invalid => discard.
+         return false;
       }
 
-      return false;
+      if(has_cryptographic_association) {
+         // We successfully established a cryptographic association with this
+         // peer and, therefore, expect protected communication with only this
+         // peer. Any records recognizable as semantically invalid even before
+         // deprotection are therefore considered an active attack by some other
+         // party and discarded.
+         return false;
+      }
+
+      // We don't have a cryptographic association yet and the incoming data was
+      // syntactically valid but semantically invalid. So there is nothing
+      // to preserve in the sense of the RFC quote above and we abort the
+      // connection attempt.
+      throw;
    }
 }
 
@@ -130,63 +89,14 @@ bool DTLS_Record_Layer::read_datagram(std::span<const uint8_t> datagram) {
    //    MUST be the beginning of a record. Records MUST NOT span datagrams.
    while(!bs.empty()) {
       // RFC 9147 Section 4.1
-      //     Implementations can demultiplex DTLS 1.3 records by examining the
-      //     first byte as follows: [...]
-      const auto outer_record_type = [&] {
-         const auto type_byte = bs.peek_byte();
-         const auto record_type = static_cast<Record_Type>(type_byte);
-
-         // RFC 9147 Section 4.1 (cont'd)
-         // - If the first byte is alert(21), handshake(22), or ack(26), the
-         //   record MUST be interpreted as a DTLSPlaintext record.
-         //
-         // Additionally, we let ChangeCipherSpec records pass through and
-         // handle them explicitly in `process_dummy_change_cipher_spec()`
-         // in TLS::Channel_Impl_13.
-         if(record_type == Record_Type::Alert ||      //
-            record_type == Record_Type::Handshake ||  //
-            record_type == Record_Type::ACK ||        //
-            record_type == Record_Type::ChangeCipherSpec) {
-            return record_type;
-         }
-
-         // RFC 9147 Section 4.1 (cont'd)
-         // - If the first byte is any other value, then receivers MUST check to
-         //   see if the leading bits of the first byte are 001. If so, the
-         //   implementation MUST process the record as DTLSCiphertext; [...].
-         if((type_byte & 0b11100000) == 0b00100000) {
-            return Record_Type::ApplicationData;
-         }
-
-         // RFC 9147 Section 4.1 (cont'd)
-         // - Otherwise, the record MUST be rejected as if it had failed
-         //   deprotection, [...].
-         throw TLS_Exception(Alert::UnexpectedMessage,
-                             fmt("DTLS record type had unexpected value: {}", static_cast<uint32_t>(type_byte)));
-      }();
-
-      // RFC 9147 Section 4.1
-      //    If the [...] bits of the first byte are 001 [...] the implementation
-      //    MUST process the record as DTLSCiphertext; the true content type
-      //    will be inside the protected portion.
-      if(outer_record_type == Record_Type::ApplicationData) {
-         records_in_this_datagram.push_back(read_protected_record(bs, incoming_record_size_limit()));
+      //    If the [...] leading bits of the first byte are 001 [...] the
+      //    implementation MUST process the record as DTLSCiphertext; the true
+      //    content type will be inside the protected portion.
+      const bool is_protected_record = (bs.peek_byte() & 0b11100000) == 0b00100000;
+      if(is_protected_record) {
+         records_in_this_datagram.push_back(read_protected_record(bs));
       } else {
-         auto pt_record = read_plaintext_record(bs);
-
-         // RFC 9147 Section 4.
-         //    legacy_record_version: This value MUST be set to {254, 253} for all
-         //    records other than the initial ClientHello (i.e., one not generated
-         //    after a HelloRetryRequest), where it may also be {254, 255} for
-         //    compatibility purposes.
-         //
-         // TODO: Does it really make sense to make this rely on m_receiving_compat_mode of TLS?
-         if(pt_record.header.legacy_version != Protocol_Version::DTLS_V12 &&
-            (pt_record.header.legacy_version != Protocol_Version::DTLS_V10 || !receiving_compat_mode())) {
-            throw TLS_Exception(Alert::IllegalParameter, "Received unexpected record version");
-         }
-
-         records_in_this_datagram.push_back(std::move(pt_record));
+         records_in_this_datagram.push_back(read_plaintext_record(bs));
       }
    }
 
@@ -201,6 +111,84 @@ bool DTLS_Record_Layer::read_datagram(std::span<const uint8_t> datagram) {
                              std::make_move_iterator(records_in_this_datagram.end()));
 
    return true;
+}
+
+PlaintextRecord_DTLS DTLS_Record_Layer::read_plaintext_record(BufferSlicer& bs) {
+   auto header = PlaintextHeader_DTLS::parse(bs);
+   if(bs.remaining() < header.length) {
+      throw TLS_Exception(AlertType::DecodeError, "Received DTLSPlaintext with truncated payload");
+   }
+
+   // RFC 9147 Section 4.
+   //    legacy_record_version: This value MUST be set to {254, 253} for all
+   //    records other than the initial ClientHello (i.e., one not generated
+   //    after a HelloRetryRequest), where it may also be {254, 255} for
+   //    compatibility purposes.
+   //
+   // TODO: Does it really make sense to make this rely on m_receiving_compat_mode of TLS?
+   if(header.legacy_version != Protocol_Version::DTLS_V12 &&
+      (header.legacy_version != Protocol_Version::DTLS_V10 || !receiving_compat_mode())) {
+      throw TLS_Exception(Alert::IllegalParameter, "Received unexpected record version");
+   }
+
+   return {
+      .header = header,
+      .payload = bs.copy_as_secure_vector(header.length),
+   };
+}
+
+ProtectedRecord_DTLS DTLS_Record_Layer::read_protected_record(BufferSlicer& bs) {
+   auto unified_header = UnifiedHeader_DTLS::parse(bs, std::nullopt /* CID NYI */);
+
+   // RFC 9147 Section 4.3
+   //    The length field from DTLS records containing that field can be
+   //    used to determine the boundaries between records. The final
+   //    record in a datagram can omit the length field.
+   //
+   // RFC 9147 Section 4.
+   //    The length field MAY be omitted [...], which means that the
+   //    record consumes the entire rest of the datagram in the lower
+   //    level transport.
+   const auto fragment_length = unified_header.length.value_or(checked_cast_to<uint16_t>(bs.remaining()));
+
+   // RFC 9147 Section 4.2.3
+   //    [The sequence number deprotection procedure] requires the ciphertext
+   //    length to be at least 16 bytes. Receivers MUST reject shorter records
+   //    as if they had failed deprotection.
+   //
+   // We throw a DecodeError here, which will lead to the datagram being
+   // discarded by the DTLS_Record_Layer (as if it failed deprotection).
+   if(fragment_length < 16) {
+      throw TLS_Exception(Alert::DecodeError, "Received an encrypted record that is too short");
+   }
+
+   // - - - - - -  - - - - - -  - - - - - -  - - - - - -  - - - - - -  - - - - -
+   // After this point we're sure that the input buffer contained something that
+   // roughly resembles a DTLSCiphertext record. Below we're checking the
+   // semantics of the record header's fields as far as we can.
+   //
+   // * Any of the Decode_Errors above would lead to the input datagram being
+   //   discarded by the DTLS_Record_Layer, and
+   // * Any other errors below would lead to the connection being terminated
+   //   with an alert.
+   //
+
+   // RFC 8449 Section 4
+   //    a DTLS endpoint that receives a record larger than its advertised
+   //    limit MAY either generate a fatal "record_overflow" alert or
+   //    discard the record.
+   //
+   // We reject records that would exceed the maximum allowed size after
+   // deprotection for sure (the AEAD can only add up to 255 bytes).
+   if(fragment_length + unified_header.serialized_byte_length() >
+      incoming_record_size_limit() + MAX_AEAD_EXPANSION_SIZE_TLS13) {
+      throw TLS_Exception(Alert::RecordOverflow, "Received a datagram that exceeds maximum size");
+   }
+
+   return {
+      .header = std::move(unified_header),
+      .payload = bs.copy_as_secure_vector(fragment_length),
+   };
 }
 
 DTLS_Record_Layer::IncomingRecord DTLS_Record_Layer::next_incoming_record() {

@@ -19,6 +19,10 @@
 #include <optional>
 #include <variant>
 
+namespace Botan {
+class BufferSlicer;
+}
+
 namespace Botan::TLS {
 
 /**
@@ -56,13 +60,13 @@ struct BOTAN_TEST_API UnifiedHeader_DTLS {
        * Parses a unified header from the given @p record_bytes. Typically the
        * @p record_bytes will contain more than just the unified header.
        *
-       * @param record_bytes The bytes to parse the unified header from
+       * @param record_bytes The buffer slicer to parse the unified header from
        * @param cid_length   The negotiated length of the connection ID or
        *                     std::nullopt if no connection ID was negotiated.
        *
        * @throws if parsing fails
        */
-      static UnifiedHeader_DTLS parse(std::span<const uint8_t> record_bytes, std::optional<size_t> cid_length);
+      static UnifiedHeader_DTLS parse(BufferSlicer& record_bytes, std::optional<size_t> cid_length);
 
       size_t serialized_byte_length() const noexcept;
       void serialize_to(std::span<uint8_t> output) const;
@@ -91,7 +95,10 @@ struct PlaintextHeader_DTLS {
 
       /// NOLINTEND(*-non-private-member-variables-in-classes)
 
-      static PlaintextHeader_DTLS parse(std::span<const uint8_t, DTLS_HEADER_SIZE> header_bytes);
+      /**
+       * Reads a PlaintextHeader_DTLS from the given @p bs buffer slicer.
+       */
+      static PlaintextHeader_DTLS parse(BufferSlicer& bs);
 
       std::array<uint8_t, DTLS_HEADER_SIZE> serialize() const;
 };

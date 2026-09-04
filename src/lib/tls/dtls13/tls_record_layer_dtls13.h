@@ -19,6 +19,12 @@
 #include <botan/internal/tls_utils_dtls13.h>
 #include <deque>
 
+namespace Botan {
+
+class BufferSlicer;
+
+}
+
 namespace Botan::TLS {
 
 /**
@@ -106,6 +112,10 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
 
    private:
       bool read_datagram(std::span<const uint8_t> datagram);
+
+      PlaintextRecord_DTLS read_plaintext_record(BufferSlicer& bs);
+      ProtectedRecord_DTLS read_protected_record(BufferSlicer& bs);
+
       std::pair<MarshalledRecord, RecordNumber> prepare_record(Record_Type type,
                                                                std::span<const uint8_t> fragment,
                                                                Cipher_State* cipher_state,
