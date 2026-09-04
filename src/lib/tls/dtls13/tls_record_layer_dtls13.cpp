@@ -139,9 +139,14 @@ bool DTLS_Record_Layer::read_datagram(std::span<const uint8_t> datagram) {
          // RFC 9147 Section 4.1 (cont'd)
          // - If the first byte is alert(21), handshake(22), or ack(26), the
          //   record MUST be interpreted as a DTLSPlaintext record.
+         //
+         // Additionally, we let ChangeCipherSpec records pass through and
+         // handle them explicitly in `process_dummy_change_cipher_spec()`
+         // in TLS::Channel_Impl_13.
          if(record_type == Record_Type::Alert ||      //
             record_type == Record_Type::Handshake ||  //
-            record_type == Record_Type::ACK) {
+            record_type == Record_Type::ACK ||        //
+            record_type == Record_Type::ChangeCipherSpec) {
             return record_type;
          }
 
