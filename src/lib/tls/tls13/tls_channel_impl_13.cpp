@@ -145,9 +145,23 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
                if(!is_post_handshake_traffic) {
                   m_dtls_channel_companion->maybe_clear_resend_buffer();
                }
-
-               maybe_arm_dtls_acknowledgement_timer();
             }
+
+            // RFC 9147 7.1
+            //    [...] it is RECOMMENDED that [an implementation] generats ACKs
+            //    under two circumstances:
+            //
+            //    - [...]
+            //    - When they have received part of a flight and do not
+            //      immediately receive the rest of the flight [...]. One
+            //      approach is to set a timer [...] and then send an ACK when
+            //      that timer expires.
+            //
+            // This opportunistically sets such a timer which gets cancelled
+            // when we successfully generate our next handshake flight in
+            // response to the incoming data. If we fail to generate such a
+            // flight, the timer will eventually emit ACKs to the peer.
+            maybe_arm_dtls_acknowledgement_timer();
 
             if(!is_handshake_complete()) {
                BOTAN_ASSERT_NONNULL(m_transcript_hash);
@@ -697,6 +711,10 @@ void Channel_Impl_13::maybe_arm_dtls_acknowledgement_timer() {
          }
 
          channel->send_acknowledgements();
+
+         // The ACK timer is meant to be single-shot. We reset the ACK timer
+         // handle to let belated or resent fragments start a new ACK timer.
+         channel->m_ack_timer.reset();
       });
    }
 }
