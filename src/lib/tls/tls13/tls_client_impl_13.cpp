@@ -351,7 +351,14 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
          throw TLS_Exception(Alert::IllegalParameter, "server changed its chosen protocol version");
       }
    } else {
+      // We just received a TLS 1.3 ServerHello without ever receiving a
+      // HelloRetryRequest. Now, we can be sure that our peer uses TLS 1.3 and,
+      // thus, could handle lost packages using the DTLS 1.3 ACK mechanism.
+      // Therefore, we have to clear our resend buffer, because it might still
+      // contain our initial ClientHello for retransmission to a DTLS 1.2 peer
+      // that would not have been able to rely on ACKs.
       m_dtls_channel_companion->notify_protocol_version_committed();
+      m_dtls_channel_companion->maybe_clear_resend_buffer();
    }
 
    auto cipher = Ciphersuite::by_id(sh.ciphersuite());
@@ -422,12 +429,18 @@ void Client_Impl_13::handle(const Hello_Retry_Request& hrr) {
    BOTAN_ASSERT_NONNULL(m_handshake);
    BOTAN_ASSERT_NONNULL(m_transcript_hash);
 
-   // RFC 9147 7.
-   //    During the handshake, ACKs only cover the current outstanding flight
-   //    [...]. Implementations can accomplish this by clearing their ACK list
-   //    upon receiving the start of the next flight.
-   m_dtls_channel_companion->clear_outstanding_acknowledgements();
+   // We just received a TLS 1.3 HelloRetryRequest. Now, we can be sure that our
+   // peer uses TLS 1.3 and, thus, could handle lost packages using the DTLS 1.3
+   // ACK mechanism. Therefore, we have to clear our resend buffer, because it
+   // might still contain our initial ClientHello for retransmission to a DTLS
+   // 1.2 peer that would not have been able to rely on ACKs.
+   //
+   // We also clear our outstanding ACKs, because the HelloRetryRequest is the
+   // only message in the flight; by definition it is the "final" message of
+   // this flight.
    m_dtls_channel_companion->notify_protocol_version_committed();
+   m_dtls_channel_companion->clear_outstanding_acknowledgements();
+   m_dtls_channel_companion->maybe_clear_resend_buffer();
 
    auto& ch = m_handshake->state.client_hello();
 
@@ -675,10 +688,8 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    BOTAN_ASSERT_NONNULL(m_handshake);
    BOTAN_ASSERT_NONNULL(m_transcript_hash);
 
-   // RFC 9147 7.
-   //    During the handshake, ACKs only cover the current outstanding flight
-   //    [...]. Implementations can accomplish this by clearing their ACK list
-   //    upon receiving the start of the next flight.
+   // The Server's Finished message is the last handshake message in the flight.
+   // Therefore, we can clear our outstanding ACKs.
    m_dtls_channel_companion->clear_outstanding_acknowledgements();
 
    // RFC 8446 4.4.4
