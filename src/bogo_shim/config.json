@@ -218,7 +218,6 @@
         "RSAPSSSupport-Default-NoCerts-TLS12-*": "Needs investigation",
         "SRTP-Server-IgnoreMKI-*": "Non-empty MKI is rejected (bug)",
         "DTLS-Retransmit-BothTimers-TLS13*": "Botan's DTLS does not ACK previously seen messages (the 'BothTimers' test exercises some BoringSSL-internal implementation detail)",
-        "DTLS-Retransmit-PartialProgress-*-TLS13*": "No DTLS 1.3 support",
         "DTLS-Retransmit-Server-*": "Expects a timer-driven HelloVerifyRequest retransmit; RFC 6347 3.2.1 says timeout and retransmission do not apply to HelloVerifyRequest",
         "DTLS-Retransmit-*SetTimeout*": "No API to change the retransmit timer mid-handshake",
         "DTLS-Retransmit-ChangeMTU*": "No API to change the MTU on an existing channel",

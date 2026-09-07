@@ -48,12 +48,15 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
       bool protocol_version_committed() const override { return m_dtls_version_committed; }
 
       void maybe_clear_resend_buffer() override {
+         // If we're not sure that the peer is using DTLS 1.3, we must not clear
+         // the resend buffer as soon as we received any fragment of the peer's
+         // flight. If some fragment got lost, we can't ACK and therefore are
+         // forced to retransmit our entire previous flight.
          if(m_dtls_version_committed) {
-            // If we're not sure that the peer is using DTLS 1.3, we must not
-            // clear the resend buffer as soon as we received any fragment of
-            // the peer's flight. If some fragment got lost, we can't ACK and
-            // therefore are forced to retransmit our entire previous flight.
             m_record_layer->clear_resend_buffer();
+
+            // Nothing left to retransmit, stop the timer
+            m_retransmission_timer.stop();
          }
       }
 
