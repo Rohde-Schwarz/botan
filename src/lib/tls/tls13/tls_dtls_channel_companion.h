@@ -51,6 +51,13 @@ class DTLS_Channel_Companion {
 
       virtual void maybe_clear_resend_buffer() {}
 
+      /**
+       * Notifies that a complete flight was received from the peer and
+       * therefore no lost records are expected anymore. Typically, this is
+       * called in the [Client/Server]_Impl_13::handle() methods of messages
+       * that appear as "last message in a flight" or in post-handshake
+       * messages.
+       */
       virtual void clear_outstanding_acknowledgements() {}
 
       virtual bool timeout_check(Cipher_State* cipher_state) {

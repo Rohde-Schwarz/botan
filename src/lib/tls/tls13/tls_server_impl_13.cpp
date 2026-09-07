@@ -542,12 +542,16 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello) {
 
    const bool is_initial_client_hello = !m_handshake->state.has_hello_retry_request();
 
-   // RFC 9147 7.
-   //    During the handshake, ACKs only cover the current outstanding flight
-   //    [...]. Implementations can accomplish this by clearing their ACK list
-   //    upon receiving the start of the next flight.
-   m_dtls_channel_companion->clear_outstanding_acknowledgements();
+   // We received a TLS 1.3 ClientHello. Now, we can be sure that our peer uses
+   // TLS 1.3. We don't have to explicitly clear our resend buffer like on the
+   // client side, because the server never sends any flights before commiting
+   // the protocol version anyway.
+   //
+   // We do however clear our outstanding ACKs, because the ClientHello is the
+   // only message in the flight; by definition it is the "final" message of
+   // this flight.
    m_dtls_channel_companion->notify_protocol_version_committed();
+   m_dtls_channel_companion->clear_outstanding_acknowledgements();
 
    if(is_initial_client_hello) {
       const auto preferred_version = client_hello.highest_supported_version(policy());
