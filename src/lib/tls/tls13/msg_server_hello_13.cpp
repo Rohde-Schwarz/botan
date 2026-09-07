@@ -389,7 +389,10 @@ Hello_Retry_Request::Hello_Retry_Request(
       Server_Hello_13(std::make_unique<Server_Hello_Internal>(
                          flavor == TLS_Flavor::DTLS ? Protocol_Version::DTLS_V12 /* legacy_version */
                                                     : Protocol_Version::TLS_V12,
-                         ch.session_id(),
+                         // RFC 9147 5.
+                         //    DTLS servers MUST NOT echo the "legacy_session_id" value from the
+                         //    client [...].
+                         flavor == TLS_Flavor::DTLS ? Session_ID{} : ch.session_id(),
                          std::vector<uint8_t>(HELLO_RETRY_REQUEST_MARKER.begin(), HELLO_RETRY_REQUEST_MARKER.end()),
                          choose_ciphersuite(ch, policy, flavor),
                          uint8_t(0) /* compression method */,

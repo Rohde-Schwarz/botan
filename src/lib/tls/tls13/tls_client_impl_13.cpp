@@ -352,13 +352,15 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
       }
    } else {
       // We just received a TLS 1.3 ServerHello without ever receiving a
-      // HelloRetryRequest. Now, we can be sure that our peer uses TLS 1.3 and,
-      // thus, could handle lost packages using the DTLS 1.3 ACK mechanism.
-      // Therefore, we have to clear our resend buffer, because it might still
-      // contain our initial ClientHello for retransmission to a DTLS 1.2 peer
-      // that would not have been able to rely on ACKs.
+      // HelloRetryRequest. Now, we can be sure that our peer uses TLS 1.3.
+      //
+      // Conceptually, we could now clear the resend buffer and rely on the
+      // ACKing of DTLS 1.3 in case the encrypted portion of the server flight
+      // was lost. However, we don't do that here for compliance with BoGo,
+      // i.e., we keep the resend buffer and the next timeout_check() call will
+      // trigger a full resend of all ClientHello fragments, which is still
+      // valid behavior.
       m_dtls_channel_companion->notify_protocol_version_committed();
-      m_dtls_channel_companion->maybe_clear_resend_buffer();
    }
 
    auto cipher = Ciphersuite::by_id(sh.ciphersuite());
