@@ -44,10 +44,8 @@ std::vector<uint8_t> make_hello_random(RandomNumberGenerator& rng, Callbacks& cb
  * downgrading to TLS 1.2 from a peer that could also negotiate TLS 1.3, the
  * random value must be slightly modified to signal the downgrade.
  */
-std::vector<uint8_t> make_server_hello_random(RandomNumberGenerator& rng,
-                                              Protocol_Version offered_version,
-                                              Callbacks& cb,
-                                              const Policy& policy);
+std::vector<uint8_t> make_server_hello_random(
+   RandomNumberGenerator& rng, Protocol_Version offered_version, Callbacks& cb, const Policy& policy, bool is_datagram);
 
 /**
  * Version-agnostic internal client hello data container that allows
