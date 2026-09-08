@@ -233,6 +233,7 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
             /*
             The record sequence number is set in Record_Layer::next_record only when
             the record contents are decrypted under the current set of traffic keys
+            for TLS or under any retained epoch for DTLS.
             */
             if(!record.sequence_number.has_value()) {
                throw Unexpected_Message("Application data must have a sequence number");

@@ -1107,6 +1107,15 @@ std::optional<Record_Content> Cipher_State::deprotect_record(ProtectedRecord_DTL
          fmt("Deprotected DTLS record had unexpected content type: {}", static_cast<uint32_t>(result.type)));
    }
 
+   // RFC 9147 6.1
+   //    Epoch value (3) is used for payloads protected using keys derived from
+   //    the initial [sender]_application_traffic_secret_0
+   //
+   // We thus reject application data records received at the handshake epoch.
+   if(result.type == Record_Type::ApplicationData && epoch->get().number == Epoch_Number::HandshakeTraffic) {
+      throw TLS_Exception(Alert::UnexpectedMessage, "Can't interleave application and handshake data");
+   }
+
    return result;
 }
 

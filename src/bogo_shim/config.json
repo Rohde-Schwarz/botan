@@ -250,7 +250,6 @@
         "SendEmptySessionTicket-TLS13": "Botan sends internal_error instead of decode_error - empty ticket is caught later than the spec expects",
         "DTLS-ECH*": "No ECH support",
         "KeyUpdate-*-DTLS": "No DTLS 1.3",
-        "AppDataBeforeTLS13KeyChange-DTLS*": "No DTLS 1.3",
         "UnencryptedEncryptedExtensions-DTLS": "No DTLS 1.3",
         "Resume-*-TLS13-TLS12-DTLS": "No DTLS 1.3",
         "Downgrade-TLS12-*-DTLS": "No DTLS 1.3",
