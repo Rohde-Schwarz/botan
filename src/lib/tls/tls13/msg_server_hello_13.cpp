@@ -304,8 +304,11 @@ Server_Hello_13::Server_Hello_13(const Client_Hello_13& ch,
          //    DTLS servers MUST NOT echo the "legacy_session_id" value from the
          //    client [...].
          flavor == TLS_Flavor::TLS ? ch.session_id() : Session_ID{},
-         make_server_hello_random(
-            rng, flavor == TLS_Flavor::DTLS ? Protocol_Version::DTLS_V13 : Protocol_Version::TLS_V13, cb, policy),
+         make_server_hello_random(rng,
+                                  flavor == TLS_Flavor::DTLS ? Protocol_Version::DTLS_V13 : Protocol_Version::TLS_V13,
+                                  cb,
+                                  policy,
+                                  flavor == TLS_Flavor::DTLS),
          choose_ciphersuite(ch, policy, flavor),
          uint8_t(0) /* compression method */
          )) {

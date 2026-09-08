@@ -199,6 +199,8 @@ class Channel_Impl_12 : public Channel_Impl {
 
       Callbacks& callbacks() const { return *m_callbacks; }
 
+      bool is_datagram() const { return m_is_datagram; }
+
       void reset_active_association_state();
 
       /**
