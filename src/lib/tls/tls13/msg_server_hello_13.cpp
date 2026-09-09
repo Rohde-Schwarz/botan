@@ -364,18 +364,6 @@ Server_Hello_13::Server_Hello_13(const Client_Hello_13& ch,
    }
 }
 
-std::optional<Protocol_Version> Server_Hello_13::random_signals_downgrade() const {
-   const uint64_t last8 = load_be<uint64_t>(m_data->random().data(), 3);
-   if(last8 == DOWNGRADE_TLS11) {
-      return Protocol_Version::TLS_V11;
-   }
-   if(last8 == DOWNGRADE_TLS12) {
-      return Protocol_Version::TLS_V12;
-   }
-
-   return std::nullopt;
-}
-
 Protocol_Version Server_Hello_13::selected_version() const {
    auto* const versions_ext = m_data->extensions().get<Supported_Versions>();
    BOTAN_ASSERT_NOMSG(versions_ext);

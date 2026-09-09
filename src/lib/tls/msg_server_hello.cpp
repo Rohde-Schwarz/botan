@@ -169,6 +169,18 @@ const Extensions& Server_Hello::extensions() const {
    return m_data->extensions();
 }
 
+std::optional<Protocol_Version> Server_Hello::random_signals_downgrade() const {
+   const uint64_t last8 = load_be<uint64_t>(m_data->random().data(), 3);
+   if(last8 == DOWNGRADE_TLS11) {
+      return Protocol_Version::TLS_V11;
+   }
+   if(last8 == DOWNGRADE_TLS12) {
+      return Protocol_Version::TLS_V12;
+   }
+
+   return std::nullopt;
+}
+
 Server_Hello_12_Shim::Server_Hello_12_Shim(std::span<const uint8_t> buf) :
       Server_Hello_12_Shim(std::make_unique<Server_Hello_Internal>(buf)) {}
 
@@ -181,18 +193,6 @@ Server_Hello_12_Shim::Server_Hello_12_Shim(std::unique_ptr<Server_Hello_Internal
 
 Protocol_Version Server_Hello_12_Shim::selected_version() const {
    return legacy_version();
-}
-
-std::optional<Protocol_Version> Server_Hello_12_Shim::random_signals_downgrade() const {
-   const uint64_t last8 = load_be<uint64_t>(m_data->random().data(), 3);
-   if(last8 == DOWNGRADE_TLS11) {
-      return Protocol_Version::TLS_V11;
-   }
-   if(last8 == DOWNGRADE_TLS12) {
-      return Protocol_Version::TLS_V12;
-   }
-
-   return std::nullopt;
 }
 
 }  // namespace Botan::TLS
