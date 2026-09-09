@@ -405,18 +405,29 @@ void Client_Impl_12::process_handshake_msg(Handshake_State& state_base,
          throw TLS_Exception(Alert::IllegalParameter, "Server replied with non-null compression method");
       }
 
-      if(state.client_hello()->legacy_version() > state.server_hello()->legacy_version()) {
-         // check for downgrade attacks
+      const auto downgrade_signal = state.server_hello()->random_signals_downgrade();
+      if(downgrade_signal.has_value()) {
+         // RFC 9846 4.2.3.:
+         //   TLS 1.3 clients receiving a ServerHello indicating TLS 1.2 or
+         //   below MUST check that the last 8 bytes are not equal to either of
+         //   [the magic downgrade values].
          //
-         // RFC 8446 4.1.3.:
-         //   TLS 1.2 clients SHOULD also check that the last 8 bytes are
-         //   not equal to the [magic value DOWNGRADE_TLS11] if the ServerHello
-         //   indicates TLS 1.1 or below.  If a match is found, the client MUST
-         //   abort the handshake with an "illegal_parameter" alert.
+         // If `random_signals_downgrade()` returns any value, then the server
+         // is signaling a downgrade to TLS 1.2 or below.
+         if(state.client_hello()->offered_tls13()) {
+            throw TLS_Exception(Alert::IllegalParameter, "Downgrade attack detected");
+         }
+
+         // RFC 9846 4.2.3.:
+         //    TLS 1.2 clients SHOULD also check that the last 8 bytes are not
+         //    equal to the [magic value DOWNGRADE_TLS11] if the ServerHello
+         //    indicates TLS 1.1 or below.
          //
-         // TLS 1.3 servers will still set the magic string to DOWNGRADE_TLS12. Don't abort in this case.
-         if(auto requested = state.server_hello()->random_signals_downgrade();
-            requested.has_value() && requested.value() <= Protocol_Version::TLS_V11) {
+         // Technically, this is dead code because we don't support TLS 1.1 or
+         // below anymore, but we keep it for completeness and to avoid future
+         // regressions.
+         if(state.client_hello()->legacy_version() > state.server_hello()->legacy_version() &&
+            downgrade_signal.value() <= Protocol_Version::TLS_V11) {
             throw TLS_Exception(Alert::IllegalParameter, "Downgrade attack detected");
          }
       }
