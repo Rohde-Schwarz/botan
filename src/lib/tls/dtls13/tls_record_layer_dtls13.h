@@ -60,12 +60,12 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
 
       ReadResult<Record_Content> next_record(Cipher_State* cipher_state = nullptr) override;
 
-      std::vector<MarshalledRecord> prepare_records(Record_Type type,
-                                                    std::span<const uint8_t> fragment,
-                                                    Cipher_State* cipher_state) const override;
+      std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
+                                                             std::span<const uint8_t> fragment,
+                                                             Cipher_State* cipher_state) const override;
 
-      std::vector<MarshalledRecord> prepare_records(const PreparedHandshakeMessageFlight& flight,
-                                                    Cipher_State* cipher_state) const override;
+      std::vector<MarshalledRecordAndNumber> prepare_records(const PreparedHandshakeMessageFlight& flight,
+                                                             Cipher_State* cipher_state) const override;
 
       /**
        * Re-prepares all records that are currently not acknowledged by the
@@ -100,6 +100,8 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
        */
       bool handle_acknowledgements(const ACKs& ack_payload);
 
+      bool has_unacknowledged_record(const RecordNumber& record_number) const;
+
       void clear_resend_buffer();
       void clear_outstanding_acknowledgements();
 
@@ -116,10 +118,10 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       PlaintextRecord_DTLS read_plaintext_record(BufferSlicer& bs);
       ProtectedRecord_DTLS read_protected_record(BufferSlicer& bs);
 
-      std::pair<MarshalledRecord, RecordNumber> prepare_record(Record_Type type,
-                                                               std::span<const uint8_t> fragment,
-                                                               Cipher_State* cipher_state,
-                                                               std::optional<Epoch_Number> epoch = std::nullopt) const;
+      MarshalledRecordAndNumber prepare_record(Record_Type type,
+                                               std::span<const uint8_t> fragment,
+                                               Cipher_State* cipher_state,
+                                               std::optional<Epoch_Number> epoch = std::nullopt) const;
 
       IncomingRecord next_incoming_record();
 

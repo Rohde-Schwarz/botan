@@ -16,6 +16,27 @@
 
 namespace Botan::TLS {
 
+enum class Epoch_Number /* NOLINT(*-enum-size) */ : uint64_t {
+   Unprotected = 0,
+   EarlyTraffic = 1,
+   HandshakeTraffic = 2,
+   ApplicationTraffic_0 = 3,
+   // ApplicationTrafic_1 = 4
+   // ApplicationTraffic_2 = 5
+   // ...
+   // ApplicationTraffic_N = N + 3
+};
+
+/**
+ * RFC 9147 Section 4
+ */
+struct RecordNumber {
+      Epoch_Number epoch;
+      uint64_t sequence_number;
+
+      auto operator<=>(const RecordNumber&) const = default;
+};
+
 /// Holds the serialization of a single TLS 1.3 handshake message along
 /// with the handshake protocol header.
 using MarshalledHandshakeMessage = Strong<std::vector<uint8_t>, struct MarshalledHandshakeMessage_>;
@@ -42,16 +63,10 @@ using PreparedHandshakeMessageFlight =
 /// protocol header. Protected records hold the encrypted payload and AEAD tag.
 using MarshalledRecord = Strong<secure_vector<uint8_t>, struct MarshalledRecord_>;
 
-enum class Epoch_Number /* NOLINT(*-enum-size) */ : uint64_t {
-   Unprotected = 0,
-   EarlyTraffic = 1,
-   HandshakeTraffic = 2,
-   ApplicationTraffic_0 = 3,
-   // ApplicationTrafic_1 = 4
-   // ApplicationTraffic_2 = 5
-   // ...
-   // ApplicationTraffic_N = N + 3
-};
+/// Holds the serialization of a single TLS 1.3 record along with its record
+/// protocol header and the record number used for this records. Typically, the
+/// record number is used in DTLS to track when records have been acknowledged.
+using MarshalledRecordAndNumber = std::pair<MarshalledRecord, RecordNumber>;
 
 /**
  * Wraps the epoch0 (unprotected) sequence numbers that are being handed down

@@ -291,6 +291,7 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"server hello must contain key exchange information", ":MISSING_KEY_SHARE:"},
       {"Peer sent duplicated extensions", ":DUPLICATE_EXTENSION:"},
       {"Policy does not accept any hash function supported by client", ":NO_SHARED_CIPHER:"},
+      {"Post-handshake message received in unexpected epoch", ":EXCESS_HANDSHAKE_DATA:"},
       {"Server sent bad values for secure renegotiation", ":RENEGOTIATION_MISMATCH:"},
       {"Server version DTLS v1.0 is unacceptable by policy", ":UNSUPPORTED_PROTOCOL:"},
       {"Server version TLS v1.0 is unacceptable by policy", ":UNSUPPORTED_PROTOCOL:"},

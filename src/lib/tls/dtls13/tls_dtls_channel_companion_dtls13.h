@@ -11,6 +11,7 @@
 
 #include <botan/assert.h>
 #include <botan/tls_exceptn.h>
+#include <botan/internal/tls_cipher_state.h>
 #include <botan/internal/tls_dtls_channel_companion.h>
 #include <botan/internal/tls_record_layer_dtls13.h>
 #include <botan/internal/tls_timer_dtls13.h>
@@ -46,6 +47,12 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
       }
 
       bool protocol_version_committed() const override { return m_dtls_version_committed; }
+
+      void register_pending_key_update(const RecordNumber& record_number) override {
+         m_pending_key_update_record = record_number;
+      }
+
+      bool has_pending_key_update() const override { return m_pending_key_update_record.has_value(); }
 
       void maybe_clear_resend_buffer() override {
          // If we're not sure that the peer is using DTLS 1.3, we must not clear
@@ -94,7 +101,9 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
          return m_record_layer->acknowledgements().serialize(max_plaintext_length);
       }
 
-      void process_acknowledgements(Cipher_State* cipher_state, std::span<const uint8_t> ack_record) override {
+      void process_acknowledgements(Cipher_State* cipher_state,
+                                    std::span<const uint8_t> ack_record,
+                                    const Secret_Logger& secret_logger) override {
          // If we receive ACKs before we know for sure that the peer is using
          // DTLS 1.3, we ignore them. The peer might still pick DTLS 1.2, and as
          // a result would depend on a full flight retransmission.
@@ -111,6 +120,12 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
             m_retransmission_timer.stop();
          }
 
+         if(has_pending_key_update() &&
+            !m_record_layer->has_unacknowledged_record(m_pending_key_update_record.value())) {
+            cipher_state->update_write_keys(secret_logger);
+            m_pending_key_update_record.reset();
+         }
+
          // RFC 9147 7.2
          //    Upon receipt of an ACK that leaves it with only some messages from
          //    a flight having been acknowledged, an implementation SHOULD
@@ -122,7 +137,6 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
          //
          // Not sending retransmissions immediately mirrors the current behavior
          // of BoringSSL and is expected by BoGo tests.
-         BOTAN_UNUSED(cipher_state);
       }
 
    private:
@@ -133,6 +147,8 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
       std::shared_ptr<AcknowledgementTimer> m_ack_timer;
 
       DTLS_Retransmission_Timer m_retransmission_timer;
+
+      std::optional<RecordNumber> m_pending_key_update_record;
 
       bool m_dtls_version_committed = false;
 };

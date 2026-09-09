@@ -152,9 +152,9 @@ class BOTAN_TEST_API Cipher_State {
        *
        * @returns the marshalled and protected record to be sent on the wire
        */
-      [[nodiscard]] MarshalledRecord protect_record(Record_Type type,
-                                                    std::span<const uint8_t> plaintext,
-                                                    size_t padding_bytes);
+      [[nodiscard]] MarshalledRecordAndNumber protect_record(Record_Type type,
+                                                             std::span<const uint8_t> plaintext,
+                                                             size_t padding_bytes);
 
       /**
        * Deprotect a TLS record  (RFC 9846 5.2 --

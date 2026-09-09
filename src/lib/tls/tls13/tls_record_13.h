@@ -31,16 +31,6 @@ struct Record_Content final {
 };
 
 /**
- * RFC 9147 Section 4
- */
-struct RecordNumber {
-      Epoch_Number epoch;
-      uint64_t sequence_number;
-
-      auto operator<=>(const RecordNumber&) const = default;
-};
-
-/**
  * Represents a TLS record composed of a partially ossified header and payload.
  * The record might be incomplete, i.e. not all bytes of the header or the
  * payload have been received, yet. The record can be extended by appending more

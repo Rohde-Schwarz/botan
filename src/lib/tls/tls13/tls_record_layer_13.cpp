@@ -48,11 +48,11 @@ class TLS_Record_Layer final : public Record_Layer {
 
       bool copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) override;
       ReadResult<Record_Content> next_record(Cipher_State* cipher_state = nullptr) override;
-      std::vector<MarshalledRecord> prepare_records(Record_Type type,
-                                                    std::span<const uint8_t> payload,
-                                                    Cipher_State* cipher_state) const override;
-      std::vector<MarshalledRecord> prepare_records(const PreparedHandshakeMessageFlight& flight,
-                                                    Cipher_State* cipher_state = nullptr) const override;
+      std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
+                                                             std::span<const uint8_t> payload,
+                                                             Cipher_State* cipher_state) const override;
+      std::vector<MarshalledRecordAndNumber> prepare_records(const PreparedHandshakeMessageFlight& flight,
+                                                             Cipher_State* cipher_state = nullptr) const override;
 
       void clear_read_buffer() override;
 
@@ -110,9 +110,9 @@ bool TLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer, bool h
    return true;
 }
 
-std::vector<MarshalledRecord> TLS_Record_Layer::prepare_records(const Record_Type type,
-                                                                std::span<const uint8_t> data,
-                                                                Cipher_State* cipher_state) const {
+std::vector<MarshalledRecordAndNumber> TLS_Record_Layer::prepare_records(const Record_Type type,
+                                                                         std::span<const uint8_t> data,
+                                                                         Cipher_State* cipher_state) const {
    // RFC 8446 5.
    //    Note that [change_cipher_spec records] may appear at a point at the
    //    handshake where the implementation is expecting protected records.
@@ -164,7 +164,7 @@ std::vector<MarshalledRecord> TLS_Record_Layer::prepare_records(const Record_Typ
 
    const auto records = std::max(ceil_division(data.size(), max_plaintext_payload_size), size_t(1));
 
-   std::vector<MarshalledRecord> output;
+   std::vector<MarshalledRecordAndNumber> output;
    output.reserve(records);
 
    BufferSlicer bs(data);
@@ -215,10 +215,16 @@ std::vector<MarshalledRecord> TLS_Record_Layer::prepare_records(const Record_Typ
                                                           legacy_record_version,  //
                                                           checked_cast_to<uint16_t>(pt_fragment.size()));
 
-         MarshalledRecord& plaintext_record = output.emplace_back();
-         plaintext_record.get().reserve(header.size() + pt_fragment.size());
-         plaintext_record.get().insert(plaintext_record.end(), header.begin(), header.end());
-         plaintext_record.get().insert(plaintext_record.end(), pt_fragment.begin(), pt_fragment.end());
+         MarshalledRecordAndNumber& plaintext_record = output.emplace_back();
+         plaintext_record.second = RecordNumber{
+            .epoch = Epoch_Number::Unprotected,
+            // TODO: technically that isn't correct. TLS just doesn't actually handle the sequence number of unprotected records
+            .sequence_number = 0,
+         };
+         plaintext_record.first.get().reserve(header.size() + pt_fragment.size());
+         plaintext_record.first.get().insert(plaintext_record.first.get().end(), header.begin(), header.end());
+         plaintext_record.first.get().insert(
+            plaintext_record.first.get().end(), pt_fragment.begin(), pt_fragment.end());
       }
    }
 
@@ -228,8 +234,8 @@ std::vector<MarshalledRecord> TLS_Record_Layer::prepare_records(const Record_Typ
    return output;
 }
 
-std::vector<MarshalledRecord> TLS_Record_Layer::prepare_records(const PreparedHandshakeMessageFlight& flight,
-                                                                Cipher_State* cipher_state) const {
+std::vector<MarshalledRecordAndNumber> TLS_Record_Layer::prepare_records(const PreparedHandshakeMessageFlight& flight,
+                                                                         Cipher_State* cipher_state) const {
    const auto* data = std::get_if<MarshalledHandshakeMessageFlight>(&flight);
    BOTAN_ARG_CHECK(data != nullptr, "Flight must be a MarshalledHandshakeMessageFlight");
 

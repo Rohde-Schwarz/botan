@@ -82,7 +82,11 @@ class TLS_Handshake_Layer final : public Handshake_Layer {
 
       bool has_pending_data() const override { return m_read_offset < m_read_buffer.size(); }
 
-      bool copy_data(const Policy& /* policy */, std::span<const uint8_t> data_from_peer) override {
+      bool copy_data(const Policy& policy,
+                     std::span<const uint8_t> data_from_peer,
+                     std::optional<Epoch_Number> epoch) override {
+         BOTAN_UNUSED(policy, epoch);
+
          // Compact consumed data before appending new data
          BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
          if(m_read_offset > 0) {

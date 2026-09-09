@@ -28,11 +28,11 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
       explicit DTLS_Handshake_Layer(Connection_Side side) : Handshake_Layer(side) {}
 
       bool has_pending_data() const override {
-         // TODO: Check if this is correct
-         return !m_current_read_message.empty();
+         // TODO: This probably doesn't make sense for DTLS, not sure...
+         return false;
       }
 
-      bool copy_data(const Policy& policy, std::span<const uint8_t> bytes) override;
+      bool copy_data(const Policy& policy, std::span<const uint8_t> bytes, std::optional<Epoch_Number> epoch) override;
 
       NextMessageStep next_message_buffer(std::span<const uint8_t> bytes, const Policy& policy) override;
 
@@ -60,12 +60,14 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
       uint16_t m_read_message_seq = 0;
 
       struct ReassembledMessage {
+            Epoch_Number epoch;        // The record protection epoch this message was received in.
             TLSHeader header;          // msg_type + 3-byte total length, filled in on first fragment
             DTLSPayload payload;       // sized to msg_len once known, filled in as fragments arrive
             bitvector received_bytes;  // tracks which bytes of the payload have been received so far
             bool complete = false;
       };
 
+      Epoch_Number m_current_epoch = Epoch_Number::ApplicationTraffic_0;
       std::map<uint16_t, ReassembledMessage> m_current_read_message;  // keyed by message_seq
 };
 

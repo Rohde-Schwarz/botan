@@ -273,9 +273,9 @@ auto current_nonce(const uint64_t seq_no, std::span<const uint8_t> iv) {
 
 }  // namespace
 
-MarshalledRecord Cipher_State::protect_record(Record_Type type,
-                                              std::span<const uint8_t> plaintext,
-                                              size_t padding_bytes) {
+MarshalledRecordAndNumber Cipher_State::protect_record(Record_Type type,
+                                                       std::span<const uint8_t> plaintext,
+                                                       size_t padding_bytes) {
    BOTAN_STATE_CHECK(current_write_epoch_number() > Epoch_Number::Unprotected);
 
    auto& epoch = *m_write_epochs.back();
@@ -329,12 +329,17 @@ MarshalledRecord Cipher_State::protect_record(Record_Type type,
    result.get().insert(result.end(), padding_bytes, 0x00);                 // zeros (padding)
 
    BOTAN_ASSERT_NOMSG(result.size() == unprotected_record_length);
+   const auto sequence_number = epoch.sequence_number++;
    epoch.cipher->set_associated_data(std::span{result}.first<TLS_HEADER_SIZE>());
-   epoch.cipher->start(current_nonce(epoch.sequence_number++, epoch.iv));
+   epoch.cipher->start(current_nonce(sequence_number, epoch.iv));
    epoch.cipher->finish(result, TLS_HEADER_SIZE);
    BOTAN_ASSERT_NOMSG(result.size() == protected_record_length);
 
-   return result;
+   return std::make_pair(std::move(result),
+                         RecordNumber{
+                            .epoch = epoch.number,
+                            .sequence_number = sequence_number,
+                         });
 }
 
 Record_Content Cipher_State::deprotect_record(Record_TLS record, size_t incoming_record_size_limit) {

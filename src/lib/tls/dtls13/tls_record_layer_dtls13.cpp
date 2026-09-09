@@ -286,10 +286,10 @@ Record_Layer::ReadResult<Record_Content> DTLS_Record_Layer::next_record(Cipher_S
    return BytesNeeded(0);
 }
 
-std::pair<MarshalledRecord, RecordNumber> DTLS_Record_Layer::prepare_record(Record_Type type,
-                                                                            std::span<const uint8_t> fragment,
-                                                                            Cipher_State* cipher_state,
-                                                                            std::optional<Epoch_Number> epoch) const {
+MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(Record_Type type,
+                                                            std::span<const uint8_t> fragment,
+                                                            Cipher_State* cipher_state,
+                                                            std::optional<Epoch_Number> epoch) const {
    // RFC 8446 5.1
    //    The length MUST NOT exceed 2^14 bytes.
    BOTAN_ARG_CHECK(fragment.size() <= MAX_PLAINTEXT_SIZE, "length must not exceed 2^14 bytes");
@@ -359,32 +359,33 @@ std::pair<MarshalledRecord, RecordNumber> DTLS_Record_Layer::prepare_record(Reco
    }
 }
 
-std::vector<MarshalledRecord> DTLS_Record_Layer::prepare_records(Record_Type type,
-                                                                 std::span<const uint8_t> fragment,
-                                                                 Cipher_State* cipher_state) const {
-   return {prepare_record(type, fragment, cipher_state).first};
+std::vector<MarshalledRecordAndNumber> DTLS_Record_Layer::prepare_records(Record_Type type,
+                                                                          std::span<const uint8_t> fragment,
+                                                                          Cipher_State* cipher_state) const {
+   return {prepare_record(type, fragment, cipher_state)};
 }
 
-std::vector<MarshalledRecord> DTLS_Record_Layer::prepare_records(const PreparedHandshakeMessageFlight& flight,
-                                                                 Cipher_State* cipher_state) const {
+std::vector<MarshalledRecordAndNumber> DTLS_Record_Layer::prepare_records(const PreparedHandshakeMessageFlight& flight,
+                                                                          Cipher_State* cipher_state) const {
    const auto* fragments = std::get_if<std::vector<MarshalledHandshakeMessageFragment>>(&flight);
    BOTAN_ARG_CHECK(fragments != nullptr, "Flight must be a vector of MarshalledHandshakeMessageFragment");
 
-   std::vector<MarshalledRecord> prepared_records;
+   std::vector<MarshalledRecordAndNumber> prepared_records;
    prepared_records.reserve(fragments->size());
 
    // For DTLS we assume that the Handshake_Layer fragmented the flight of
    // marshalled handshake messages so that each fragment fits into a single
    // DTLS record. Therefore, we simply prepare a record for each fragment.
    for(const auto& fragment : *fragments) {
-      auto [marshalled_record, record_number] = prepare_record(Record_Type::Handshake, fragment, cipher_state);
+      auto marshalled_record_and_number = prepare_record(Record_Type::Handshake, fragment, cipher_state);
       m_unacked_outgoing_handshake_records.push_back({
-         .record_numbers = {record_number},
+         .record_numbers = {marshalled_record_and_number.second},
          .fragment = fragment,
       });
 
-      prepared_records.emplace_back(std::move(marshalled_record));
+      prepared_records.emplace_back(std::move(marshalled_record_and_number));
    }
+
    return prepared_records;
 }
 
@@ -440,6 +441,12 @@ bool DTLS_Record_Layer::handle_acknowledgements(const ACKs& acks) {
          });
    });
    return m_unacked_outgoing_handshake_records.empty();
+}
+
+bool DTLS_Record_Layer::has_unacknowledged_record(const RecordNumber& record_number) const {
+   return std::any_of(m_unacked_outgoing_handshake_records.begin(),
+                      m_unacked_outgoing_handshake_records.end(),
+                      [&](const auto& record_info) { return value_exists(record_info.record_numbers, record_number); });
 }
 
 void DTLS_Record_Layer::clear_resend_buffer() {
