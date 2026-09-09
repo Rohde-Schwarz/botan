@@ -62,13 +62,17 @@ class BOTAN_TEST_API Handshake_Layer {
        * @param data_from_peer  The data to be parsed. In DTLS this is assumed to be one or
        *                        more full handshake message fragments. In TLS it might be a
        *                        an in-order portion of any size.
+       * @param epoch           The epoch in which the record containing the data was received.
+       *                        This is only relevant for DTLS.
        *
        * @returns true if the data was successfully ingested, false if something
        *          went wrong. Typically DTLS handshake layers will return false
        *          if the data was not a valid fragment of a handshake message
        *          and got discarded.
        */
-      virtual bool copy_data(const Policy& policy, std::span<const uint8_t> data_from_peer) = 0;
+      virtual bool copy_data(const Policy& policy,
+                             std::span<const uint8_t> data_from_peer,
+                             std::optional<Epoch_Number> epoch) = 0;
 
       /**
        * Parses one handshake message off the internal buffer that is being filled using `copy_data`.

@@ -125,7 +125,7 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
          }
 
          if(record.type == Record_Type::Handshake) {
-            if(m_handshake_layer->copy_data(policy(), record.payload)) {
+            if(m_handshake_layer->copy_data(policy(), record.payload, record.epoch)) {
                // RFC 9147 7.
                //    During the handshake, ACKs only cover the current outstanding flight
                //    (this is possible because DTLS is generally a lock-step protocol).
@@ -181,6 +181,12 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
                   // Note: Server_Hello_12 was deliberately not included in the check below because in TLS 1.2 Server Hello and
                   //       other handshake messages can be legally coalesced in a single record.
                   //
+                  // TODO: This should be handled differently for DTLS
+                  // Kimi: need per-record bookkeeping: copy_data should record
+                  // whether the fragment completing a message was followed by
+                  // more fragments in the same record, and attach that flag to
+                  // the ReassembledMessage, rather than inferring it from
+                  // global map state.
                   if(holds_any_of<Client_Hello_12_Shim,
                                   Client_Hello_13 /*, EndOfEarlyData,*/,
                                   Server_Hello_13,
@@ -268,6 +274,10 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
 
 void Channel_Impl_13::handle(const Key_Update& key_update) {
    // make sure Key_Update appears only at the end of a record; see description above
+   //
+   // TODO: This doesn't work for DTLS, because the data may be delivered
+   //       out-of-order. This check assumes reliable stream semantics of
+   //       the underlying transport.
    if(m_handshake_layer->has_pending_data()) {
       throw Unexpected_Message("Unexpected additional post-handshake message data found in record");
    }
@@ -490,10 +500,51 @@ SymmetricKey Channel_Impl_13::key_material_export(std::string_view label,
 }
 
 void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
-   BOTAN_STATE_CHECK(!is_downgrading() && is_handshake_complete() && is_active());
+   BOTAN_STATE_CHECK(!is_downgrading() && is_handshake_complete() && is_active() &&
+                     !m_dtls_channel_companion->has_pending_key_update());
    BOTAN_ASSERT_NONNULL(m_cipher_state);
-   send_post_handshake_message(Key_Update(request_peer_update));
-   m_cipher_state->update_write_keys(*this);
+
+   // TODO: The message and record marshalling code below is duplicated from the
+   //       AggregatedPostHandshakeMessages helper that is bound for a refactor.
+   //       Clean this up!
+
+   auto key_update_msg = Key_Update(request_peer_update);
+   callbacks().tls_inspect_handshake_msg(key_update_msg);
+
+   const auto flight = std::visit(
+      overloaded{
+         [&](MarshalledHandshakeMessage msg) -> PreparedHandshakeMessageFlight {
+            return MarshalledHandshakeMessageFlight(std::move(msg).get());
+         },
+         [&](std::vector<MarshalledHandshakeMessageFragment> msg_fragments) -> PreparedHandshakeMessageFlight {
+            return msg_fragments;
+         },
+      },
+      m_handshake_layer->prepare_post_handshake_message(std::move(key_update_msg),
+                                                        13 /* header + 1 byte of payload */));
+
+   const auto prepared_records = m_record_layer->prepare_records(flight, m_cipher_state.get());
+   BOTAN_ASSERT_NOMSG(prepared_records.size() == 1);  // KeyUpdate is small enough to fit into a single record
+   callbacks().tls_emit_data(prepared_records.front().first);
+
+   if(is_datagram()) {
+      // RFC 9147 8.
+      //    [...]  KeyUpdates MUST be acknowledged. In order to facilitate epoch
+      //    reconstruction [...], implementations MUST NOT send records with the
+      //    new keys or send a new KeyUpdate until the previous KeyUpdate has
+      //    been acknowledged [...].
+      //
+      // For DTLS, the actual call to cipher_state->update_write_keys() is
+      // deferred to the handling of the respective acknowledgement.
+      const auto key_update_record_number = prepared_records.front().second;
+      m_dtls_channel_companion->register_pending_key_update(key_update_record_number);
+      maybe_arm_dtls_retransmission_timer();
+   } else {
+      // For TLS, we may immediately update the write keys after sending the
+      // KeyUpdate message because we have reliable transport
+      m_cipher_state->update_write_keys(*this);
+   }
+
    if(request_peer_update) {
       m_key_update_requested = true;
    }
@@ -532,7 +583,7 @@ void Channel_Impl_13::send_record(Record_Type record_type, std::span<const uint8
    // the cipher state is already set up for handshake message encryption.
    auto* cipher_state = (record_type != Record_Type::ChangeCipherSpec) ? m_cipher_state.get() : nullptr;
 
-   for(const auto& record_to_write : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
+   for(const auto& [record_to_write, _] : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
       callbacks().tls_emit_data(record_to_write);
    }
 }
@@ -547,7 +598,7 @@ void Channel_Impl_13::send_record(const PreparedHandshakeMessageFlight& flight) 
    // calls to notify_flight_state_progress() from deep inside the state machine
    // to this call, since then we will know for certain that the state has
    // advanced as we are sending out the next complete flight.
-   for(const auto& record_to_write : m_record_layer->prepare_records(flight, m_cipher_state.get())) {
+   for(const auto& [record_to_write, _] : m_record_layer->prepare_records(flight, m_cipher_state.get())) {
       callbacks().tls_emit_data(record_to_write);
    }
 
@@ -618,7 +669,7 @@ void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
 }
 
 void Channel_Impl_13::process_acknowledgements(std::span<const uint8_t> record) {
-   m_dtls_channel_companion->process_acknowledgements(m_cipher_state.get(), record);
+   m_dtls_channel_companion->process_acknowledgements(m_cipher_state.get(), record, *this);
 }
 
 void Channel_Impl_13::maybe_arm_dtls_retransmission_timer(TimerGeneration generation_policy) {

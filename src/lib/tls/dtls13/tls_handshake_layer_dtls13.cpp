@@ -63,7 +63,11 @@ struct DTLS_Handshake_Header {
 
 }  // namespace
 
-bool DTLS_Handshake_Layer::copy_data(const Policy& policy, std::span<const uint8_t> bytes) {
+bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
+                                     std::span<const uint8_t> bytes,
+                                     std::optional<Epoch_Number> epoch) {
+   BOTAN_ARG_CHECK(epoch.has_value(), "Epoch number must be provided for DTLS handshake messages");
+
    BufferSlicer bs(bytes);
    while(!bs.empty()) {
       if(bs.remaining() < header_length) {
@@ -101,20 +105,25 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy, std::span<const uint8
       // TODO: It could make sense to commit fragments only once the entire `bytes` buffer was
       //       processed successfully. It might be surprising that datagrams are processed
       //       partially. E.g., in the record layer we're using this approach as well.
-      m_current_read_message.try_emplace(
+      auto [itr, _] = m_current_read_message.try_emplace(
          msg_seq,
          ReassembledMessage{
             // TODO: Parse the header already now and error-out if the header
             //       appears bogus. Note: There's also a commented-out test
             //       for that in test_tls_dtls13_handshake_layer.cpp, called
             //       "parse ClientHello detects incoming garbage data with invalid message type".
+            .epoch = epoch.value(),
             .header = {header_bytes[0], header_bytes[1], header_bytes[2], header_bytes[3]},
             .payload = DTLSPayload(msg_len),
             .received_bytes = bitvector(msg_len),
             .complete = false,
          });
-      // TODO: use the iterator from try_emplace
-      auto& reassembled = m_current_read_message.at(msg_seq);
+      auto& reassembled = itr->second;
+
+      if(reassembled.epoch != epoch.value()) {
+         throw TLS_Exception(Alert::IllegalParameter,
+                             "Detected DTLS handshake message fragments spanning multiple epochs");
+      }
 
       if(reassembled.payload.size() != msg_len || reassembled.received_bytes.size() != msg_len ||
          load_be(header_bytes.first<4>()) != load_be(reassembled.header)) {
@@ -196,9 +205,19 @@ std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handsha
       return std::nullopt;
    }
 
-   auto msg = parse_post_handshake_message(read_handshake_message_type(reassembled.header[0]), reassembled.payload);
+   if(reassembled.epoch != m_current_epoch) {
+      throw TLS_Exception(AlertType::UnexpectedMessage, "Post-handshake message received in unexpected epoch");
+   }
+
+   const auto msg_type = read_handshake_message_type(reassembled.header[0]);
+   auto msg = parse_post_handshake_message(msg_type, reassembled.payload);
 
    m_current_read_message.erase(m_read_message_seq++);
+
+   if(msg_type == Handshake_Type::KeyUpdate) {
+      m_current_epoch = static_cast<Epoch_Number>(to_underlying(m_current_epoch) + 1);
+   }
+
    return msg;
 }
 

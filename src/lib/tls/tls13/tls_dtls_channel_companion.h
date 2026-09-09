@@ -16,7 +16,9 @@
 
 namespace Botan::TLS {
 
+class Secret_Logger;
 class Cipher_State;
+struct RecordNumber;
 
 /**
  * Provides an abstract interface for DTLS-specific functionality that acts as
@@ -49,6 +51,10 @@ class DTLS_Channel_Companion {
 
       virtual bool protocol_version_committed() const { return false; }
 
+      virtual void register_pending_key_update(const RecordNumber& record_number) { BOTAN_UNUSED(record_number); }
+
+      virtual bool has_pending_key_update() const { return false; }
+
       virtual void maybe_clear_resend_buffer() {}
 
       /**
@@ -72,8 +78,10 @@ class DTLS_Channel_Companion {
          throw TLS_Exception(AlertType::InternalError, "Requested an ACK record despite not being DTLS");
       }
 
-      virtual void process_acknowledgements(Cipher_State* cipher_state, std::span<const uint8_t> ack_record) {
-         BOTAN_UNUSED(cipher_state, ack_record);
+      virtual void process_acknowledgements(Cipher_State* cipher_state,
+                                            std::span<const uint8_t> ack_record,
+                                            const Secret_Logger& secret_logger) {
+         BOTAN_UNUSED(cipher_state, ack_record, secret_logger);
          throw TLS_Exception(AlertType::UnexpectedMessage, "Received ACKs despite not being DTLS");
       }
 };
