@@ -504,6 +504,17 @@ void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
                      !m_dtls_channel_companion->has_pending_key_update());
    BOTAN_ASSERT_NONNULL(m_cipher_state);
 
+   // RFC 9147 8. (Errata-ID 8050)
+   //    After the handshake, each epoch change consumes a message_seq value,
+   //    which is limited to 2^16-1. [...] In this case, the implementation MUST
+   //    check for this limit, if reached, terminate the association.
+   //
+   // We don't terminate the association but we reject any further key updates.
+   if(is_datagram() &&
+      to_underlying(m_cipher_state->current_write_epoch_number()) == std::numeric_limits<uint16_t>::max()) {
+      throw Invalid_State("Cannot update keys: maximum DTLS epoch number reached");
+   }
+
    // TODO: The message and record marshalling code below is duplicated from the
    //       AggregatedPostHandshakeMessages helper that is bound for a refactor.
    //       Clean this up!
