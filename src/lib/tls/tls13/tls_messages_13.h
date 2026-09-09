@@ -135,11 +135,6 @@ class BOTAN_UNSTABLE_API Server_Hello_13 : public Server_Hello {
          std::span<const uint8_t> buf, TLS_Flavor flavor);
 
       /**
-       * Return desired downgrade version indicated by hello random, if any.
-       */
-      std::optional<Protocol_Version> random_signals_downgrade() const;
-
-      /**
        * @returns the selected version as indicated by the supported_versions extension
        */
       Protocol_Version selected_version() const final;
