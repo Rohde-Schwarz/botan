@@ -195,7 +195,7 @@ std::optional<Handshake_Message_13> DTLS_Handshake_Layer::next_message(const Pol
 std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handshake_message(const Policy& policy) {
    BOTAN_UNUSED(policy);
 
-   auto message = m_current_read_message.find(m_read_message_seq);
+   auto message = m_current_read_message.find(static_cast<uint16_t>(m_read_message_seq));
    if(message == m_current_read_message.end()) {
       return std::nullopt;
    }
@@ -212,9 +212,17 @@ std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handsha
    const auto msg_type = read_handshake_message_type(reassembled.header[0]);
    auto msg = parse_post_handshake_message(msg_type, reassembled.payload);
 
-   m_current_read_message.erase(m_read_message_seq++);
+   m_current_read_message.erase(static_cast<uint16_t>(m_read_message_seq++));
 
    if(msg_type == Handshake_Type::KeyUpdate) {
+      // RFC 9147 8. (Errata-ID 8050)
+      //    After the handshake, each epoch change consumes a message_seq value,
+      //    which is limited to 2^16-1. [...] In this case, the implementation
+      //    MUST check for this limit, if reached, terminate the association.
+      if(to_underlying(m_current_epoch) == std::numeric_limits<uint16_t>::max()) {
+         throw TLS_Exception(AlertType::UnexpectedMessage, "DTLS handshake message sequence number exhausted");
+      }
+
       m_current_epoch = static_cast<Epoch_Number>(to_underlying(m_current_epoch) + 1);
    }
 

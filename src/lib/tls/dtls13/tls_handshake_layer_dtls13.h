@@ -57,7 +57,7 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
 
    private:
       uint16_t m_send_message_seq = 0;
-      uint16_t m_read_message_seq = 0;
+      uint32_t m_read_message_seq = 0;  // 32-bit to detect msg seqno exhaustion
 
       struct ReassembledMessage {
             Epoch_Number epoch;        // The record protection epoch this message was received in.
