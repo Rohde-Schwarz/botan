@@ -10,6 +10,7 @@
 
 #include <botan/tls_messages_13.h>
 
+#include <botan/credentials_manager.h>
 #include <botan/tls_alert.h>
 #include <botan/tls_callbacks.h>
 #include <botan/tls_exceptn.h>
@@ -67,16 +68,25 @@ std::variant<Hello_Retry_Request, Server_Hello_13> Server_Hello_13::create(const
    //    ClientHello does not contain sufficient information to proceed with
    //    the handshake.
    //
-   // In this case, the Client Hello did not contain a key share offer for
-   // the group selected by the application.
-   if(!value_exists(offered_by_client, selected_group)) {
-      // RFC 8446 4.1.4
-      //    If a client receives a second HelloRetryRequest in the same
-      //    connection (i.e., where the ClientHello was itself in response to a
-      //    HelloRetryRequest), it MUST abort the handshake with an
-      //    "unexpected_message" alert.
-      BOTAN_STATE_CHECK(hello_retry_request_allowed);
-      return Hello_Retry_Request(ch, selected_group, policy, cb, flavor);
+   // Hence, we need a HelloRetryRequest if the client did not offer an
+   // acceptable key share.
+   const bool hrr_for_key_exchange = !value_exists(offered_by_client, selected_group);
+
+   // RFC 9147 5.1
+   //    Datagram security protocols are extremely susceptible to a variety of
+   //    DoS attacks [...]. In order to counter [two] of these attacks, DTLS
+   //    borrows the stateless cookie technique used by Photuris and IKE. [...]
+   //    The HelloRetryRequest message contains a stateless cookie [...]. This
+   //    mechanism forces the attacker/client to be able to receive the cookie,
+   //    which makes DoS attacks with spoofed IP addresses difficult.
+   //
+   // Hence, we enforce HelloRetryRequest if we're running DTLS and DoS
+   // protection is required by the policy.
+   const bool hrr_for_cookie = flavor == TLS_Flavor::DTLS &&  //
+                               policy.dtls_server_require_cookie_exchange();
+
+   if(hello_retry_request_allowed && (hrr_for_cookie || hrr_for_key_exchange)) {
+      return Hello_Retry_Request(ch, selected_group, policy, credentials_mgr, cb, flavor);
    } else {
       return Server_Hello_13(ch, selected_group, session_mgr, credentials_mgr, rng, cb, policy, flavor);
    }
@@ -375,8 +385,12 @@ Protocol_Version Server_Hello_13::selected_version() const {
 Hello_Retry_Request::Hello_Retry_Request(std::unique_ptr<Server_Hello_Internal> data, TLS_Flavor flavor) :
       Server_Hello_13(std::move(data), flavor, Server_Hello_13::as_hello_retry_request) {}
 
-Hello_Retry_Request::Hello_Retry_Request(
-   const Client_Hello_13& ch, Named_Group selected_group, const Policy& policy, Callbacks& cb, TLS_Flavor flavor) :
+Hello_Retry_Request::Hello_Retry_Request(const Client_Hello_13& ch,
+                                         Named_Group selected_group,
+                                         const Policy& policy,
+                                         Credentials_Manager& credentials_manager,
+                                         Callbacks& cb,
+                                         TLS_Flavor flavor) :
       Server_Hello_13(std::make_unique<Server_Hello_Internal>(
                          flavor == TLS_Flavor::DTLS ? Protocol_Version::DTLS_V12 /* legacy_version */
                                                     : Protocol_Version::TLS_V12,
@@ -398,8 +412,6 @@ Hello_Retry_Request::Hello_Retry_Request(
    BOTAN_STATE_CHECK(ch.extensions().has<Supported_Groups>());
    BOTAN_STATE_CHECK(ch.extensions().has<Key_Share>());
 
-   BOTAN_STATE_CHECK(!value_exists(ch.extensions().get<Key_Share>()->offered_groups(), selected_group));
-
    // RFC 8446 4.1.4
    //    The server's extensions MUST contain "supported_versions".
    //
@@ -415,14 +427,42 @@ Hello_Retry_Request::Hello_Retry_Request(
    const auto version = flavor == TLS_Flavor::DTLS ? Protocol_Version::DTLS_V13 : Protocol_Version::TLS_V13;
    m_data->extensions().add(new Supported_Versions(version));
 
-   m_data->extensions().add(new Key_Share(selected_group));
+   // RFC 9846 4.2.4
+   //    The server's [HelloRetryRequest] extensions SHOULD contain the minimal
+   //    set of extensions necessary for the client to generate a correct
+   //    ClientHello pair.
+   //
+   // I.e., if the client already offered a key share for our preferred group,
+   // we don't need to request a new key share for this particular group.
+   if(!value_exists(ch.extensions().get<Key_Share>()->offered_groups(), selected_group)) {
+      m_data->extensions().add(new Key_Share(selected_group));
+   }
+
+   // RFC 9846 4.2.4
+   //    A HelloRetryRequest MUST NOT contain any extensions that were not first
+   //    offered by the client in its ClientHello, with the exception of
+   //    optionally the "cookie" [...] extension.
+   //
+   // RFC 9147 5.1
+   //    In order to counter [some DoS attacks], DTLS borrows the stateless
+   //    cookie technique used by Photuris and IKE. [...] DTLS 1.3 reuses the
+   //    HelloRetryRequest message and conveys the cookie to the client via an
+   //    extension.
+   if(flavor == TLS_Flavor::DTLS && policy.dtls_server_require_cookie_exchange()) {
+      m_data->extensions().add(new Cookie(calculate_cookie(
+         ch.cookie_input_data(), cb.tls_peer_network_identity(), credentials_manager.dtls_cookie_secret())));
+   }
+
    // NOLINTEND(*-owning-memory)
 
    cb.tls_modify_extensions(m_data->extensions(), Connection_Side::Server, type());
 
-   if(!m_data->extensions().has<Key_Share>()) {
-      throw TLS_Exception(Alert::InternalError,
-                          "Application tls_modify_extensions callback removed Key_Share from the HelloRetryRequest");
+   // Note: This error condition could also indicate some other internal
+   //       issue, e.g., a faulty use of the Hello_Retry_Request constructor.
+   if(!m_data->extensions().has<Key_Share>() && !m_data->extensions().has<Cookie>()) {
+      throw TLS_Exception(
+         Alert::InternalError,
+         "Application tls_modify_extensions callback removed Key_Share or Cookie from the HelloRetryRequest");
    }
 }
 
