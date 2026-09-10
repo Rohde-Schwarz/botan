@@ -144,8 +144,12 @@ class BOTAN_UNSTABLE_API Hello_Retry_Request final : public Server_Hello_13 {
    protected:
       friend class Server_Hello_13;  // to allow construction by Server_Hello_13::parse() and ::create()
       Hello_Retry_Request(std::unique_ptr<Server_Hello_Internal> data, TLS_Flavor flavor);
-      Hello_Retry_Request(
-         const Client_Hello_13& ch, Named_Group selected_group, const Policy& policy, Callbacks& cb, TLS_Flavor flavor);
+      Hello_Retry_Request(const Client_Hello_13& ch,
+                          Named_Group selected_group,
+                          const Policy& policy,
+                          Credentials_Manager& credentials_manager,
+                          Callbacks& cb,
+                          TLS_Flavor flavor);
 
    public:
       Handshake_Type type() const override { return Handshake_Type::HelloRetryRequest; }

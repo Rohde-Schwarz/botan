@@ -14,6 +14,7 @@
 #include <botan/tls_extensions_13.h>
 #include <botan/tls_policy.h>
 #include <botan/x509cert.h>
+#include <botan/internal/ct_utils.h>
 #include <botan/internal/loadstor.h>
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_cipher_state.h>
@@ -581,13 +582,51 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello) {
    BOTAN_ASSERT_NOMSG(exts.has<Key_Share>());
 
    if(!is_initial_client_hello) {
+      // RFC 9846 4.2.2
+      //    The client will also send a ClientHello when the server has
+      //    responded to its ClientHello with a HelloRetryRequest. In that case,
+      //    the client MUST send the same ClientHello without modification,
+      //    except as follows: ...
       const auto& hrr_exts = m_handshake->state.hello_retry_request().extensions();
       const auto offered_groups = exts.get<Key_Share>()->offered_groups();
       const auto* hrr_key_share = hrr_exts.get<Key_Share>();
-      BOTAN_ASSERT_NONNULL(hrr_key_share);
-      const auto selected_group = hrr_key_share->selected_group();
-      if(offered_groups.size() != 1 || offered_groups.at(0) != selected_group) {
-         throw TLS_Exception(Alert::IllegalParameter, "Client did not comply with the requested key exchange group");
+
+      // RFC 9846 4.2.2
+      //    ... If a "key_share" extension was supplied in the HelloRetryRequest,
+      //    replacing the list of shares with a list containing a single
+      //    KeyShareEntry from the indicated group.
+      if(hrr_key_share != nullptr) {
+         const auto selected_group = hrr_key_share->selected_group();
+         if(offered_groups.size() != 1 || offered_groups.at(0) != selected_group) {
+            throw TLS_Exception(Alert::IllegalParameter, "Client did not comply with the requested key exchange group");
+         }
+      }
+
+      const auto* ch_cookie = exts.get<Cookie>();
+      const auto* hrr_cookie = hrr_exts.get<Cookie>();
+
+      // RFC 9846 4.2.2
+      //    ... Including a "cookie" extension if one was provided in the
+      //    HelloRetryRequest.
+      if(hrr_cookie == nullptr && ch_cookie != nullptr) {
+         throw TLS_Exception(Alert::IllegalParameter,
+                             "Received a Cookie in a second ClientHello, but we did not send one in HelloRetryRequest");
+      }
+
+      // RFC 9846 4.3.2
+      //    When sending the new ClientHello, the client MUST copy the contents
+      //    of the extension received in the HelloRetryRequest into a "cookie"
+      //    extension in the new ClientHello.
+      if(hrr_cookie != nullptr) {
+         if(ch_cookie == nullptr) {
+            throw TLS_Exception(Alert::IllegalParameter,
+                                "Received a second ClientHello without a Cookie, but we sent one in HelloRetryRequest");
+         }
+
+         if(!CT::is_equal<uint8_t>(hrr_cookie->get_cookie(), ch_cookie->get_cookie()).as_bool()) {
+            throw TLS_Exception(Alert::IllegalParameter,
+                                "The second ClientHello did not contain the matching cookie from HelloRetryRequest");
+         }
       }
    }
 
