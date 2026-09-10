@@ -77,12 +77,14 @@ UnifiedHeader_DTLS UnifiedHeader_DTLS::parse(BufferSlicer& bs, std::optional<siz
    // RFC 9147 Section 4
    //    If a Connection ID is negotiated, then it MUST be contained in all
    //    datagrams.
-   //
-   // RFC 9147 Section 9.1
-   //    If no CID is negotiated, then the receiver MUST reject any records it
-   //    receives that contain a CID.
-   BOTAN_STATE_CHECK(cid_bit == cid_length.has_value());
    if(cid_bit) {
+      // RFC 9147 Section 9.1
+      //    If no CID is negotiated, then the receiver MUST reject any records
+      //    it receives that contain a CID.
+      if(!cid_length.has_value()) {
+         throw TLS_Exception(AlertType::DecodeError, "Received protected DTLS record with unexpected CID");
+      }
+
       header.connection_id = bs.copy<ConnectionID>(cid_length.value());
    }
 
