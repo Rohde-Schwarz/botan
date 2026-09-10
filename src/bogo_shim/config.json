@@ -306,7 +306,6 @@
         "KyberKeyShareIncludedThird*": "We no longer support Kyber r3 key exchange",
         "CustomKeyShares-All-TLS13": "We no longer support Kyber r3 key exchange",
         "DTLS-Replay-NonMonotonic*": "Needs investigation, started failing after https://github.com/google/boringssl/commit/f94f3ed3965ea033001fb9ae006084eee408b861",
-        "DTLS13RecordHeader-CIDBit": "Currently we don't support CID in DTLS 1.3",
         "DTLS13CompatibilityMode-EchoSessionID": "This test is causing a downgrade to TLS 1.2 and only then it mirrors the sessionID",
         "SRTP-*-DTLS-TLS13": "SRTP is work-in-progress in DTLS 1.3"
     },
