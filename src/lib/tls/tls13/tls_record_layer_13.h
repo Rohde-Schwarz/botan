@@ -25,6 +25,7 @@ namespace Botan::TLS {
 
 using BytesNeeded = size_t;
 
+class Callbacks;
 class Cipher_State;
 class Policy;
 
@@ -44,7 +45,8 @@ class BOTAN_TEST_API Record_Layer {
    public:
       static std::unique_ptr<Record_Layer> create(Connection_Side side,
                                                   TLS_Flavor flavor,
-                                                  std::shared_ptr<const Policy> policy);
+                                                  std::shared_ptr<const Policy> policy,
+                                                  std::shared_ptr<Callbacks> callbacks);
 
       virtual ~Record_Layer() = default;
       Record_Layer(const Record_Layer&) = delete;

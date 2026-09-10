@@ -335,14 +335,16 @@ void TLS_Record_Layer::clear_read_buffer() {
 
 std::unique_ptr<Record_Layer> Record_Layer::create(Connection_Side side,
                                                    TLS_Flavor flavor,
-                                                   std::shared_ptr<const Policy> policy) {
+                                                   std::shared_ptr<const Policy> policy,
+                                                   std::shared_ptr<Callbacks> callbacks) {
    if(flavor == TLS_Flavor::DTLS) {
 #if defined(BOTAN_HAS_DTLS_13)
-      return std::make_unique<DTLS_Record_Layer>(side, std::move(policy));
+      return std::make_unique<DTLS_Record_Layer>(side, std::move(policy), std::move(callbacks));
 #else
       throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
 #endif
    } else {
+      BOTAN_UNUSED(callbacks);
       return std::make_unique<TLS_Record_Layer>(side, std::move(policy));
    }
 }

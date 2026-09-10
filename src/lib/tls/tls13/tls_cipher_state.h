@@ -87,6 +87,10 @@ class BOTAN_TEST_API Cipher_State {
 
             /// only relevant in DTLS to protect the record's serial number
             std::optional<secure_vector<uint8_t>> sequence_number_key = {};  // NOLINT(*-member-init)
+
+            /// only relevant in DTLS to handle pruning of outdated epochs
+            bool used_successfully = false;                     // NOLINT(*-member-init)
+            std::optional<uint64_t> expiration_timestamp = {};  // NOLINT(*-member-init)
       };
 
    public:
@@ -328,7 +332,9 @@ class BOTAN_TEST_API Cipher_State {
                                         std::span<const uint8_t> header,
                                         secure_vector<uint8_t>& fragment);
 
-      std::optional<Record_Content> deprotect_record(ProtectedRecord_DTLS record, size_t incoming_record_size_limit);
+      std::optional<Record_Content> deprotect_record(ProtectedRecord_DTLS record,
+                                                     size_t incoming_record_size_limit,
+                                                     uint64_t current_time_ms);
 
       /**
        * Protect a DTLS record using the currently available traffic secret keys
@@ -344,6 +350,9 @@ class BOTAN_TEST_API Cipher_State {
          std::optional<Epoch_Number> epoch = std::nullopt);
 
       std::optional<std::reference_wrapper<Epoch>> latest_epoch_matching_epoch_hint(uint8_t epoch_hint) const;
+
+      void retire_outdated_read_epochs(uint64_t current_time_ms);
+      void prune_outdated_read_epochs(uint64_t current_time_ms);
 
    private:
       /**

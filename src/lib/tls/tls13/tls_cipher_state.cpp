@@ -988,9 +988,12 @@ SequenceNumberHint xor_record_sequence_number(const Cipher_State::Epoch& epoch,
 #endif
 
 std::optional<Record_Content> Cipher_State::deprotect_record(ProtectedRecord_DTLS record,
-                                                             size_t incoming_record_size_limit) {
+                                                             size_t incoming_record_size_limit,
+                                                             uint64_t current_time_ms) {
    BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
    BOTAN_STATE_CHECK(current_read_epoch_number() > Epoch_Number::Unprotected);
+
+   prune_outdated_read_epochs(current_time_ms);
 
    // RFC 9147 4.2.2
    //    When receiving protected DTLS records, the recipient does not have a
@@ -1049,6 +1052,17 @@ std::optional<Record_Content> Cipher_State::deprotect_record(ProtectedRecord_DTL
    // (RFC 9147 Section 4.2.2) if the current record's sequence number is higher
    // than the previous highest.
    epoch->get().sequence_number = std::max(epoch->get().sequence_number, result.sequence_number.value());
+
+   // RFC 9147 8.
+   //    Implementations SHOULD discard records from earlier epochs but MAY
+   //    choose to retain keying material from previous epochs [...].
+   //
+   // Once an epoch was successfully used for deprotection for the first time,
+   // all previous epochs can be retired. After some time, these epochs will be
+   // discarded (see `prune_outdated_read_epochs()`).
+   if(!std::exchange(epoch->get().used_successfully, true)) {
+      retire_outdated_read_epochs(current_time_ms);
+   }
 
    // RFC 8449 Section 4
    //    a DTLS endpoint that receives a record larger than its advertised
@@ -1250,6 +1264,44 @@ std::optional<std::reference_wrapper<Cipher_State::Epoch>> Cipher_State::latest_
 
    // No matching epoch found
    return std::nullopt;
+}
+
+void Cipher_State::retire_outdated_read_epochs(uint64_t current_time_ms) {
+   BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
+
+   // RFC 9147 Section 4.2.1
+   //    Implementations [...] MAY choose to retain keying material from
+   //    previous epochs for up to the default MSL specified for TCP [RFC0793]
+   //    to allow for packet reordering.
+   //
+   // RFC 9293 4.
+   //    MSL: Maximum Segment Lifetime, the time a TCP segment can exist in the
+   //         internetwork system. Arbitrarily defined to be 2 minutes.
+   constexpr uint64_t expiration_time = 2 * 60 * 1000;
+
+   if(m_read_epochs.empty() || !m_read_epochs.back()->used_successfully) {
+      return;
+   }
+
+   for(auto it = m_read_epochs.begin(); it != std::prev(m_read_epochs.end()); ++it) {
+      auto& epoch = **it;
+      if(!epoch.expiration_timestamp.has_value()) {
+         epoch.expiration_timestamp = current_time_ms + expiration_time;
+      }
+   }
+}
+
+void Cipher_State::prune_outdated_read_epochs(uint64_t current_time_ms) {
+   BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
+
+   for(auto it = m_read_epochs.begin(); it != std::prev(m_read_epochs.end());) {
+      auto& epoch = **it;
+      if(epoch.expiration_timestamp.has_value() && current_time_ms >= *epoch.expiration_timestamp) {
+         it = m_read_epochs.erase(it);
+      } else {
+         ++it;
+      }
+   }
 }
 
 void Cipher_State::clear_read_keys() {
