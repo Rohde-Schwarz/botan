@@ -163,9 +163,14 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
             // flight, the timer will eventually emit ACKs to the peer.
             maybe_arm_dtls_acknowledgement_timer();
 
-            if(!is_handshake_complete()) {
-               BOTAN_ASSERT_NONNULL(m_transcript_hash);
-               while(auto handshake_msg = m_handshake_layer->next_message(policy(), *m_transcript_hash)) {
+            while(true) {
+               if(!is_handshake_complete()) {
+                  BOTAN_ASSERT_NONNULL(m_transcript_hash);
+                  auto handshake_msg = m_handshake_layer->next_message(policy(), *m_transcript_hash);
+                  if(!handshake_msg.has_value()) {
+                     break;
+                  }
+
                   // RFC 8446 5.1
                   //    Handshake messages MUST NOT span key changes.  Implementations
                   //    MUST verify that all messages immediately preceding a key change
@@ -223,10 +228,13 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
                      m_record_layer->disable_receiving_compat_mode();
                      m_first_message_received = true;
                   }
-               }
-            } else {
-               while(auto handshake_msg = m_handshake_layer->next_post_handshake_message(policy())) {
-                  process_post_handshake_msg(std::move(handshake_msg.value()));
+               } else /* is_handshake_complete() */ {
+                  auto post_handshake_msg = m_handshake_layer->next_post_handshake_message(policy());
+                  if(!post_handshake_msg.has_value()) {
+                     break;
+                  }
+
+                  process_post_handshake_msg(std::move(post_handshake_msg.value()));
                }
             }
          } else if(record.type == Record_Type::ChangeCipherSpec) {
