@@ -443,13 +443,17 @@ bool DTLS_Record_Layer::handle_acknowledgements(const ACKs& acks) {
             return value_exists(record_info.record_numbers, acked_record_number);
          });
    });
-   return m_unacked_outgoing_handshake_records.empty();
+   return !has_unacknowledged_records();
 }
 
 bool DTLS_Record_Layer::has_unacknowledged_record(const RecordNumber& record_number) const {
    return std::any_of(m_unacked_outgoing_handshake_records.begin(),
                       m_unacked_outgoing_handshake_records.end(),
                       [&](const auto& record_info) { return value_exists(record_info.record_numbers, record_number); });
+}
+
+bool DTLS_Record_Layer::has_unacknowledged_records() const {
+   return !m_unacked_outgoing_handshake_records.empty();
 }
 
 void DTLS_Record_Layer::clear_resend_buffer() {

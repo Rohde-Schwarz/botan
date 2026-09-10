@@ -106,6 +106,7 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       bool handle_acknowledgements(const ACKs& ack_payload);
 
       bool has_unacknowledged_record(const RecordNumber& record_number) const;
+      bool has_unacknowledged_records() const;
 
       void clear_resend_buffer();
       void clear_outstanding_acknowledgements();

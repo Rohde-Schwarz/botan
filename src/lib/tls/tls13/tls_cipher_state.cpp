@@ -1304,6 +1304,17 @@ void Cipher_State::prune_outdated_read_epochs(uint64_t current_time_ms) {
    }
 }
 
+void Cipher_State::prune_outdated_write_epochs() {
+   BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
+
+   if(m_write_epochs.empty()) {
+      return;
+   }
+
+   // Clear all but the last entry in the m_write_epochs list
+   m_write_epochs.erase(m_write_epochs.begin(), std::prev(m_write_epochs.end()));
+}
+
 void Cipher_State::clear_read_keys() {
    m_read_epochs.clear();
 }
