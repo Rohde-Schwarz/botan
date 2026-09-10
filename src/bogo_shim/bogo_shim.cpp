@@ -1678,7 +1678,9 @@ class Shim_Credentials final : public Botan::Credentials_Manager {
          std::vector<Botan::TLS::ExternalPSK> psks;
 #if defined(BOTAN_HAS_TLS_13)
          // TLS 1.3 PSK credentials from -new-psk-credential blocks
-         const Botan::TLS::Protocol_Version target_version(Botan::TLS::Protocol_Version::TLS_V13);
+         const Botan::TLS::Protocol_Version target_version(m_args.flag_set("dtls")                      //
+                                                              ? Botan::TLS::Protocol_Version::DTLS_V13  //
+                                                              : Botan::TLS::Protocol_Version::TLS_V13);
          bool any_psk_block = false;
 
          for(const auto& cred : m_credentials) {
