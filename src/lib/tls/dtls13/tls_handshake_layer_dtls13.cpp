@@ -215,10 +215,18 @@ std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handsha
    m_current_read_message.erase(static_cast<uint16_t>(m_read_message_seq++));
 
    if(msg_type == Handshake_Type::KeyUpdate) {
+      // RFC 9147 8.
+      //    With a 128-bit key as in AES-128, rekeying 2^64 times has a high
+      //    probability of key reuse within a given connection. [...] sending
+      //    implementations MUST NOT allow the epoch to exceed 2^48-1.
+      //
       // RFC 9147 8. (Errata-ID 8050)
       //    After the handshake, each epoch change consumes a message_seq value,
       //    which is limited to 2^16-1. [...] In this case, the implementation
       //    MUST check for this limit, if reached, terminate the association.
+      //
+      // Thus, we won't ever be able to wrap the key anywhere near the 2^48
+      // limit due to the technical limitations of the message sequence number.
       if(to_underlying(m_current_epoch) == std::numeric_limits<uint16_t>::max()) {
          throw TLS_Exception(AlertType::UnexpectedMessage, "DTLS handshake message sequence number exhausted");
       }

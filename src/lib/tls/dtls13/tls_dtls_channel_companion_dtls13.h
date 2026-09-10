@@ -21,11 +21,6 @@
 namespace Botan::TLS {
 
 class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
-   private:
-      struct AcknowledgementTimer {
-            DTLS_Channel_Companion_DTLS& companion;
-      };
-
    public:
       DTLS_Channel_Companion_DTLS(std::shared_ptr<const Policy> policy,
                                   std::shared_ptr<Callbacks> callbacks,
@@ -41,10 +36,7 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
    public:
       void notify_protocol_version_committed() override { m_dtls_version_committed = true; }
 
-      void notify_sent_handshake_flight() override {
-         m_retransmission_timer.flight_sent();
-         m_ack_timer.reset();
-      }
+      void notify_sent_handshake_flight() override { m_retransmission_timer.flight_sent(); }
 
       bool protocol_version_committed() const override { return m_dtls_version_committed; }
 
@@ -143,8 +135,6 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
       std::shared_ptr<const Policy> m_policy;
       std::shared_ptr<Callbacks> m_callbacks;
       std::shared_ptr<DTLS_Record_Layer> m_record_layer;
-
-      std::shared_ptr<AcknowledgementTimer> m_ack_timer;
 
       DTLS_Retransmission_Timer m_retransmission_timer;
 
