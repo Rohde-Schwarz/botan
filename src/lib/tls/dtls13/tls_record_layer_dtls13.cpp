@@ -9,11 +9,11 @@
 #include <botan/internal/tls_record_layer_dtls13.h>
 
 #include <algorithm>
-#include <iostream>  // TODO: remove
 #include <utility>
 
 #include <botan/assert.h>
 #include <botan/tls_alert.h>
+#include <botan/tls_callbacks.h>
 #include <botan/tls_exceptn.h>
 #include <botan/tls_policy.h>
 #include <botan/tls_version.h>
@@ -29,8 +29,10 @@
 
 namespace Botan::TLS {
 
-DTLS_Record_Layer::DTLS_Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy) :
-      Record_Layer(side, std::move(policy), false, true) {}
+DTLS_Record_Layer::DTLS_Record_Layer(Connection_Side side,
+                                     std::shared_ptr<const Policy> policy,
+                                     std::shared_ptr<Callbacks> callbacks) :
+      Record_Layer(side, std::move(policy), false, true), m_callbacks(std::move(callbacks)) {}
 
 bool DTLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) {
    try {
@@ -231,7 +233,8 @@ Record_Layer::ReadResult<Record_Content> DTLS_Record_Layer::next_record(Cipher_S
             },
             [&](ProtectedRecord_DTLS record) -> std::optional<Record_Content> {
                if(cipher_state != nullptr) {
-                  return cipher_state->deprotect_record(std::move(record), incoming_record_size_limit());
+                  return cipher_state->deprotect_record(
+                     std::move(record), incoming_record_size_limit(), m_callbacks->tls_current_monotonic_clock_ms());
                } else {
                   // RFC 9147 Section 4.5.2
                   //     In general, invalid records SHOULD be silently

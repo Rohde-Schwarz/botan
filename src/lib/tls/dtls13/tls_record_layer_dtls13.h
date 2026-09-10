@@ -27,6 +27,9 @@ class BufferSlicer;
 
 namespace Botan::TLS {
 
+class Callbacks;
+class Policy;
+
 /**
  * Implementation of the DTLS 1.3 record protocol layer
  *
@@ -43,7 +46,9 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       };
 
    public:
-      DTLS_Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy);
+      DTLS_Record_Layer(Connection_Side side,
+                        std::shared_ptr<const Policy> policy,
+                        std::shared_ptr<Callbacks> callbacks);
 
       /**
        * Ingests datagrams received from the peer. This assumes being called for
@@ -128,6 +133,8 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       Replay_Window_13& replay_window_for_epoch(Epoch_Number epoch);
 
    private:
+      std::shared_ptr<Callbacks> m_callbacks;
+
       std::deque<IncomingRecord> m_incoming_records;
       mutable std::vector<HandshakeRecordInfo>
          m_unacked_outgoing_handshake_records;  // TODO: prepare_records shouldn't be const
