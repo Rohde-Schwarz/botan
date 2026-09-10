@@ -240,6 +240,7 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"received an illegal handshake message", ":UNEXPECTED_MESSAGE:"},
       {"Received a legacy Client Hello", ":UNSUPPORTED_PROTOCOL:"},
       {"Received an unsupported Client Hello", ":UNSUPPORTED_PROTOCOL:"},
+      {"Received an unexpected Hello Verify Request", ":UNSUPPORTED_PROTOCOL:"},
       {"Received an unexpected legacy Server Hello", ":UNSUPPORTED_PROTOCOL:"},
       {"Received an unsupported Server Hello", ":UNSUPPORTED_PROTOCOL:"},
       {"Received application data after connection closure", ":APPLICATION_DATA_ON_SHUTDOWN:"},

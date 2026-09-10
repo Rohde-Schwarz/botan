@@ -77,7 +77,7 @@ std::shared_ptr<Client_Impl_13> Client_Impl_13::create(const std::shared_ptr<Cal
    self->maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingFirstClientHello);
 
    // on a pure TLS connection.
-   if(self->is_datagram() && self->expects_downgrade()) {
+   if(self->is_datagram()) {
       self->m_handshake->transitions.set_expected_next(
          {Handshake_Type::HelloVerifyRequest, Handshake_Type::ServerHello, Handshake_Type::HelloRetryRequest});
    } else {
@@ -252,17 +252,15 @@ void Client_Impl_13::handle(const Hello_Verify_Request& /*hello_verify_request*/
    // handler because HelloVerifyRequest is not among the TLS expected messages.
    BOTAN_STATE_CHECK(is_datagram());
 
+   if(!expects_downgrade()) {
+      throw TLS_Exception(Alert::ProtocolVersion, "Received an unexpected Hello Verify Request");
+   }
+
    if(m_handshake->state.has_hello_retry_request()) {
       throw TLS_Exception(Alert::UnexpectedMessage, "Hello Verify Request received after Hello Retry");
    }
 
-   if(!expects_downgrade()) {
-      throw TLS_Exception(Alert::UnexpectedMessage, "Received an unexpected Hello Verify Request");
-   }
-
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
-   BOTAN_ASSERT_NOMSG(expects_downgrade());
-
    preserve_client_hello(m_handshake->state.take_client_hello());
    preserve_sequence_numbers(m_record_layer->epoch0_sequence_numbers());
    request_downgrade();
