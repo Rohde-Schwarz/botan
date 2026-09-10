@@ -118,6 +118,12 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
             m_pending_key_update_record.reset();
          }
 
+         // If there's nothing left to retransmit, we can safely discard any
+         // outdated write epochs.
+         if(!m_record_layer->has_unacknowledged_records()) {
+            cipher_state->prune_outdated_write_epochs();
+         }
+
          // RFC 9147 7.2
          //    Upon receipt of an ACK that leaves it with only some messages from
          //    a flight having been acknowledged, an implementation SHOULD

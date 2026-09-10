@@ -353,6 +353,7 @@ class BOTAN_TEST_API Cipher_State {
 
       void retire_outdated_read_epochs(uint64_t current_time_ms);
       void prune_outdated_read_epochs(uint64_t current_time_ms);
+      void prune_outdated_write_epochs();
 
    private:
       /**
