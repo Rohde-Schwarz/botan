@@ -273,12 +273,21 @@ void Client_Impl_13::handle(const Hello_Verify_Request& /*hello_verify_request*/
 
 namespace {
 // validate Server_Hello_13 and Hello_Retry_Request
-void validate_server_hello_ish(const Client_Hello_13& ch, const Server_Hello_13& sh) {
-   // RFC 8446 4.1.3
-   //    A client which receives a legacy_session_id_echo field that does not match what
-   //    it sent in the ClientHello MUST abort the handshake with an "illegal_parameter" alert.
-   if(ch.session_id() != sh.session_id()) {
-      throw TLS_Exception(Alert::IllegalParameter, "echoed session id did not match");
+void validate_server_hello_ish(const Client_Hello_13& ch, const Server_Hello_13& sh, TLS_Flavor flavor) {
+   if(flavor == TLS_Flavor::TLS) {
+      // RFC 8446 4.1.3
+      //    A client which receives a legacy_session_id_echo field that does not match what
+      //    it sent in the ClientHello MUST abort the handshake with an "illegal_parameter" alert.
+      if(ch.session_id() != sh.session_id()) {
+         throw TLS_Exception(Alert::IllegalParameter, "echoed session id did not match");
+      }
+   } else {
+      // RFC 9147 5
+      //    DTLS implementations do not use the TLS 1.3 "compatibility mode"
+      //    [...]. DTLS servers MUST NOT echo the "legacy_session_id" value.
+      if(!sh.session_id().empty()) {
+         throw TLS_Exception(Alert::DecodeError, "Unexpected session ID in DTLS ServerHello");
+      }
    }
 
    // RFC 8446 4.1.3
@@ -309,7 +318,7 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
 
    const auto& ch = m_handshake->state.client_hello();
 
-   validate_server_hello_ish(ch, sh);
+   validate_server_hello_ish(ch, sh, m_flavor);
 
    // RFC 8446 4.1.3: TLS 1.3 servers downgrading to TLS 1.2 or below set
    // the last 8 bytes of ServerHello.random to a magic value so the client
@@ -444,7 +453,7 @@ void Client_Impl_13::handle(const Hello_Retry_Request& hrr) {
 
    auto& ch = m_handshake->state.client_hello();
 
-   validate_server_hello_ish(ch, hrr);
+   validate_server_hello_ish(ch, hrr, m_flavor);
 
    // RFC 8446 4.1.4.
    //    A HelloRetryRequest MUST NOT contain any
