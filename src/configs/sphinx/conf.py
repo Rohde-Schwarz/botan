@@ -1,10 +1,10 @@
-# -* coding: utf-8 -*-
 # Sphinx configuration file
 
-import sys
+import ctypes
+import pathlib
 import re
+import sys
 
-#import sphinx
 
 def check_for_tag(tag):
     # Nasty hack :(
@@ -21,7 +21,7 @@ def parse_version_file(version_path):
     key_and_val = re.compile(r"([a-z_]+) = ([a-zA-Z0-9:\-\']+)")
 
     results = {}
-    for line in version_file.readlines():
+    for line in version_file:
         if not line or line[0] == '#':
             continue
         match = key_and_val.match(line)
@@ -38,6 +38,10 @@ def parse_version_file(version_path):
 
             results[key] = val
     return results
+
+
+# add src/python to PATH, so that `import botan3` works
+sys.path.insert(0, str(pathlib.Path("../../python").resolve()))
 
 version_info = parse_version_file('../../build-data/version.txt')
 
@@ -58,8 +62,8 @@ source_encoding = 'utf-8-sig'
 
 master_doc = 'contents'
 
-project = u'botan'
-copyright = u'2000-2023, The Botan Authors'
+project = 'botan'
+copyright = '2000-2023, The Botan Authors'
 
 version = '%d.%d' % (version_major, version_minor)
 release = '%d.%d.%d%s' % (version_major, version_minor, version_patch, version_suffix)
@@ -101,7 +105,7 @@ highlight_language = 'cpp'
 
 try:
     # On Arch this is python-sphinx-furo
-    import furo # noqa: F401
+    import furo  # noqa: F401
     html_theme = "furo"
 
     # Add a small edit button to each document to allow visitors to easily
@@ -195,9 +199,9 @@ htmlhelp_basename = 'botandoc'
 # Grouping the document tree into LaTeX files. List of tuples
 # (source start file, target name, title, author, documentclass [howto/manual]).
 
-authors = u'The Botan Authors'
+authors = 'The Botan Authors'
 latex_documents = [
-    ('contents', 'botan.tex', u'Botan Reference Guide', authors, 'manual'),
+    ('contents', 'botan.tex', 'Botan Reference Guide', authors, 'manual'),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -227,10 +231,44 @@ latex_elements = {
     'printindex': '\\footnotesize\\raggedright\\printindex'
 }
 
-# Give all sections a label, so we can reference them
 extensions = [
+    # Give all sections a label, so we can reference them
     "sphinx.ext.autosectionlabel",
+    # infer documentation from the source
+    "sphinx.ext.autodoc"
 ]
+
+# Options for sphinx.ext.autodoc
+autoclass_content = "both"
+
+# Mock CDLL interface so that sphinx can import botan3.py without an actual lib present
+class MockCDLL:
+    def __getattr__(self, name):
+        def _func(*_):
+            # this actually needs to succeed
+            if name == "botan_ffi_supports_api":
+                return 0
+            # all others we don't want to silently run
+            raise RuntimeError(f"Tried to call '{name}' while building docs")
+
+        return _func
+
+
+ctypes.CDLL = lambda *_: MockCDLL()
+
+autodoc_default_options = {
+    # document methods in the order they appear in the source
+    "member-order": "bysource",
+    # document members that don't have a docstring
+    "undoc-members": True,
+    # don't document these
+    "exclude-members": "handle_,cmp"
+}
+
+# resolve these type hints as something else
+autodoc_type_aliases = {
+    "MPILike": "MPILike",  # prevents sphinx from expanding the Union[]
+}
 
 # Make sure the target is unique
 autosectionlabel_prefix_document = True

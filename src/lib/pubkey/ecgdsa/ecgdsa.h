@@ -39,7 +39,7 @@ class BOTAN_PUBLIC_API(2, 0) ECGDSA_PublicKey : public virtual EC_PublicKey {
       * @param key_bits DER encoded public key bits
       */
       ECGDSA_PublicKey(const AlgorithmIdentifier& alg_id, std::span<const uint8_t> key_bits) :
-            EC_PublicKey(alg_id, key_bits) {}
+            EC_PublicKey(assert_algorithm_identifier(alg_id, "ECGDSA"), key_bits) {}
 
       /**
       * Get this keys algorithm name.
@@ -53,8 +53,7 @@ class BOTAN_PUBLIC_API(2, 0) ECGDSA_PublicKey : public virtual EC_PublicKey {
 
       bool supports_operation(PublicKeyOperation op) const override { return (op == PublicKeyOperation::Signature); }
 
-      std::unique_ptr<PK_Ops::Verification> create_verification_op(std::string_view params,
-                                                                   std::string_view provider) const override;
+      std::unique_ptr<PK_Ops::Verification> _create_verification_op(const PK_Signature_Options& options) const override;
 
       std::unique_ptr<PK_Ops::Verification> create_x509_verification_op(const AlgorithmIdentifier& signature_algorithm,
                                                                         std::string_view provider) const override;
@@ -79,7 +78,7 @@ class BOTAN_PUBLIC_API(2, 0) ECGDSA_PrivateKey final : public ECGDSA_PublicKey,
       * @param key_bits ECPrivateKey bits
       */
       ECGDSA_PrivateKey(const AlgorithmIdentifier& alg_id, std::span<const uint8_t> key_bits) :
-            EC_PrivateKey(alg_id, key_bits, true) {}
+            EC_PrivateKey(assert_algorithm_identifier(alg_id, "ECGDSA"), key_bits, true) {}
 
       /**
       * Create a private key from a given secret @p x
@@ -109,9 +108,8 @@ class BOTAN_PUBLIC_API(2, 0) ECGDSA_PrivateKey final : public ECGDSA_PublicKey,
 
       bool check_key(RandomNumberGenerator& rng, bool strong) const override;
 
-      std::unique_ptr<PK_Ops::Signature> create_signature_op(RandomNumberGenerator& rng,
-                                                             std::string_view params,
-                                                             std::string_view provider) const override;
+      std::unique_ptr<PK_Ops::Signature> _create_signature_op(RandomNumberGenerator& rng,
+                                                              const PK_Signature_Options& options) const override;
 };
 
 BOTAN_DIAGNOSTIC_POP

@@ -13,6 +13,7 @@
 #include <botan/pk_keys.h>
 #include <botan/x509_ext.h>
 #include <botan/internal/concat_util.h>
+#include <botan/internal/x509_utils.h>
 #include <algorithm>
 #include <chrono>
 #include <iterator>
@@ -37,6 +38,119 @@ constexpr size_t PathBuildingDfsBudget = 300;
 constexpr size_t PathBuildingMaximumChainLength = 16;
 constexpr size_t PathBuildingVerificationBudget = 200;
 constexpr size_t PathBuildingMaxPathsExamined = 50;
+
+struct CrlApplicability {
+      bool usable;         // RFC 5280 6.3.3(b) gate: can be searched for a revocation entry
+      bool full_coverage;  // can also serve as VALID_CRL_CHECKED non-revocation evidence
+};
+
+/*
+* Single-pass evaluation of how this CRL applies to this cert. Combines:
+*   - 6.3.3(b)(1)/(b)(2)(i) name match (via distribution_point_match)
+*   - 6.3.3(b)(2)(ii)-(iv) IDP scope booleans
+*   - the (currently unsupported) indirect-CRL gate from (f)-(g)
+*   - 6.3.3(d)(3) DP-reasons / IDP-onlySomeReasons full-coverage check
+* Computing the two answers together keeps their matching rules in sync and
+* avoids re-walking the cert's CDP. `full_coverage` is reported only when
+* `usable` is true; reason-mask accumulation across multiple CRLs per
+* 6.3.3(d)-(l) is not implemented, so a reason-limited CRL never alone
+* certifies full coverage.
+*/
+CrlApplicability crl_applicability_for(const X509_CRL& crl, const X509_Certificate& subject) {
+   /*
+   * RFC 5280 6.3.3
+   *
+   * (b)  Verify the issuer and scope of the complete CRL as follows:
+   *
+   *    (1)  If the DP includes cRLIssuer, then verify that the issuer
+   *         field in the complete CRL matches cRLIssuer in the DP and
+   *         that the complete CRL contains an issuing distribution
+   *         point extension with the indirectCRL boolean asserted.
+   *         Otherwise, verify that the CRL issuer matches the
+   *         certificate issuer.
+   *
+   *    (2)  If the complete CRL includes an issuing distribution point
+   *         (IDP) CRL extension, check the following:
+   *
+   *       (i) If the distribution point name is present in the IDP CRL
+   *           extension and the distribution field is present in the
+   *           DP, then verify that one of the names in the IDP matches
+   *           one of the names in the DP.  If the distribution point
+   *           name is present in the IDP CRL extension and the
+   *           distribution field is omitted from the DP, then verify
+   *           that one of the names in the IDP matches one of the names
+   *           in the cRLIssuer field of the DP.
+   *
+   *      (ii) If the onlyContainsUserCerts boolean is asserted in the
+   *           IDP CRL extension, verify that the certificate does not
+   *           include the basic constraints extension with the cA
+   *           boolean asserted.
+   *
+   *      (iii) If the onlyContainsCACerts boolean is asserted in the
+   *            IDP CRL extension, verify that the certificate
+   *            includes the basic constraints extension with the cA
+   *            boolean asserted.
+   *
+   *      (iv) Verify that the onlyContainsAttributeCerts boolean is not
+   *           asserted.
+   */
+   const auto match = distribution_point_match(crl, subject);
+   if(!match.any) {
+      return {false, false};
+   }
+
+   const auto* idp = crl.extensions().get_extension_object_as<Cert_Extension::CRL_Issuing_Distribution_Point>();
+   if(idp == nullptr) {
+      return {true, match.any_with_absent_reasons};
+   }
+
+   // X509_Certificate::is_CA_cert has additional gates (KU + EKU) besides the basicConstraints
+   const bool basicConstraints_isCa = [&]() {
+      if(const auto* ext = subject.v3_extensions().get_extension_object_as<Cert_Extension::Basic_Constraints>()) {
+         return ext->get_is_ca();
+      } else {
+         return false;
+      }
+   }();
+
+   // step (ii)
+   if(idp->only_contains_user_certs() && basicConstraints_isCa) {
+      return {false, false};
+   }
+
+   // step (iii)
+   if(idp->only_contains_ca_certs() && !basicConstraints_isCa) {
+      return {false, false};
+   }
+
+   // step (iv)
+   if(idp->only_contains_attribute_certs()) {
+      return {false, false};
+   }
+
+   /*
+   * RFC 5280 6.3.3(f)-(g) requires validating the cRLIssuer's certification
+   * path and verifying the CRL signature with that key when indirectCRL is
+   * asserted. PKIX::check_crl currently verifies the CRL signature against
+   * the cert's direct issuer key only, so an indirect CRL cannot be
+   * evaluated correctly. Reject as inapplicable rather than risk a
+   * misleading status.
+   */
+   if(idp->indirect_crl()) {
+      return {false, false};
+   }
+
+   /*
+   * Full reason coverage additionally requires the IDP to omit onlySomeReasons.
+   * RFC 5280 6.3.3(d) computes the reason mask per (DP, IDP) pair, so a CRL
+   * that is reason-limited on either side cannot alone prove non-revocation
+   * across every reason; reason-mask accumulation across multiple CRLs per
+   * 6.3.3(d)-(l) is not yet implemented.
+   */
+   const bool only_some_reasons = idp->only_some_reasons().has_value();
+   const bool full = match.any_with_absent_reasons && !only_some_reasons;
+   return {true, full};
+}
 
 /**
  * Lazy DFS iterator that yields certificate paths one at a time.
@@ -361,7 +475,7 @@ CertificatePathStatusCodes PKIX::check_chain(const std::vector<X509_Certificate>
       }
 
       // Check the serial number
-      if(subject.is_serial_negative()) {
+      if(subject.serial().is_negative()) {
          status.insert(Certificate_Status_Code::CERT_SERIAL_NEGATIVE);
       }
 
@@ -543,7 +657,8 @@ Certificate_Status_Code verify_ocsp_signing_cert(const X509_Certificate& signing
                                    /* max_ocsp_age */ std::chrono::seconds(0),
                                    /* trusted_responders */ {},
                                    restrictions.ignore_trusted_root_time_range(),
-                                   restrictions.require_self_signed_trust_anchors());
+                                   restrictions.require_self_signed_trust_anchors(),
+                                   restrictions.accept_ocsp_softfail());
 
    const auto validation_result = x509_path_validate(concat(std::vector{signing_cert}, extra_certs),
                                                      relaxed_restrictions,
@@ -647,6 +762,16 @@ CertificatePathStatusCodes PKIX::check_crl(const std::vector<X509_Certificate>& 
          const X509_Certificate& subject = cert_path.at(i);
          const X509_Certificate& ca = cert_path.at(i + 1);
 
+         // RFC 5280 6.3.3 step (b)(2): if the CRL's IDP scope or
+         // distributionPoint name excludes this certificate, do not use it
+         // to determine revocation status. Treat as if no CRL was supplied
+         // so the caller's policy (strict revocation or soft fail) decides
+         // the outcome.
+         const auto applic = crl_applicability_for(*crls[i], subject);
+         if(!applic.usable) {
+            continue;
+         }
+
          if(!ca.allowed_usage(Key_Constraints::CrlSign)) {
             status.insert(Certificate_Status_Code::CA_CERT_NOT_FOR_CRL_ISSUER);
          }
@@ -676,17 +801,21 @@ CertificatePathStatusCodes PKIX::check_crl(const std::vector<X509_Certificate>& 
 
             if(crl_is_not_usable) {
                status.insert(Certificate_Status_Code::CRL_HAS_UNKNOWN_CRITICAL_EXTENSION);
-            } else {
+            } else if(crls[i]->is_revoked(subject)) {
+               // A reason-limited CRL that lists the cert still proves the
+               // cert is revoked (the cert was revoked for whichever reason
+               // the CRL covers). Surface CERT_IS_REVOKED regardless of
+               // full-coverage status.
+               status.insert(Certificate_Status_Code::CERT_IS_REVOKED);
+            } else if(applic.full_coverage) {
+               // Cert not listed AND the CRL covers every reason: positive
+               // non-revocation evidence.
                status.insert(Certificate_Status_Code::VALID_CRL_CHECKED);
-
-               if(crls[i]->is_revoked(subject)) {
-                  status.insert(Certificate_Status_Code::CERT_IS_REVOKED);
-               }
-
-               if(!crls[i]->has_matching_distribution_point(subject)) {
-                  status.insert(Certificate_Status_Code::NO_MATCHING_CRLDP);
-               }
             }
+            // else: cert not listed but CRL only covers some reasons. No
+            // positive evidence is recorded; the caller's policy (strict
+            // revocation -> NO_REVOCATION_DATA, soft fail -> validates)
+            // decides what happens next.
          }
       }
    }
@@ -760,10 +889,10 @@ CertificatePathStatusCodes PKIX::check_ocsp_online(const std::vector<X509_Certif
 
          if(ocsp_urls.empty()) {
             ocsp_response_futures.emplace_back(std::async(std::launch::deferred, []() -> std::optional<OCSP::Response> {
-               return OCSP::Response(Certificate_Status_Code::OCSP_NO_REVOCATION_URL);
+               return OCSP::Response::dummy_no_revocation_url_response();
             }));
          } else {
-            auto ocsp_req = OCSP::Request(issuer, BigInt::from_bytes(subject.serial_number()));
+            auto ocsp_req = OCSP::Request(issuer, subject);
             ocsp_response_futures.emplace_back(
                std::async(std::launch::async, [ocsp_urls, ocsp_req, timeout]() -> std::optional<OCSP::Response> {
                   HTTP::Response http;
@@ -774,12 +903,24 @@ CertificatePathStatusCodes PKIX::check_ocsp_online(const std::vector<X509_Certif
                                             HTTP::RequestLimits().set_timeout(timeout).set_max_body_size(64 * 1024));
 
                      if(http.status_code() != 200) {
-                        return OCSP::Response(Certificate_Status_Code::OCSP_SERVER_NOT_AVAILABLE);
+                        return OCSP::Response::dummy_server_not_available_response();
                      }
 
-                     return OCSP::Response(http.body());
+                     OCSP::Response response(http.body());
+
+                     /*
+                     * RFC 6960 2.3: "In case of errors, the OCSP responder may return an
+                     * error message. These messages are not signed." Since such responses
+                     * (eg tryLater) carry no revocation information, treat them the same
+                     * as the server being unavailable.
+                     */
+                     if(response.status() != OCSP::Response_Status_Code::Successful) {
+                        return OCSP::Response::dummy_server_not_available_response();
+                     }
+
+                     return response;
                   } catch(std::exception&) {
-                     return OCSP::Response(Certificate_Status_Code::OCSP_SERVER_NOT_AVAILABLE);
+                     return OCSP::Response::dummy_server_not_available_response();
                   }
                }));
          }
@@ -970,9 +1111,14 @@ void PKIX::merge_revocation_status(CertificatePathStatusCodes& chain_status,
       bool had_crl = false;
       bool had_ocsp = false;
 
+      // RFC 5280 6.3.3 treats revocation status as determined once cert_status
+      // is not UNREVOKED, so CERT_IS_REVOKED (whether from CRL or OCSP) is
+      // revocation evidence on a par with VALID_CRL_CHECKED / OCSP_RESPONSE_GOOD;
+      // omitting it would surface a spurious NO_REVOCATION_DATA alongside the
+      // revocation, e.g. when a reason-limited CRL lists the cert.
       if(i < crl_status.size() && !crl_status[i].empty()) {
          for(auto&& code : crl_status[i]) {
-            if(code == Certificate_Status_Code::VALID_CRL_CHECKED) {
+            if(code == Certificate_Status_Code::VALID_CRL_CHECKED || code == Certificate_Status_Code::CERT_IS_REVOKED) {
                had_crl = true;
             }
             chain_status[i].insert(code);
@@ -981,10 +1127,16 @@ void PKIX::merge_revocation_status(CertificatePathStatusCodes& chain_status,
 
       if(i < ocsp_status.size() && !ocsp_status[i].empty()) {
          for(auto&& code : ocsp_status[i]) {
-            // NO_REVOCATION_URL and OCSP_SERVER_NOT_AVAILABLE are softfail
-            if(code == Certificate_Status_Code::OCSP_RESPONSE_GOOD ||
-               code == Certificate_Status_Code::OCSP_NO_REVOCATION_URL ||
-               code == Certificate_Status_Code::OCSP_SERVER_NOT_AVAILABLE) {
+            const bool was_definitive =
+               code == Certificate_Status_Code::OCSP_RESPONSE_GOOD || code == Certificate_Status_Code::CERT_IS_REVOKED;
+
+            const bool was_softfail = code == Certificate_Status_Code::OCSP_NO_REVOCATION_URL ||
+                                      code == Certificate_Status_Code::OCSP_SERVER_NOT_AVAILABLE ||
+                                      code == Certificate_Status_Code::OCSP_NO_HTTP;
+
+            const bool accepted_softfail = was_softfail && restrictions.accept_ocsp_softfail();
+
+            if(was_definitive || accepted_softfail) {
                had_ocsp = true;
             }
 
@@ -1189,14 +1341,16 @@ Path_Validation_Restrictions::Path_Validation_Restrictions(bool require_rev,
                                                            std::chrono::seconds max_ocsp_age,
                                                            std::unique_ptr<Certificate_Store> trusted_ocsp_responders,
                                                            bool ignore_trusted_root_time_range,
-                                                           bool require_self_signed_trust_anchors) :
+                                                           bool require_self_signed_trust_anchors,
+                                                           bool accept_ocsp_softfail) :
       m_require_revocation_information(require_rev),
       m_ocsp_all_intermediates(ocsp_intermediates),
       m_minimum_key_strength(key_strength),
       m_max_ocsp_age(max_ocsp_age),
       m_trusted_ocsp_responders(std::move(trusted_ocsp_responders)),
       m_ignore_trusted_root_time_range(ignore_trusted_root_time_range),
-      m_require_self_signed_trust_anchors(require_self_signed_trust_anchors) {
+      m_require_self_signed_trust_anchors(require_self_signed_trust_anchors),
+      m_accept_ocsp_softfail(accept_ocsp_softfail) {
    if(key_strength <= 80) {
       m_trusted_hashes.insert("SHA-1");
    }
@@ -1207,6 +1361,14 @@ Path_Validation_Restrictions::Path_Validation_Restrictions(bool require_rev,
    m_trusted_hashes.insert("SHA-512");
    m_trusted_hashes.insert("SHAKE-256(512)");  // Dilithium/ML-DSA
    m_trusted_hashes.insert("SHAKE-256(912)");  // Ed448
+
+   // SLH-DSA-SHAKE reports the H_msg output length, which depends on the parameter set
+   m_trusted_hashes.insert("SHAKE-256(240)");  // SLH-DSA-SHAKE-128s
+   m_trusted_hashes.insert("SHAKE-256(272)");  // SLH-DSA-SHAKE-128f
+   m_trusted_hashes.insert("SHAKE-256(312)");  // SLH-DSA-SHAKE-192s
+   m_trusted_hashes.insert("SHAKE-256(336)");  // SLH-DSA-SHAKE-192f
+   m_trusted_hashes.insert("SHAKE-256(376)");  // SLH-DSA-SHAKE-256s
+   m_trusted_hashes.insert("SHAKE-256(392)");  // SLH-DSA-SHAKE-256f
 }
 
 namespace {

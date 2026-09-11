@@ -294,6 +294,21 @@ macOs systems.
 
 Support for ``ninja`` is still new and there are probably some rough edges.
 
+Precompiled Headers
+---------------------
+
+When building with GCC or Clang, the option ``--enable-pch`` enables use of a
+precompiled header, which can speed up compilation considerably. With other
+compilers the option is ignored.
+
+If combining precompiled headers with ``ccache``, you must configure ``ccache``
+with ``sloppiness = pch_defines,time_macros`` (for example by setting the
+environment variable ``CCACHE_SLOPPINESS``), as otherwise the cache will not be
+used.
+
+Distributed compilation tools such as ``distcc`` may not work well with
+precompiled headers; in that situation leave them disabled.
+
 For iOS using XCode
 -------------------------
 
@@ -634,7 +649,7 @@ used directly as the RNG.
 If you are building for x86, ARM, or POWER, it can be beneficial to enable
 hardware support for the relevant instruction sets with modules such as
 ``aes_ni`` and ``clmul`` for x86, or ``aes_armv8``, ``pmull``, and
-``sha2_32_armv8`` on ARMv8. SIMD optimizations such as ``chacha_avx2`` also can
+``sha2_32_armv8`` on ARMv8. SIMD optimizations such as ``chacha_simd8x32`` also can
 provide substantial performance improvements.
 
 .. note::

@@ -13,6 +13,7 @@
 
 #include <botan/symkey.h>
 #include <botan/tls_alert.h>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <span>
@@ -122,6 +123,12 @@ class BOTAN_PUBLIC_API(2, 0) Channel {
       virtual bool is_active() const = 0;
 
       /**
+      * @return the remaining time until timeout_check() might retransmit
+      *         handshake data, or std::nullopt if no timeout check is needed.
+      */
+      virtual std::optional<std::chrono::milliseconds> next_retransmission_timeout() const = 0;
+
+      /**
       * Note: For TLS 1.3 a connection is closed only after both peers have
       *       signaled a "close_notify". While TLS 1.2 automatically responded
       *       in suit once the peer had sent "close_notify", TLS 1.3 allows to
@@ -180,7 +187,15 @@ class BOTAN_PUBLIC_API(2, 0) Channel {
 
       /**
       * Attempt to update the session's traffic key material
-      * Note that this is possible with a TLS 1.3 channel, only.
+      * Note that this is possible with a (D)TLS 1.3 channel, only.
+      *
+      * @throws Invalid_Argument if called on a (D)TLS 1.2 channel
+      * @throws Invalid_State if called on a DTLS 1.3 channel and another
+      *         KeyUpdate is already pending (see RFC 9147 quote below).
+      *
+      * RFC 9147 (DTLS 1.3) Section 8 "Key Updates":
+      *    [...] implementations MUST NOT send [...] a new KeyUpdate until the
+      *    previous KeyUpdate has been acknowledged [...].
       *
       * @param request_peer_update if true, require a reciprocal key update
       */
@@ -195,10 +210,20 @@ class BOTAN_PUBLIC_API(2, 0) Channel {
       /**
       * Perform a handshake timeout check.
       *
-      * This function does nothing unless the channel represents a DTLS
-      * connection and a handshake is actively in progress. In this case it will
-      * check the current timeout state and potentially initiate retransmission
-      * of handshake packets.
+      * This function does nothing unless the channel represents a DTLS connection with
+      * a handshake in progress.
+      *
+      * Consider using ``Callbacks::tls_register_deferred_operation`` introduced
+      * in Botan 3.14.0 to handle retransmission timers transparently instead of
+      * polling this function at regular intervals. Never do both, though!
+      *
+      * By default after a certain interval where no progress has been made in the
+      * handshake (controlled by the policy values `TLS::Policy::dtls_initial_timeout`,
+      * `TLS::Policy::dtls_maximum_timeout`, and `TLS::Policy::dtls_maximum_retransmissions`),
+      * calling `timeout_check` will throw indicating the handshake has failed to
+      * complete. If you wish to never fully timeout, this can be accomplished by
+      * overriding `TLS::Policy::dtls_maximum_retransmissions` to return `std::nullopt`,
+      * in which case a handshake attempt will retry indefinitely.
       *
       * @returns true if a timeout condition occurred
       */

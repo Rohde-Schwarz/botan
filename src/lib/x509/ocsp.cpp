@@ -7,7 +7,6 @@
 
 #include <botan/ocsp.h>
 
-#include <botan/assert.h>
 #include <botan/base64.h>
 #include <botan/ber_dec.h>
 #include <botan/certstor.h>
@@ -41,7 +40,11 @@ void check_generalized_time(const ASN1_Time& time, const char* field) {
 
 }  // namespace
 
-CertID::CertID(const X509_Certificate& issuer, const BigInt& subject_serial) : m_subject_serial(subject_serial) {
+CertID::CertID(const X509_Certificate& issuer, const BigInt& subject_serial) :
+      CertID(issuer, X509_Serial_Number(subject_serial)) {}
+
+CertID::CertID(const X509_Certificate& issuer, const X509_Serial_Number& subject_serial) :
+      m_subject_serial(subject_serial) {
    /*
    In practice it seems some responders, including, notably,
    ocsp.verisign.com, will reject anything but SHA-1 here
@@ -55,7 +58,7 @@ CertID::CertID(const X509_Certificate& issuer, const BigInt& subject_serial) : m
 
 bool CertID::is_id_for(const X509_Certificate& issuer, const X509_Certificate& subject) const {
    try {
-      if(BigInt::from_bytes(subject.serial_number()) != m_subject_serial) {
+      if(subject.serial() != m_subject_serial) {
          return false;
       }
 
@@ -128,8 +131,83 @@ void CertID::decode_from(BER_Decoder& from) {
    }
 }
 
-void SingleResponse::encode_into(DER_Encoder& /*to*/) const {
-   throw Not_Implemented("SingleResponse::encode_into");
+//static
+SingleResponse SingleResponse::good(CertID certid, X509_Time this_update, X509_Time next_update) {
+   return SingleResponse(
+      std::move(certid), 0, std::nullopt, std::nullopt, std::move(this_update), std::move(next_update));
+}
+
+//static
+SingleResponse SingleResponse::unknown(CertID certid, X509_Time this_update, X509_Time next_update) {
+   return SingleResponse(
+      std::move(certid), 2, std::nullopt, std::nullopt, std::move(this_update), std::move(next_update));
+}
+
+//static
+SingleResponse SingleResponse::revoked(CertID certid,
+                                       X509_Time revocation_time,
+                                       std::optional<CRL_Code> reason,
+                                       X509_Time this_update,
+                                       X509_Time next_update) {
+   return SingleResponse(
+      std::move(certid), 1, std::move(revocation_time), reason, std::move(this_update), std::move(next_update));
+}
+
+SingleResponse::SingleResponse(CertID certid,
+                               size_t cert_status,
+                               std::optional<X509_Time> revocation_time,
+                               std::optional<CRL_Code> revocation_reason,
+                               X509_Time this_update,
+                               X509_Time next_update) :
+      m_certid(std::move(certid)),
+      m_cert_status(cert_status),
+      m_thisupdate(std::move(this_update)),
+      m_nextupdate(std::move(next_update)),
+      m_revocation_time(std::move(revocation_time)),
+      m_revocation_reason(revocation_reason) {
+   const auto require_generalized_time = [](const X509_Time& t, const char* field) {
+      if(t.tagging() != ASN1_Type::GeneralizedTime) {
+         throw Invalid_Argument(fmt("OCSP SingleResponse {} must be a GeneralizedTime", field));
+      }
+   };
+
+   require_generalized_time(m_thisupdate, "thisUpdate");
+   if(m_nextupdate.time_is_set()) {
+      require_generalized_time(m_nextupdate, "nextUpdate");
+   }
+   if(m_cert_status == 1) {
+      if(!m_revocation_time.has_value()) {
+         throw Invalid_Argument("Revoked OCSP SingleResponse lacks a revocation time");
+      }
+      require_generalized_time(*m_revocation_time, "revocationTime");
+   }
+}
+
+void SingleResponse::encode_into(DER_Encoder& to) const {
+   // The SingleResponse / CertStatus / RevokedInfo ASN.1 is quoted in
+   // decode_from below
+   to.start_sequence();
+   to.encode(m_certid);
+   if(m_cert_status == 1) {
+      // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+      to.start_cons(ASN1_Type(1), ASN1_Class::ContextSpecific).encode(m_revocation_time.value());
+      if(m_revocation_reason.has_value() && *m_revocation_reason != CRL_Code::Unspecified) {
+         to.start_explicit(0)
+            .encode(static_cast<size_t>(*m_revocation_reason), ASN1_Type::Enumerated, ASN1_Class::Universal)
+            .end_explicit();
+      }
+      to.end_cons();
+   } else {
+      // good [0] / unknown [2], both IMPLICIT NULL
+      const std::span<const uint8_t> empty;
+      // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+      to.add_object(ASN1_Type(m_cert_status), ASN1_Class::ContextSpecific, empty);
+   }
+   to.encode(m_thisupdate);
+   if(m_nextupdate.time_is_set()) {
+      to.start_explicit(0).encode(m_nextupdate).end_explicit();
+   }
+   to.end_cons();
 }
 
 void SingleResponse::decode_from(BER_Decoder& from) {
@@ -184,10 +262,33 @@ void SingleResponse::decode_from(BER_Decoder& from) {
       throw Decoding_Error("OCSP::SingleResponse: certStatus has unexpected class tag");
    }
 
-   // TODO: should verify the cert_status body and decode RevokedInfo
    m_cert_status = static_cast<uint32_t>(cert_status.type());
    if(m_cert_status > 2) {
       throw Decoding_Error("Unknown OCSP CertStatus tag");
+   }
+
+   m_revocation_time.reset();
+   m_revocation_reason.reset();
+
+   if(m_cert_status == 1) {
+      BER_Decoder revoked_info(cert_status, BER_Decoder::Limits::DER());
+      X509_Time revocation_time;
+      revoked_info.decode(revocation_time);
+      check_generalized_time(revocation_time, "revocationTime");
+      m_revocation_time = std::move(revocation_time);
+
+      if(revoked_info.peek_next_object().is_a(0, ASN1_Class::ContextSpecific | ASN1_Class::Constructed)) {
+         size_t reason = 0;
+         revoked_info.start_context_specific(0).decode(reason, ASN1_Type::Enumerated, ASN1_Class::Universal).end_cons();
+         if(reason == 7 || reason > 10) {
+            throw Decoding_Error(fmt("CRLReason has unknown enumeration value {}", reason));
+         }
+         m_revocation_reason = static_cast<CRL_Code>(reason);
+      }
+      revoked_info.verify_end();
+   } else if(cert_status.length() != 0) {
+      // good [0] / unknown [2] are both IMPLICIT NULL
+      throw Decoding_Error("OCSP CertStatus has unexpected content");
    }
 
    // We don't currently recognize any extensions here so if any are critical we should reject
@@ -221,7 +322,7 @@ void decode_optional_list(BER_Decoder& ber, ASN1_Type tag, std::vector<X509_Cert
 }  // namespace
 
 Request::Request(const X509_Certificate& issuer_cert, const X509_Certificate& subject_cert) :
-      m_issuer(issuer_cert), m_certid(m_issuer, BigInt::from_bytes(subject_cert.serial_number())) {
+      m_issuer(issuer_cert), m_certid(m_issuer, subject_cert.serial()) {
    if(subject_cert.issuer_dn() != issuer_cert.subject_dn()) {
       throw Invalid_Argument("Invalid cert pair to OCSP::Request (mismatched issuer,subject args?)");
    }
@@ -329,7 +430,8 @@ Response::Response(const uint8_t response_bits[], size_t response_bits_len) :
       BER_Decoder response_bytes_ctx = response_outer.start_context_specific(0);
       BER_Decoder response_bytes = response_bytes_ctx.start_sequence();
 
-      response_bytes.decode_and_check(OID({1, 3, 6, 1, 5, 5, 7, 48, 1, 1}), "Unknown response type in OCSP response");
+      response_bytes.decode_and_check(OID::from_string("PKIX.OCSP.BasicResponse"),
+                                      "Unknown response type in OCSP response");
 
       /*
       * RFC 6960 Section 4.2.1
@@ -593,7 +695,7 @@ Response online_check(const X509_Certificate& issuer,
       throw Invalid_Argument("No OCSP responder specified");
    }
 
-   if(auto uri = URI::parse(ocsp_responder)) {
+   if(auto uri = URI::from_string(ocsp_responder)) {
       return online_check(issuer, subject_serial, *uri, timeout);
    } else {
       throw Invalid_Argument("Unparsable URI for OCSP responder");
@@ -631,7 +733,7 @@ Response online_check(const X509_Certificate& issuer,
       throw Invalid_Argument("No HTTP OCSP responder URLs available for this certificate");
    }
 
-   const auto subject_serial = BigInt::from_bytes(subject.serial_number());
+   const auto subject_serial = subject.serial().to_bigint();
 
    // Try the first N - 1 responder addresses in sequence, ignoring errors
    for(size_t i = 0; i + 1 < responders.size(); ++i) {

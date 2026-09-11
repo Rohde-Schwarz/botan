@@ -9,6 +9,7 @@ Botan is released under the Simplified BSD License (see license.txt)
 """
 
 import traceback
+
 from pycparser import c_ast, parse_file
 
 ffi_header = 'src/lib/ffi/ffi.h'
@@ -22,9 +23,9 @@ def to_ctype(typ, is_ptr):
         return 'c_void_p'
 
     if typ == 'botan_view_bin_fn':
-        return 'VIEW_BIN_CALLBACK'
+        return '_VIEW_BIN_CALLBACK'
     if typ == 'botan_view_str_fn':
-        return 'VIEW_STR_CALLBACK'
+        return '_VIEW_STR_CALLBACK'
 
     if is_ptr is False:
         if typ == 'uint32':

@@ -12,6 +12,7 @@
 
 #include <botan/assert.h>
 #include <botan/types.h>
+#include <botan/internal/bit_ops.h>
 #include <botan/internal/ct_utils.h>
 #include <botan/internal/mem_utils.h>
 #include <botan/internal/mp_asmi.h>
@@ -430,6 +431,26 @@ inline constexpr void bigint_linmul3(W z[], const W x[], size_t x_size, W y) {
 }
 
 /**
+* Compute z[0:N] = z[0:N] - q * y[0:N]
+*
+* Returns the borrow out, a full word value which the caller must
+* subtract from z[N]
+*/
+template <WordType W>
+inline constexpr auto bigint_submul(W z[], const W y[], size_t N, W q) -> W {
+   W mul_carry = 0;
+   W borrow = 0;
+
+   for(size_t i = 0; i != N; ++i) {
+      const W t = word_madd2(y[i], q, &mul_carry);
+      z[i] = word_sub(z[i], t, &borrow);
+   }
+
+   // Both mul_carry <= W_max - 1 and borrow <= 1, so this cannot overflow
+   return mul_carry + borrow;
+}
+
+/**
 * Compare x and y
 * Return -1 if x < y
 * Return 0 if x == y
@@ -562,99 +583,250 @@ inline constexpr W divide_10(W x) {
 }
 
 /**
-* Setup for variable-time word level division/modulo operations
+* Compute the reciprocal floor((2^(2b) - 1) / D) - 2^b of a normalized
+* divisor D (ie one with its top bit set)
 *
-* Currently this just uses the compiler's support for a 2/1 word division,
-* but likely could be improved by precomputed values based on the divisor,
-* for example using the approaches outlined in Hacker's Delight chapter 10.
+* This is the same value as computed by Algorithms 2 and 3 of
+* Möller and Granlund "Improved Division by Invariant Integers".
+* (https://gmplib.org/~tege/division-paper.pdf)
+*
+* Uses compiler provided division instructions where available, and
+* Algorithm 2 as the portable 64-bit fallback.
+*/
+template <WordType W>
+constexpr W reciprocal_word(W D) {
+   BOTAN_DEBUG_ASSERT((D & WordInfo<W>::top_bit) != 0);
+
+   /*
+   * Subtracting 2^b*D from the numerator gives
+   * v = floor(((~D)*2^b + (2^b - 1)) / D). Since D is normalized, ~D < D
+   * and the quotient fits in a word. See the first part of Section III A
+   * in the paper.
+   */
+   if constexpr(sizeof(W) == 4) {
+      const auto nD = ~D;  // Work around spurious MSVC warning
+      const typename WordInfo<W>::dword n =
+         (static_cast<typename WordInfo<W>::dword>(nD) << WordInfo<W>::bits) | WordInfo<W>::max;
+      return static_cast<W>(n / D);
+   } else {
+      if(!std::is_constant_evaluated()) {
+#if defined(BOTAN_MP_USE_X86_64_ASM)
+         W quotient = 0;
+         W remainder = 0;
+         // NOLINTNEXTLINE(*-no-assembler)
+         asm("divq %[d]"
+             : "=a"(quotient), "=d"(remainder)
+             : [d] "r"(D), "a"(WordInfo<W>::max), "d"(static_cast<W>(~D))
+             : "cc");
+         return quotient;
+#elif !defined(BOTAN_BUILD_COMPILER_IS_CLANGCL)
+         /* clang-cl has a bug where on encountering a 128/64 division it emits
+         * a call to __udivti3() but then fails to link the relevant builtin into
+         * the binary, causing a link failure. Work around this by simply omitting
+         * such code for clang-cl
+         *
+         * See https://github.com/llvm/llvm-project/issues/25679
+         */
+         if constexpr(WordInfo<W>::dword_is_native) {
+            typename WordInfo<W>::dword n =
+               (static_cast<typename WordInfo<W>::dword>(~D) << WordInfo<W>::bits) | WordInfo<W>::max;
+            return static_cast<W>(n / D);
+         }
+#endif
+      }
+
+      // Algorithm 2 of Möller and Granlund
+      const W d0 = D & 1;
+      const W d9 = D >> 55;
+      const W d40 = (D >> 24) + 1;
+      const W d63 = (D >> 1) + d0;  // ceil(D/2)
+
+      // This division is done with a table lookup in the paper
+      const W v0 = ((W(1) << 19) - (W(3) << 8)) / d9;
+      const W v1 = (v0 << 11) - ((v0 * v0 * d40) >> 40) - 1;
+      const W v2 = (v1 << 13) + ((v1 * ((W(1) << 60) - v1 * d40)) >> 47);
+
+      const W e = W(0) - v2 * d63 + (v2 >> 1) * d0;
+
+      W product_hi = 0;
+      word_madd2(v2, e, &product_hi);
+      const W v3 = (v2 << 31) + (product_hi >> 1);
+
+      // Compute floor((v3 + 2^64 + 1) * D / 2^64) modulo 2^64
+      product_hi = D;
+      word_madd2(v3, D, &product_hi);
+      return v3 - D - product_hi;
+   }
+}
+
+/**
+* Compute the same reciprocal as reciprocal_word, but running
+* in constant time.
+*
+* Requires that D is normalized (ie with its top bit set)
+*/
+template <WordType W>
+constexpr W reciprocal_word_ct(W D) {
+   BOTAN_DEBUG_ASSERT((D & WordInfo<W>::top_bit) != 0);
+
+   // Bit serial long division of ((~D) || (2^b - 1)) / D, with all of the
+   // conditional logic computed via masks
+   W remainder = static_cast<W>(~D);
+   W quotient = 0;
+
+   for(size_t i = 0; i != WordInfo<W>::bits; ++i) {
+      const auto carry = CT::Mask<W>::expand_top_bit(remainder);
+      remainder = static_cast<W>((remainder << 1) | 1);
+      quotient <<= 1;
+
+      const auto sub = carry | CT::Mask<W>::is_gte(remainder, D);
+      remainder -= sub.if_set_return(D);
+      quotient |= sub.if_set_return(1);
+   }
+
+   return quotient;
+}
+
+/**
+* Setup for word level division/modulo operations
+*
+* The general case uses a reciprocal of the normalized divisor,
+* precomputed at construction time, following Algorithm 4 of Möller and
+* Granlund "Improved Division by Invariant Integers" (IEEE Trans.
+* Computers, 2011).
+*
+* The 2/1 division operations run in constant time with respect to the
+* numerator. The divisor is treated as public; construction and the
+* choice of code path are variable time in it.
 */
 template <WordType W>
 class divide_precomp final {
    public:
-      explicit constexpr divide_precomp(W divisor) : m_divisor(divisor) {
-         BOTAN_ARG_CHECK(m_divisor != 0, "Division by zero");
+      // The caller must guarantee not to use divisor == 0
+      static constexpr divide_precomp setup_vartime(W divisor) {
+         const size_t shift = WordInfo<W>::bits - high_bit(divisor);
+         const W norm_divisor = divisor << shift;
+         const W reciprocal = reciprocal_word(norm_divisor);
+         return divide_precomp(divisor, shift, norm_divisor, reciprocal);
+      }
+
+      // The caller must guarantee not to use divisor == 0
+      static constexpr divide_precomp setup(W divisor) {
+         const size_t shift = WordInfo<W>::bits - high_bit(divisor);
+         const W norm_divisor = divisor << shift;
+         const W reciprocal = reciprocal_word_ct(norm_divisor);
+         return divide_precomp(divisor, shift, norm_divisor, reciprocal);
+      }
+
+      // Return quotient and remainder of (n1 || n0) divided by d
+      //
+      // This assumes n1 < d so that the quotient fits in a word and
+      // will produce incorrect output if n1 >= d, since in that case
+      // the quotient exceeds the word size.
+      //
+      // This is constant time with respect to n1/n0 but leaks information
+      // about the divisor
+      inline constexpr std::pair<W, W> divmod_2to1_vartime(W n1, W n0) const {
+         if(m_divisor == WordInfo<W>::max) {
+            const W q = div_2to1_max_d(n1, n0);
+            const W r = static_cast<W>(n0 + q);
+            return std::make_pair(q, r);
+         }
+
+         if(m_divisor == WordInfo<W>::top_bit) {
+            // Simply a shift by N-1 bits
+            const W q = (n1 << 1) | (n0 >> (WordInfo<W>::bits - 1));
+            const W r = static_cast<W>(n0 & (WordInfo<W>::top_bit - 1));
+            return std::make_pair(q, r);
+         }
+
+         return divmod_2to1_ct(n1, n0);
+      }
+
+      // Return quotient and remainder of (n1 || n0) divided by d
+      //
+      // This assumes n1 < d so that the quotient fits in a word and
+      // will produce incorrect output if n1 >= d, since in that case
+      // the quotient exceeds the word size.
+      inline constexpr std::pair<W, W> divmod_2to1_ct(W n1, W n0) const {
+         /*
+         * Scale the numerator to match the normalized divisor; the scaling cancels
+         * in the quotient and is removed from the remainder by the final shift.
+         */
+         n1 <<= m_shift;
+         const size_t rshift = WordInfo<W>::bits - m_shift;
+         /*
+         * We can't just `n0 >> rshift` because m_shift may be 0 (high bit divisor)
+         * in which case rshift will be the maximum bit length, and >> by the maximum
+         * bitlength is undefined behavior despite having an entirely obvious meaning.
+         *
+         * However we know m_shift is not equal to the bit length of the word, because
+         * that would imply that the divisor is 0. Thus rshift must be >= 1. So split
+         * the shift into two phases (first rshift-1, then 1)
+         */
+         n1 |= (n0 >> 1) >> (rshift - 1);
+         n0 <<= m_shift;
+
+         const auto [q, scaled_r] = div2by1_preinv(n1, n0, m_norm_divisor, m_reciprocal);
+         const W r = scaled_r >> m_shift;
+         return std::make_pair(q, r);
       }
 
       // Return floor((n1 || n0) / d)
       //
       // This assumes n1 < d so that the quotient fits in a word
-      inline constexpr W vartime_div_2to1(W n1, W n0) const {
-         BOTAN_ASSERT_NOMSG(n1 < m_divisor);
-
-         if(m_divisor == WordInfo<W>::max) {
-            return vartime_div_2to1_max_d(n1, n0);
-         }
-
-         if(m_divisor == WordInfo<W>::top_bit) {
-            // Simply a shift by N-1 bits
-            return (n1 << 1) | (n0 >> (WordInfo<W>::bits - 1));
-         }
-
-         if(!std::is_constant_evaluated()) {
-#if defined(BOTAN_MP_USE_X86_64_ASM)
-            if constexpr(std::same_as<W, uint64_t>) {
-               W quotient = 0;
-               W remainder = 0;
-               // NOLINTNEXTLINE(*-no-assembler)
-               asm("divq %[v]" : "=a"(quotient), "=d"(remainder) : [v] "r"(m_divisor), "a"(n0), "d"(n1) : "cc");
-               return quotient;
-            }
-#endif
-
-#if !defined(BOTAN_BUILD_COMPILER_IS_CLANGCL)
-
-            /* clang-cl has a bug where on encountering a 128/64 division it emits
-            * a call to __udivti3() but then fails to link the relevant builtin into
-            * the binary, causing a link failure. Work around this by simply omitting
-            * such code for clang-cl
-            *
-            * See https://github.com/llvm/llvm-project/issues/25679
-            */
-            if constexpr(WordInfo<W>::dword_is_native) {
-               typename WordInfo<W>::dword n = n1;
-               n <<= WordInfo<W>::bits;
-               n |= n0;
-               return static_cast<W>(n / m_divisor);
-            }
-#endif
-         }
-
-         W high = n1;
-         W quotient = 0;
-
-         for(size_t i = 0; i != WordInfo<W>::bits; ++i) {
-            const W high_top_bit = high >> (WordInfo<W>::bits - 1);
-
-            high <<= 1;
-            high |= (n0 >> (WordInfo<W>::bits - 1 - i)) & 1;
-            quotient <<= 1;
-
-            if(high_top_bit || high >= m_divisor) {
-               high -= m_divisor;
-               quotient |= 1;
-            }
-         }
-
-         return quotient;
-      }
-
-      // Return floor((n1 || n0) % d)
       //
-      // This assumes n1 < d so that the quotient fits in a word
-      inline constexpr W vartime_mod_2to1(W n1, W n0) const {
-         BOTAN_ASSERT_NOMSG(n1 < m_divisor);
-         W q = this->vartime_div_2to1(n1, n0);
-         W carry = 0;
-         q = word_madd2(q, m_divisor, &carry);
-         return (n0 - q);
-      }
+      // This is constant time with respect to n1/n0 but leaks information about d
+      inline constexpr W div_2to1(W n1, W n0) const { return this->divmod_2to1_vartime(n1, n0).first; }
+
+      // Return (n1 || n0) % d
+      //
+      // This assumes n1 < d
+      //
+      // This is constant time with respect to n1/n0 but leaks information about d
+      inline constexpr W mod_2to1(W n1, W n0) const { return this->divmod_2to1_vartime(n1, n0).second; }
 
    private:
+      constexpr divide_precomp(W divisor, size_t shift, W norm_divisor, W reciprocal) :
+            m_divisor(divisor), m_shift(shift), m_norm_divisor(norm_divisor), m_reciprocal(reciprocal) {}
+
+      /*
+      * 2/1 division of (u1 || u0) by the normalized divisor D given its
+      * reciprocal v, returning quotient and remainder. Requires u1 < D.
+      *
+      * Algorithm 4 of Möller and Granlund "Improved Division by Invariant
+      * Integers", with the conditional corrections computed as masked updates.
+      *
+      * Runs in constant time with respect to u1 and u0.
+      */
+      static constexpr std::pair<W, W> div2by1_preinv(W u1, W u0, W D, W v) {
+         // Steps 1-3: <q1,q0> = v*u1; <q1,q0> += <u1,u0>; q1 += 1
+         W q1 = u0;
+         const W q0 = word_madd2(u1, v, &q1);  // <q1,q0> = u1*v + u0
+         q1 += u1 + 1;
+
+         // Step 4
+         W r = u0 - q1 * D;
+
+         // Steps 5-7: If r >= q0 { q1 -= 1; r += d; }
+         const auto fix_down = CT::Mask<W>::is_gt(r, q0);
+         q1 -= fix_down.if_set_return(1);
+         r += fix_down.if_set_return(D);
+
+         // Steps 8-10: if r >= D { q1 += 1; r -= D; }
+         const auto fix_up = CT::Mask<W>::is_gte(r, D);
+         q1 += fix_up.if_set_return(1);
+         r -= fix_up.if_set_return(D);
+
+         // Step 11
+         return std::make_pair(q1, r);
+      }
+
       /*
       * When the divisor is the maximum integer value, then a two word
       * division becomes simple.
       */
-      static inline constexpr W vartime_div_2to1_max_d(W n1, W n0) {
+      static inline constexpr W div_2to1_max_d(W n1, W n0) {
          /*
          Use k to refer to WordInfo<W>::bits
 
@@ -677,19 +849,20 @@ class divide_precomp final {
          to be greater than 1.
 
          [*] We require n1 be strictly less than the divisor to ensure that the
-         output fits in a single word; this is checked at the start of vartime_div_2to1.
+         output fits in a single word; this is checked at the start of divmod_2to1.
+
+         And since n1 + 1 <= 2^k - 1, c == 1 exactly when n0 + (n1 + 1) carries out.
          */
 
-         const W s = n0 + n1;
-         // did n0 + n1 overflow? or does (n0 + n1) == 2^k - 1? if either, c == 1
-         if(s < n0 || s == WordInfo<W>::max) {
-            n1 += 1;
-         }
-
-         return n1;
+         const W s = n0 + n1 + 1;
+         const W c = CT::Mask<W>::is_lt(s, n0).if_set_return(1);
+         return n1 + c;
       }
 
       W m_divisor;
+      size_t m_shift;
+      W m_norm_divisor;
+      W m_reciprocal;
 };
 
 /*

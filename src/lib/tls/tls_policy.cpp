@@ -97,7 +97,7 @@ std::vector<std::string> Policy::allowed_key_exchange_methods() const {
       //"ECDHE_PSK",
       //"PSK",
       "ECDH",
-      "DH",
+      //"DH",
       //"RSA",
    };
 }
@@ -207,9 +207,6 @@ std::vector<Group_Params> Policy::key_exchange_groups() const {
       Group_Params::BRAINPOOL384R1TLS13,
       Group_Params::BRAINPOOL512R1,
       Group_Params::BRAINPOOL512R1TLS13,
-
-      Group_Params::FFDHE_2048,
-      Group_Params::FFDHE_3072,
 
       // clang-format on
    };
@@ -330,6 +327,12 @@ bool Policy::acceptable_protocol_version(Protocol_Version version) const {
    }
 #endif
 
+#if defined(BOTAN_HAS_DTLS_13)
+   if(version == Protocol_Version::DTLS_V13 && allow_dtls13()) {
+      return true;
+   }
+#endif
+
 #if defined(BOTAN_HAS_TLS_12)
    if(version == Protocol_Version::TLS_V12 && allow_tls12()) {
       return true;
@@ -346,6 +349,9 @@ bool Policy::acceptable_protocol_version(Protocol_Version version) const {
 
 Protocol_Version Policy::latest_supported_version(bool datagram) const {
    if(datagram) {
+      if(acceptable_protocol_version(Protocol_Version::DTLS_V13)) {
+         return Protocol_Version::DTLS_V13;
+      }
       if(acceptable_protocol_version(Protocol_Version::DTLS_V12)) {
          return Protocol_Version::DTLS_V12;
       }
@@ -402,6 +408,10 @@ bool Policy::allow_dtls12() const {
 #endif
 }
 
+bool Policy::allow_dtls13() const {
+   return false;  // TODO: Opportunistically enable once DTLS 1.3 is supported
+}
+
 bool Policy::include_time_in_hello_random() const {
    return true;
 }
@@ -424,6 +434,11 @@ bool Policy::require_extended_master_secret() const {
 
 std::optional<uint16_t> Policy::record_size_limit() const {
    return std::nullopt;
+}
+
+size_t Policy::record_padding_bytes(size_t plaintext_bytes) const {
+   BOTAN_UNUSED(plaintext_bytes);
+   return 0;
 }
 
 bool Policy::support_cert_status_message() const {
@@ -470,6 +485,22 @@ bool Policy::allow_dtls_epoch0_restart() const {
    return false;
 }
 
+bool Policy::dtls_server_require_cookie_exchange() const {
+   /*
+   RFC 9147 Section 11 "Security Considerations":
+
+      The primary additional security consideration raised by DTLS is that of
+      denial of service by excessive resource consumption. DTLS includes a
+      cookie exchange designed to protect against denial of service. [...]
+      In particular, DTLS servers that do not use the cookie exchange may be
+      used as attack amplifiers even if they themselves are not experiencing
+      DoS. Therefore, DTLS servers SHOULD use the cookie exchange unless there
+      is good reason to believe that amplification is not a threat in their
+      environment.
+   */
+   return true;
+}
+
 size_t Policy::maximum_handshake_message_size() const {
    return 65536;
 }
@@ -480,6 +511,20 @@ size_t Policy::maximum_certificate_chain_size() const {
 
 uint64_t Policy::minimum_key_update_interval_ms() const {
    return 1000;
+}
+
+uint64_t Policy::records_per_traffic_key() const {
+   /* RFC 8446 Section 5.5
+   *   For AES-GCM, up to 2^24.5 full-size records (about 24 million) may be encrypted on
+   *   a given connection while keeping a safety margin of approximately 2^-57 for
+   *   Authenticated Encryption (AE) security.
+   *
+   * However RFC 9001 (QUIC) Section 6.6
+   *    For [GCM suites], the confidentiality limit is 2^23 encrypted packets [...]
+   *
+   * Here we take the lower value as the default.
+   */
+   return uint64_t(1) << 23;
 }
 
 size_t Policy::maximum_session_tickets_per_connection() const {
@@ -495,9 +540,32 @@ size_t Policy::dtls_maximum_timeout() const {
    return 60 * 1000;
 }
 
+// Generous next to the one or two a legitimate cookie-secret rotation can
+// produce, while still bounding a forged stream.
+std::optional<size_t> Policy::dtls_maximum_hello_verify_requests() const {
+   return 4;
+}
+
+std::optional<size_t> Policy::dtls_maximum_retransmissions() const {
+   // Matches BoringSSL's DTLS1_MAX_TIMEOUTS.
+   //
+   // With the default schedule of a 1 second initial timeout and 60
+   // second maximum, this gives up after roughly 8 minutes
+   // (1+2+4+8+16+32+7*60 s).
+
+   return 12;
+}
+
 size_t Policy::dtls_default_mtu() const {
    // default MTU is IPv6 min MTU minus UDP/IP headers
    return 1280 - 40 - 8;
+}
+
+size_t Policy::dtls_maximum_queued_acknowledgements() const {
+   // Matches BoringSSL's DTLS_MAX_ACK_BUFFER.
+   // Considering any reasonable DTLS configuration, there should be plenty of
+   // leeway for the expected amount of exchanged handshake records.
+   return 32;
 }
 
 std::vector<uint16_t> Policy::srtp_profiles() const {
@@ -605,6 +673,23 @@ std::vector<uint16_t> Policy::ciphersuite_list(Protocol_Version version) const {
          continue;  // unsupported cipher
       }
 
+      // Our non EtM TLS-CBC decryption step still has a residual Lucky13 timing
+      // channel. The leak is minor but for DTLS, which allows repeated
+      // observations, that is likely more than enough to allow plaintext
+      // recovery. Refuse CBC suites in DTLS.
+      if(version.is_datagram_protocol() && suite.cbc_ciphersuite()) {
+         continue;
+      }
+
+      // In DTLS, prohibit any potentially brute-forceable MACs
+      //
+      // DTLS allows repeated attempts without a connection teardown, and we
+      // don't currently offer any facility for an application to respond to
+      // a flood of invalid packets.
+      if(version.is_datagram_protocol() && suite.uses_short_authentication_tag()) {
+         continue;
+      }
+
       // these checks are irrelevant for TLS 1.3
       // TODO: consider making a method for this logic
       if(version.is_pre_tls_13()) {
@@ -687,6 +772,17 @@ void print_vec(std::ostream& o, const char* key, const std::vector<Certificate_T
    o << '\n';
 }
 
+void print_vec(std::ostream& o, const char* key, const std::vector<Signature_Scheme>& schemes) {
+   o << key << " = ";
+   for(size_t i = 0; i != schemes.size(); ++i) {
+      o << schemes[i].to_string();
+      if(i != schemes.size() - 1) {
+         o << ' ';
+      }
+   }
+   o << '\n';
+}
+
 void print_bool(std::ostream& o, const char* key, bool b) {
    o << key << " = " << (b ? "true" : "false") << '\n';
 }
@@ -702,6 +798,8 @@ void Policy::print(std::ostream& o) const {
    print_vec(o, "macs", allowed_macs());
    print_vec(o, "signature_hashes", allowed_signature_hashes());
    print_vec(o, "signature_methods", allowed_signature_methods());
+   print_vec(o, "signature_schemes", allowed_signature_schemes());
+   print_vec(o, "acceptable_signature_schemes", acceptable_signature_schemes());
    print_vec(o, "key_exchange_methods", allowed_key_exchange_methods());
    print_vec(o, "key_exchange_groups", key_exchange_groups());
    const auto groups_to_offer = key_exchange_groups_to_offer();

@@ -69,6 +69,12 @@ class BOTAN_PUBLIC_API(2, 0) Policy /* NOLINT(*-special-member-functions) */ {
       */
       virtual std::vector<std::string> allowed_signature_methods() const;
 
+      /**
+      * Returns a list of signature schemes we are willing to use, in order of
+      * preference. By default, this list contains all supported schemes that
+      * comply with the outputs of allowed_signature_methods() and
+      * allowed_signature_hashes().
+      */
       virtual std::vector<Signature_Scheme> allowed_signature_schemes() const;
 
       /**
@@ -256,6 +262,11 @@ class BOTAN_PUBLIC_API(2, 0) Policy /* NOLINT(*-special-member-functions) */ {
       * Allow DTLS v1.2
       */
       virtual bool allow_dtls12() const;
+
+      /**
+      * Allow DTLS v1.3
+      */
+      virtual bool allow_dtls13() const;
 
       /**
       * For ephemeral Diffie-Hellman key exchange, the server sends a group
@@ -467,6 +478,25 @@ class BOTAN_PUBLIC_API(2, 0) Policy /* NOLINT(*-special-member-functions) */ {
       virtual std::optional<uint16_t> record_size_limit() const;
 
       /**
+       * Defines the number of padding octets added to a protected TLS 1.3
+       * record that contains @p plaintext_bytes of plaintext. The plaintext
+       * size is counted like the record size limit, i.e. per RFC 8449 4.:
+       * "The value includes the content type and padding added in TLS 1.3
+       * (that is, the complete length of TLSInnerPlaintext)."
+       *
+       * This may be used to reduce the amount of information leaked by the
+       * length of TLS records.
+       *
+       * Padding that would grow a record beyond the negotiated record size
+       * limit is truncated to reach exactly that limit.
+       *
+       * @note This feature is available in TLS 1.3 only (see RFC 9846 5.4).
+       *
+       * Default: 0 (records are not padded)
+       */
+      virtual size_t record_padding_bytes(size_t plaintext_bytes) const;
+
+      /**
       * Indicates whether certificate status messages should be supported
       */
       virtual bool support_cert_status_message() const;
@@ -513,6 +543,31 @@ class BOTAN_PUBLIC_API(2, 0) Policy /* NOLINT(*-special-member-functions) */ {
       virtual bool allow_dtls_epoch0_restart() const;
 
       /**
+      * DTLS defines an cookie exchange protocol which is used to ensure routability on
+      * the path between the server and client. This is especially useful when using a
+      * connectionless datagram layer like UDP, where a client's source address can
+      * easily be spoofed.
+      *
+      * This cookie exchange prevents abusing the server for DoS amplification attacks,
+      * and additionally provides assurance for the server that the client's purported
+      * address is theirs, which can be helpful for attribution/logging purposes.
+      *
+      * The server creates cookies by hashing the original client hello and the peer's
+      * source address along with a secret key. The cookie value is then sent back to
+      * the client address. The client can then retry the connection, with their updated
+      * client hello including the cookie value. So this cookie exchange implies one
+      * extra round trip during the handshake.
+      *
+      * By default this function returns true. If this function returns true then the
+      * DTLS session cookie `Credentials_Manager::dtls_cookie_secret` must be set, and
+      * `TLS::Callbacks::tls_peer_network_identity` must return a non-empty string.
+      *
+      * It is unsafe to disable this cookie exchange if the server is exposed to
+      * arbitrary Internet traffic.
+      */
+      virtual bool dtls_server_require_cookie_exchange() const;
+
+      /**
       * Return allowed ciphersuites, in order of preference for the provided
       * protocol version.
       *
@@ -537,6 +592,47 @@ class BOTAN_PUBLIC_API(2, 0) Policy /* NOLINT(*-special-member-functions) */ {
       virtual size_t dtls_maximum_timeout() const;
 
       /**
+      * @return the maximum number of times a DTLS handshake flight will be
+      * retransmitted on timeouts before the handshake is abandoned. After this
+      * many timer-driven retransmissions without progress, timeout_check()
+      * throws to signal the handshake has failed. Return nullopt to retransmit
+      * indefinitely (the historical behavior).
+      *
+      * RFC 6347 4.2.4.1 gives the retransmission timer schedule but states no
+      * condition for giving up, so this bound is local policy rather than a
+      * protocol requirement.
+      */
+      virtual std::optional<size_t> dtls_maximum_retransmissions() const;
+
+      /**
+      * @return the number of HelloVerifyRequest messages a DTLS client will act
+      * on within one handshake before abandoning it. Return nullopt to accept
+      * them without limit; return 0 to reject any cookie exchange.
+      *
+      * RFC 6347 4.2.1 requires more than one to be tolerated: "This may result
+      * in clients receiving multiple HelloVerifyRequest messages with different
+      * cookies. Clients SHOULD handle this by sending a new ClientHello with a
+      * cookie in response to the new HelloVerifyRequest." A HelloVerifyRequest
+      * is unauthenticated and carries no retransmission state of its own, so
+      * without a bound a forged stream of them makes a client re-send its
+      * ClientHello indefinitely.
+      */
+      virtual std::optional<size_t> dtls_maximum_hello_verify_requests() const;
+
+      /**
+       * @return the maximum number of queued DTLS record acknowledgements.
+       *
+       * Dropping ACKs won't cause a connection to fail, but may result in
+       * spurious retransmissions. This is used to cap the amount of consumed
+       * memory for the stored ACK information.
+       *
+       * Default: 32
+       *
+       * @note Only applies for DTLS 1.3 associations.
+       */
+      virtual size_t dtls_maximum_queued_acknowledgements() const;
+
+      /**
       * @return the maximum size of a single handshake message, in bytes.
       * Messages larger than this will be rejected prior to processing.
       * Return 0 to disable this and accept any size.
@@ -553,10 +649,20 @@ class BOTAN_PUBLIC_API(2, 0) Policy /* NOLINT(*-special-member-functions) */ {
       * @return the minimum number of milliseconds that must elapse between
       * two received KeyUpdate messages. If a KeyUpdate arrives sooner than
       * this interval after the previous one, the connection is terminated.
-      * Return 0 to disable rate limiting.
+      * A KeyUpdate reciprocating one we sent with "update_requested" is
+      * not counted. Return 0 to disable rate limiting.
       * @note Only applies to TLS 1.3 connections.
       */
       virtual uint64_t minimum_key_update_interval_ms() const;
+
+      /**
+      * @return the maximum number of records to encrypt with a single traffic
+      * key before the channel initiates a KeyUpdate on its own. Such automatic
+      * KeyUpdates request a reciprocal key update from the peer. Return 0 to
+      * disable automatic key updates.
+      * @note Only applies to TLS 1.3 connections.
+      */
+      virtual uint64_t records_per_traffic_key() const;
 
       /**
       * @return the maximum number of NewSessionTicket messages to accept
@@ -758,6 +864,8 @@ class BOTAN_PUBLIC_API(2, 0) Datagram_Policy : public Policy {
       bool allow_tls13() const override { return false; }
 
       bool allow_dtls12() const override { return true; }
+
+      bool allow_dtls13() const override { return true; }
 };
 
 /*
@@ -792,6 +900,10 @@ class BOTAN_PUBLIC_API(2, 0) Text_Policy : public Policy {
 
       std::vector<std::string> allowed_signature_methods() const override;
 
+      std::vector<Signature_Scheme> allowed_signature_schemes() const override;
+
+      std::vector<Signature_Scheme> acceptable_signature_schemes() const override;
+
       std::vector<Group_Params> key_exchange_groups() const override;
 
       std::vector<Group_Params> key_exchange_groups_to_offer() const override;
@@ -803,6 +915,8 @@ class BOTAN_PUBLIC_API(2, 0) Text_Policy : public Policy {
       bool allow_tls13() const override;
 
       bool allow_dtls12() const override;
+
+      bool allow_dtls13() const override;
 
       bool allow_insecure_renegotiation() const override;
 
@@ -818,6 +932,8 @@ class BOTAN_PUBLIC_API(2, 0) Text_Policy : public Policy {
       bool require_extended_master_secret() const override;
 
       std::optional<uint16_t> record_size_limit() const override;
+
+      size_t record_padding_bytes(size_t plaintext_bytes) const override;
 
       bool support_cert_status_message() const override;
 
@@ -842,6 +958,10 @@ class BOTAN_PUBLIC_API(2, 0) Text_Policy : public Policy {
 
       size_t dtls_maximum_timeout() const override;
 
+      std::optional<size_t> dtls_maximum_hello_verify_requests() const override;
+
+      size_t dtls_maximum_queued_acknowledgements() const override;
+
       bool require_cert_revocation_info() const override;
 
       bool hide_unknown_users() const override;
@@ -853,6 +973,8 @@ class BOTAN_PUBLIC_API(2, 0) Text_Policy : public Policy {
       bool reuse_session_tickets() const override;
 
       size_t new_session_tickets_upon_handshake_success() const override;
+
+      uint64_t records_per_traffic_key() const override;
 
       bool tls_13_middlebox_compatibility_mode() const override;
 
@@ -871,6 +993,7 @@ class BOTAN_PUBLIC_API(2, 0) Text_Policy : public Policy {
 
       std::vector<Group_Params> read_group_list(std::string_view group_str) const;
       std::vector<Certificate_Type> read_cert_type_list(const std::string& cert_type_str) const;
+      std::vector<Signature_Scheme> read_sig_scheme_list(std::string_view sig_scheme_str) const;
 
       size_t get_len(const std::string& key, size_t def) const;
 

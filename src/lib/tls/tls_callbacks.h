@@ -19,6 +19,7 @@
 #include <botan/tls_algos.h>
 #include <botan/tls_magic.h>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <variant>
@@ -638,14 +639,16 @@ class BOTAN_PUBLIC_API(2, 0) Callbacks /* NOLINT(*-special-member-functions) */ 
       virtual std::optional<OCSP::Response> tls_parse_ocsp_response(const std::vector<uint8_t>& raw_response);
 
       /**
-       * Optional callback: return peer network identity
+       * Callback: return peer network identity
        *
        * There is no expected or specified format. The only expectation is this
        * function will return a unique value. For example returning the peer
        * host IP and port.
        *
-       * This is used to bind the DTLS cookie to a particular network identity.
-       * It is only called if the dtls-cookie-secret PSK is also defined.
+       * This is used to bind the DTLS cookie to a particular network identity
+       * (RFC 6347 4.2.1 / RFC 9147 11: "the cookie MUST depend on the client's
+       * address"). DTLS servers MUST override this to return a non-empty value;
+       * the default empty implementation will cause cookie verification to throw.
        */
       virtual std::string tls_peer_network_identity();
 
@@ -661,6 +664,54 @@ class BOTAN_PUBLIC_API(2, 0) Callbacks /* NOLINT(*-special-member-functions) */ 
        * TODO(Botan4) change return type to uint64_t
        */
       virtual std::chrono::system_clock::time_point tls_current_timestamp();
+
+      /**
+       * Optional callback: provide the current monotonic timer in milliseconds.
+       *
+       * Used internally by DTLS for retransmit timer scheduling. The default
+       * implementation reads std::chrono::steady_clock. Override only to
+       * substitute a deterministic / virtual clock for testing; production
+       * code should not need to.
+       */
+      virtual uint64_t tls_current_monotonic_clock_ms();
+
+      /**
+       * Optional callback: Channel registers a deferred operation to be
+       * invoked by the user exactly once after a given delay.
+       *
+       * @note The TLS implementation is not re-entrant. The @p op must be
+       *       invoked in a thread-safe manner when no other thread is
+       *       concurrently interacting with the respective instance of the
+       *       TLS channel.
+       *
+       * @note Invoking @p op might throw an exception. Typically this indicates
+       *       that the maximum number of retransmission attempts has been
+       *       reached (see also Policy::dtls_maximum_retransmissions()) and the
+       *       association is being abandoned.
+       *
+       * @note During an invocation of @p op the DTLS implementation might call
+       *       tls_register_deferred_operation() again to schedule another
+       *       operation. This must be supported by the user implementation.
+       *
+       * By default, this callback does nothing. If the downstream application
+       * chooses not to override and implement this callback, it has to
+       * independently invoke Channel::timeout_check() regularly whenever a DTLS
+       * handshake is in progress. In contrast, if the downstream application
+       * implements this callback, it must never invoke Channel::timeout_check()
+       * directly!
+       *
+       * TODO(Botan4): Change the default to throw an exception to force users
+       *               of DTLS to implement this callback and remove the public
+       *               ::timeout_check() and ::next_retransmission_timeout()
+       *               mechanisms from the Channel.
+       *
+       * @param monotonic_delay_ms the delay in milliseconds with respect to
+       *                           tls_current_monotonic_clock_ms() after which
+       *                           the operation @p op should be invoked
+       * @param op                 the operation to be executed by the user
+       *                           after the delay @p monotonic_delay_ms
+       */
+      virtual void tls_register_deferred_operation(uint64_t monotonic_delay_ms, std::function<void()> op);
 
       /**
        * Optional callback: error logging. (not currently called)

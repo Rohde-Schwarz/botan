@@ -14,26 +14,39 @@
 #include <botan/tls_extensions_13.h>
 #include <botan/tls_policy.h>
 #include <botan/x509cert.h>
+#include <botan/internal/ct_utils.h>
 #include <botan/internal/loadstor.h>
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_cipher_state.h>
+#include <botan/internal/tls_dtls_channel_companion.h>
 
 namespace Botan::TLS {
 
-Server_Impl_13::Server_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
-                               const std::shared_ptr<Session_Manager>& session_manager,
-                               const std::shared_ptr<Credentials_Manager>& credentials_manager,
-                               const std::shared_ptr<const Policy>& policy,
-                               const std::shared_ptr<RandomNumberGenerator>& rng) :
-      Channel_Impl_13(callbacks, session_manager, credentials_manager, rng, policy, true /* is_server */),
-      m_handshake(std::make_unique<Pending_Handshake>()) {
+std::shared_ptr<Server_Impl_13> Server_Impl_13::create(const std::shared_ptr<Callbacks>& callbacks,
+                                                       const std::shared_ptr<Session_Manager>& session_manager,
+                                                       const std::shared_ptr<Credentials_Manager>& credentials_manager,
+                                                       const std::shared_ptr<const Policy>& policy,
+                                                       const std::shared_ptr<RandomNumberGenerator>& rng,
+                                                       TLS_Flavor flavor) {
+   auto self =
+      std::make_shared<Server_Impl_13>(Private{}, callbacks, session_manager, credentials_manager, policy, rng, flavor);
+
 #if defined(BOTAN_HAS_TLS_12)
-   if(policy->allow_tls12()) {
-      expect_downgrade({}, {});
+   if((flavor == TLS_Flavor::TLS) ? policy->allow_tls12() : policy->allow_dtls12()) {
+      self->expect_downgrade({}, {});
    }
 #endif
 
-   m_handshake->transitions.set_expected_next(Handshake_Type::ClientHello);
+   if(!self->expects_downgrade()) {
+      // If we don't expect to downgrade, we can already enable all DTLS-only
+      // features (e.g. record ACKing), because we know that we won't ever
+      // talk to a legacy peer and succeed a handshake.
+      self->m_dtls_channel_companion->notify_protocol_version_committed();
+   }
+
+   self->m_handshake->transitions.set_expected_next(Handshake_Type::ClientHello);
+
+   return self;
 }
 
 std::string Server_Impl_13::application_protocol() const {
@@ -210,6 +223,8 @@ void Server_Impl_13::maybe_log_secret(std::string_view label, std::span<const ui
    }
 }
 
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+
 void Server_Impl_13::downgrade() {
    BOTAN_ASSERT_NOMSG(expects_downgrade());
 
@@ -220,15 +235,26 @@ void Server_Impl_13::downgrade() {
    m_handshake->transitions.set_expected_next({});
 }
 
-void Server_Impl_13::maybe_handle_compatibility_mode() {
-   BOTAN_ASSERT_NOMSG(m_handshake->state.has_client_hello());
-   BOTAN_ASSERT_NOMSG(m_handshake->state.has_hello_retry_request() || m_handshake->state.has_server_hello());
+#endif
 
-   // RFC 8446 Appendix D.4  (Middlebox Compatibility Mode)
-   //    The server sends a dummy change_cipher_spec record immediately after
-   //    its first handshake message. This may either be after a ServerHello or
-   //    a HelloRetryRequest.
+void Server_Impl_13::maybe_handle_compatibility_mode(Compat_Mode_Situation situation) {
+   // RFC 9147 Section 5
+   //    DTLS implementations do not use the TLS 1.3 "compatibility mode" [...].
+   if(is_datagram()) {
+      return;
+   }
+
+   // RFC 9846 E.4
+   //    This "compatibility mode" is partially negotiated: the client can opt
+   //    to provide a session ID or not, [...].
    //
+   // I.e., before we received a ClientHello, we cannot know whether the client
+   // requested middlebox compatibility mode or not.
+   if(m_handshake == nullptr || !m_handshake->state.has_client_hello()) {
+      return;
+   }
+
+   // RFC 9846 E.4
    //    This "compatibility mode" is partially negotiated: the client can opt
    //    to provide a session ID or not, and the server has to echo it. Either
    //    side can send change_cipher_spec at any time during the handshake, as
@@ -240,17 +266,34 @@ void Server_Impl_13::maybe_handle_compatibility_mode() {
    // sending a non-empty session ID. Nevertheless, when the policy requests
    // it we send a CCS regardless. Note that this is perfectly legal and also
    // satisfies some BoGo tests that expect this behaviour.
-   //
-   // Send a CCS immediately after the _first_ handshake message. I.e. either
-   // after Hello Retry Request (exclusively) or after a Server Hello that was
-   // not preseded by a Hello Retry Request.
-   const bool just_after_first_handshake_message =
-      m_handshake->state.has_hello_retry_request() ^ m_handshake->state.has_server_hello();
    const bool client_requested_compatibility_mode = !m_handshake->state.client_hello().session_id().empty();
+   if(!policy().tls_13_middlebox_compatibility_mode() && !client_requested_compatibility_mode) {
+      return;
+   }
 
-   if(just_after_first_handshake_message &&
-      (policy().tls_13_middlebox_compatibility_mode() || client_requested_compatibility_mode)) {
-      send_dummy_change_cipher_spec();
+   switch(situation) {
+      case Compat_Mode_Situation::AfterSendingFirstServerHello:
+      case Compat_Mode_Situation::AfterSendingHelloRetryRequest:
+         // RFC 9846 E.4
+         //    The server sends a dummy change_cipher_spec record immediately after
+         //    its first handshake message. This may either be after a ServerHello or
+         //    a HelloRetryRequest.
+         send_dummy_change_cipher_spec();
+         break;
+
+      case Compat_Mode_Situation::BeforeSendingAlert:
+         // RFC 9846 E.4
+         //    The server sends a dummy change_cipher_spec record immediately after
+         //    its first handshake message.
+         //
+         // The server cannot send an encrypted alert message as its first
+         // message. Hence, it won't ever need a dummy CCS before an alert.
+         break;
+
+      case Compat_Mode_Situation::AfterSendingFirstClientHello:
+      case Compat_Mode_Situation::BeforeSendingSecondClientHello:
+      case Compat_Mode_Situation::BeforeSendingEncryptedClientFlight:
+         BOTAN_ASSERT_UNREACHABLE();  // These situations occur on the client side.
    }
 }
 
@@ -263,7 +306,8 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
    const auto cipher_opt = Ciphersuite::by_id(server_hello.ciphersuite());
    BOTAN_ASSERT_NOMSG(cipher_opt.has_value());
    const auto& cipher = cipher_opt.value();
-   m_transcript_hash.set_algorithm(cipher.prf_algo());
+   BOTAN_ASSERT_NONNULL(m_transcript_hash);
+   m_transcript_hash->set_algorithm(cipher.prf_algo());
 
    std::unique_ptr<Cipher_State> psk_cipher_state;
    if(uses_psk) {
@@ -275,14 +319,15 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
                        return Cipher_State::init_with_psk(Connection_Side::Server,
                                                           Cipher_State::PSK_Type::Resumption,
                                                           m_handshake->resumed_session->extract_master_secret(),
-                                                          cipher.prf_algo());
+                                                          cipher.prf_algo(),
+                                                          m_flavor);
                     },
                     [&, this](ExternalPSK psk) {
                        m_handshake->psk_identity = psk.identity();
                        const auto psk_type =
                           psk.is_imported() ? Cipher_State::PSK_Type::Imported : Cipher_State::PSK_Type::External;
                        return Cipher_State::init_with_psk(
-                          Connection_Side::Server, psk_type, psk.extract_master_secret(), cipher.prf_algo());
+                          Connection_Side::Server, psk_type, psk.extract_master_secret(), cipher.prf_algo(), m_flavor);
                     }},
          psk_extension->take_session_to_resume_or_psk());
 
@@ -298,7 +343,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
       // Note: PSK selection was performed earlier, resulting in the existence
       //       of this extension in the first place.
       if(!exts.get<PSK>()->validate_binder(*psk_extension,
-                                           psk_cipher_state->psk_binder_mac(m_transcript_hash.truncated()))) {
+                                           psk_cipher_state->psk_binder_mac(m_transcript_hash->truncated()))) {
          throw TLS_Exception(Alert::DecryptError, "PSK binder does not check out");
       }
 
@@ -320,7 +365,10 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
    //       references to the Server Hello will need to consult the handshake
    //       state object!
    send_handshake_message(m_handshake->state.sending(std::move(server_hello)));
-   maybe_handle_compatibility_mode();
+
+   if(!m_handshake->state.has_hello_retry_request()) {
+      maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingFirstServerHello);
+   }
 
    // Setup encryption for all the remaining handshake messages
    m_cipher_state = [&] {
@@ -330,14 +378,14 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
 
       if(uses_psk) {
          BOTAN_ASSERT_NONNULL(psk_cipher_state);
-         psk_cipher_state->advance_with_client_hello(m_transcript_hash.previous(), *this);
+         psk_cipher_state->advance_with_client_hello(m_transcript_hash->previous(), *this);
          psk_cipher_state->advance_with_server_hello(
-            cipher, my_keyshare->take_shared_secret(), m_transcript_hash.current(), *this);
+            cipher, my_keyshare->take_shared_secret(), m_transcript_hash->current(), *this);
 
          return std::move(psk_cipher_state);
       } else {
          return Cipher_State::init_with_server_hello(
-            m_side, my_keyshare->take_shared_secret(), cipher, m_transcript_hash.current(), *this);
+            m_side, my_keyshare->take_shared_secret(), cipher, m_transcript_hash->current(), *this, m_flavor);
       }
    }();
 
@@ -395,7 +443,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
          .add(m_handshake->state.sending(Certificate_Verify_13(m_handshake->state.server_certificate(),
                                                                client_hello.signature_schemes(),
                                                                client_hello.sni_hostname(),
-                                                               m_transcript_hash.current(),
+                                                               m_transcript_hash->current(),
                                                                Connection_Side::Server,
                                                                credentials_manager(),
                                                                policy(),
@@ -403,7 +451,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
                                                                rng())));
    }
 
-   flight.add(m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash.current())));
+   flight.add(m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash->current())));
 
    if(client_hello.extensions().has<Record_Size_Limit>() &&
       m_handshake->state.encrypted_extensions().extensions().has<Record_Size_Limit>()) {
@@ -429,7 +477,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
 
    flight.send();
 
-   m_cipher_state->advance_with_server_finished(m_transcript_hash.current(), *this);
+   m_cipher_state->advance_with_server_finished(m_transcript_hash->current(), *this);
 
    if(m_handshake->state.has_certificate_request()) {
       // RFC 8446 4.4.2
@@ -445,13 +493,16 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
 }
 
 void Server_Impl_13::handle_reply_to_client_hello(Hello_Retry_Request hello_retry_request) {
+   BOTAN_ASSERT_NONNULL(m_transcript_hash);
+
    auto cipher = Ciphersuite::by_id(hello_retry_request.ciphersuite());
    BOTAN_ASSERT_NOMSG(cipher.has_value());  // should work, since we chose that suite
 
    send_handshake_message(m_handshake->state.sending(std::move(hello_retry_request)));
-   maybe_handle_compatibility_mode();
+   maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingHelloRetryRequest);
 
-   m_transcript_hash = Transcript_Hash_State::recreate_after_hello_retry_request(cipher->prf_algo(), m_transcript_hash);
+   m_transcript_hash =
+      Transcript_Hash_State::recreate_after_hello_retry_request(cipher->prf_algo(), *m_transcript_hash);
 
    m_handshake->transitions.set_expected_next(Handshake_Type::ClientHello);
 }
@@ -467,6 +518,10 @@ void Server_Impl_13::handle(const Client_Hello_12_Shim& ch) {
       throw TLS_Exception(Alert::UnexpectedMessage, "Received a TLS 1.2 Client Hello after Hello Retry Request");
    }
 
+#if !defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+   throw TLS_Exception(Alert::ProtocolVersion, "Received an unsupported Client Hello");
+#else
+
    // RFC 8446 Appendix D.2
    //    If the "supported_versions" extension is absent and the server only
    //    supports versions greater than ClientHello.legacy_version, the server
@@ -478,6 +533,7 @@ void Server_Impl_13::handle(const Client_Hello_12_Shim& ch) {
    }
 
    downgrade();
+#endif
 }
 
 void Server_Impl_13::handle(const Client_Hello_13& client_hello) {
@@ -486,6 +542,17 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello) {
    const auto& exts = client_hello.extensions();
 
    const bool is_initial_client_hello = !m_handshake->state.has_hello_retry_request();
+
+   // We received a TLS 1.3 ClientHello. Now, we can be sure that our peer uses
+   // TLS 1.3. We don't have to explicitly clear our resend buffer like on the
+   // client side, because the server never sends any flights before commiting
+   // the protocol version anyway.
+   //
+   // We do however clear our outstanding ACKs, because the ClientHello is the
+   // only message in the flight; by definition it is the "final" message of
+   // this flight.
+   m_dtls_channel_companion->notify_protocol_version_committed();
+   m_dtls_channel_companion->clear_outstanding_acknowledgements();
 
    if(is_initial_client_hello) {
       const auto preferred_version = client_hello.highest_supported_version(policy());
@@ -515,13 +582,51 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello) {
    BOTAN_ASSERT_NOMSG(exts.has<Key_Share>());
 
    if(!is_initial_client_hello) {
+      // RFC 9846 4.2.2
+      //    The client will also send a ClientHello when the server has
+      //    responded to its ClientHello with a HelloRetryRequest. In that case,
+      //    the client MUST send the same ClientHello without modification,
+      //    except as follows: ...
       const auto& hrr_exts = m_handshake->state.hello_retry_request().extensions();
       const auto offered_groups = exts.get<Key_Share>()->offered_groups();
       const auto* hrr_key_share = hrr_exts.get<Key_Share>();
-      BOTAN_ASSERT_NONNULL(hrr_key_share);
-      const auto selected_group = hrr_key_share->selected_group();
-      if(offered_groups.size() != 1 || offered_groups.at(0) != selected_group) {
-         throw TLS_Exception(Alert::IllegalParameter, "Client did not comply with the requested key exchange group");
+
+      // RFC 9846 4.2.2
+      //    ... If a "key_share" extension was supplied in the HelloRetryRequest,
+      //    replacing the list of shares with a list containing a single
+      //    KeyShareEntry from the indicated group.
+      if(hrr_key_share != nullptr) {
+         const auto selected_group = hrr_key_share->selected_group();
+         if(offered_groups.size() != 1 || offered_groups.at(0) != selected_group) {
+            throw TLS_Exception(Alert::IllegalParameter, "Client did not comply with the requested key exchange group");
+         }
+      }
+
+      const auto* ch_cookie = exts.get<Cookie>();
+      const auto* hrr_cookie = hrr_exts.get<Cookie>();
+
+      // RFC 9846 4.2.2
+      //    ... Including a "cookie" extension if one was provided in the
+      //    HelloRetryRequest.
+      if(hrr_cookie == nullptr && ch_cookie != nullptr) {
+         throw TLS_Exception(Alert::IllegalParameter,
+                             "Received a Cookie in a second ClientHello, but we did not send one in HelloRetryRequest");
+      }
+
+      // RFC 9846 4.3.2
+      //    When sending the new ClientHello, the client MUST copy the contents
+      //    of the extension received in the HelloRetryRequest into a "cookie"
+      //    extension in the new ClientHello.
+      if(hrr_cookie != nullptr) {
+         if(ch_cookie == nullptr) {
+            throw TLS_Exception(Alert::IllegalParameter,
+                                "Received a second ClientHello without a Cookie, but we sent one in HelloRetryRequest");
+         }
+
+         if(!CT::is_equal<uint8_t>(hrr_cookie->get_cookie(), ch_cookie->get_cookie()).as_bool()) {
+            throw TLS_Exception(Alert::IllegalParameter,
+                                "The second ClientHello did not contain the matching cookie from HelloRetryRequest");
+         }
       }
    }
 
@@ -533,7 +638,8 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello) {
                                       credentials_manager(),
                                       rng(),
                                       policy(),
-                                      callbacks()));
+                                      callbacks(),
+                                      m_flavor));
 }
 
 void Server_Impl_13::handle(const Certificate_13& certificate_msg) {
@@ -592,6 +698,7 @@ void Server_Impl_13::handle(const Certificate_13& certificate_msg) {
 
 void Server_Impl_13::handle(const Certificate_Verify_13& certificate_verify_msg) {
    BOTAN_ASSERT_NONNULL(m_handshake);
+   BOTAN_ASSERT_NONNULL(m_transcript_hash);
 
    // RFC 8446 4.4.3
    //    If sent by a client, the signature algorithm used in the signature
@@ -608,7 +715,7 @@ void Server_Impl_13::handle(const Certificate_Verify_13& certificate_verify_msg)
    BOTAN_ASSERT_NOMSG(m_handshake->state.has_client_certificate_msg() &&
                       !m_handshake->state.client_certificate().empty());
    const bool sig_valid = certificate_verify_msg.verify(
-      *m_handshake->state.client_certificate().public_key(), callbacks(), m_transcript_hash.previous());
+      *m_handshake->state.client_certificate().public_key(), callbacks(), m_transcript_hash->previous());
 
    // RFC 8446 4.4.3
    //   If the verification fails, the receiver MUST terminate the handshake
@@ -622,12 +729,13 @@ void Server_Impl_13::handle(const Certificate_Verify_13& certificate_verify_msg)
 
 void Server_Impl_13::handle(const Finished_13& finished_msg) {
    BOTAN_ASSERT_NONNULL(m_handshake);
+   BOTAN_ASSERT_NONNULL(m_transcript_hash);
 
    // RFC 8446 4.4.4
    //    Recipients of Finished messages MUST verify that the contents are
    //    correct and if incorrect MUST terminate the connection with a
    //    "decrypt_error" alert.
-   if(!finished_msg.verify(m_cipher_state.get(), m_transcript_hash.previous())) {
+   if(!finished_msg.verify(m_cipher_state.get(), m_transcript_hash->previous())) {
       throw TLS_Exception(Alert::DecryptError, "Finished message didn't verify");
    }
 
@@ -645,7 +753,17 @@ void Server_Impl_13::handle(const Finished_13& finished_msg) {
                       Server_Information(m_handshake->state.client_hello().sni_hostname()),
                       callbacks().tls_current_timestamp()));
 
-   m_cipher_state->advance_with_client_finished(m_transcript_hash.current());
+   m_cipher_state->advance_with_client_finished(m_transcript_hash->current());
+
+   if(is_datagram()) {
+      // RFC 9147 5.7
+      //     When a handshake flight is sent without any expected response, as
+      //     is the case with the client's final flight [...], the flight must
+      //     be acknowledged with an ACK message.
+      //
+      // So here we always explicitly ack the Finished message.
+      send_acknowledgements();
+   }
 
    // no more handshake messages expected
    m_handshake->transitions.set_expected_next({});
@@ -688,7 +806,7 @@ void Server_Impl_13::handle(const Finished_13& finished_msg) {
    }
 
    m_handshake.reset();
-   m_transcript_hash = Transcript_Hash_State();
+   m_transcript_hash.reset();
    callbacks().tls_session_activated();
 
    if(new_session_ticket_supported()) {

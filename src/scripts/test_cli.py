@@ -12,7 +12,7 @@ import binascii
 import json
 import logging
 import multiprocessing
-import optparse # pylint: disable=deprecated-module
+import optparse  # pylint: disable=deprecated-module
 import os
 import platform
 import random
@@ -26,9 +26,9 @@ import tempfile
 import threading
 import time
 import traceback
-from multiprocessing.pool import ThreadPool
 from http.client import HTTPSConnection
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from multiprocessing.pool import ThreadPool
 
 # pylint: disable=global-statement,unused-argument
 
@@ -67,24 +67,6 @@ def setup_logging(options):
     lh.setFormatter(logging.Formatter('%(levelname) 7s: %(message)s'))
     logging.getLogger().addHandler(lh)
     logging.getLogger().setLevel(log_level)
-
-def port_for(service):
-    base_port = 47890
-
-    port_assignments = {
-        'tls_server': 0,
-        'tls_http_server': 1,
-        'tls_proxy': 2,
-        'tls_proxy_backend': 3,
-        'roughtime': 4,
-    }
-
-    if service in port_assignments:
-        return base_port + port_assignments.get(service)
-    else:
-        logging.warning("Unknown service '%s', update port_for function", service)
-        return base_port + random.randint(30, 100)
-
 
 class AsyncTestProcess:
     """
@@ -132,6 +114,26 @@ class AsyncTestProcess:
             await self._finalize()
             raise
 
+    async def _launch_server(self, cmd):
+        """Launch a server process and return the port it is listening on.
+
+        Servers are started on port zero, which lets the OS assign us some free
+        port. They report the port they actually bound at the end of the line
+        announcing that they are ready to accept connections.
+        """
+        await self._launch(cmd, b'Listening for new connections')
+
+        try:
+            line = await self._read_stdout_line()
+            match = re.search(r'(\d+)\s*$', line)
+            if match is None:
+                raise Exception(f"Failed to parse a port out of '{line.strip()}'")
+            return int(match.group(1))
+        except:
+            logging.error("%s did not report the port it is listening on", self._name)
+            await self._finalize()
+            raise
+
     async def _write_to_stdin(self, data):
         self._proc.stdin.write(data)
         await self._proc.stdin.drain()
@@ -152,6 +154,12 @@ class AsyncTestProcess:
         except asyncio.TimeoutError:
             logging.error("%s ran into a timeout before reporting back", self._name)
             raise
+
+    async def _read_stdout_line(self):
+        """Read a single line from the process' stdout."""
+        line = await asyncio.wait_for(self._proc.stdout.readline(), timeout=ASYNC_TIMEOUT)
+        self._stdout += line
+        return line.decode('utf-8')
 
     async def _close_stdin_read_stdout_to_eof_and_wait_for_termination(self): # pylint: disable=invalid-name
         """Gracefully signal the process to terminate by closing its stdin.
@@ -272,13 +280,12 @@ def test_cli(cmd, cmd_options,
         if expected_stderr is not None:
             logging.error('Expected output on stderr but got nothing', stack_info=True)
 
-    if expected_output is not None:
-        if stdout != expected_output:
-            logging.error("Got unexpected output running cmd %s %s", cmd, cmd_options, stack_info=True)
-            if len(stdout) != len(expected_output):
-                logging.info("Output lengths %d vs expected %d", len(stdout), len(expected_output))
-            logging.info("Got %s", stdout)
-            logging.info("Exp %s", expected_output)
+    if expected_output is not None and stdout != expected_output:
+        logging.error("Got unexpected output running cmd %s %s", cmd, cmd_options, stack_info=True)
+        if len(stdout) != len(expected_output):
+            logging.info("Output lengths %d vs expected %d", len(stdout), len(expected_output))
+        logging.info("Got %s", stdout)
+        logging.info("Exp %s", expected_output)
 
     return stdout
 
@@ -298,12 +305,12 @@ def cli_config_tests(_tmp_dir):
     if platform.system() == 'Windows':
         if len(prefix) < 4 or prefix[1] != ':' or prefix[2] != '\\':
             logging.error("Bad prefix %s", prefix)
-        if not ldflags.endswith(("-L%s\\lib" % (prefix))):
+        if not ldflags.endswith("-L%s\\lib" % (prefix)):
             logging.error("Bad ldflags %s", ldflags)
     else:
         if len(prefix) < 4 or prefix[0] != '/':
             logging.error("Bad prefix %s", prefix)
-        if not ldflags.endswith(("-L%s/lib" % (prefix))):
+        if not ldflags.endswith("-L%s/lib" % (prefix)):
             logging.error("Bad ldflags %s", ldflags)
     if ("-I%s/include/botan-3" % (prefix)) not in cflags and ("-I%s/include" % (prefix)) not in cflags:
         logging.error("Bad cflags %s", cflags)
@@ -328,6 +335,68 @@ def cli_version_tests(_tmp_dir):
     version_full_re = re.compile(r'Botan [0-9]\.[0-9]+\.[0-9](\-[a-z]+[0-9]+)?( UNSAFE .* BUILD)? \(.*\)$')
     if not version_full_re.match(output):
         logging.error("Unexpected long version output %s", output)
+
+class OCSPTestHandler(BaseHTTPRequestHandler):
+    response_body = b''
+
+    def log_message(self, _format, *_args): # pylint: disable=arguments-differ
+        return
+
+    def do_POST(self): # pylint: disable=invalid-name
+        content_length = int(self.headers.get('Content-Length', '0'))
+        self.rfile.read(content_length)
+        body = type(self).response_body
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/ocsp-response')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+def cli_ocsp_check_tests(tmp_dir):
+    global TESTS_RUN
+
+    if not run_socket_tests() or not check_for_command('ocsp_check'):
+        return
+
+    fixture_dir = os.path.join(TEST_DATA_DIR, 'x509', 'ocsp', 'cli')
+
+    def fixture(name):
+        with open(os.path.join(fixture_dir, name), "rb") as fixture_file:
+            return fixture_file.read()
+
+    issuer = os.path.join(fixture_dir, 'issuer.der')
+    subject = os.path.join(fixture_dir, 'subject.der')
+
+    # The subject.der test cert has a AIA pointing to 127.0.0.1:38493
+    server = HTTPServer(('127.0.0.1', 38493), OCSPTestHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    def run(response):
+        OCSPTestHandler.response_body = fixture(response)
+        return subprocess.run(
+            [CLI_PATH, 'ocsp_check', '--timeout=1000', subject, issuer],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False)
+
+    try:
+        TESTS_RUN += 2
+
+        unsigned = run('good-empty.der')
+        if unsigned.returncode != 1 or unsigned.stdout != 'OCSP check failed OCSP signature error\n' or unsigned.stderr:
+            logging.error("ocsp_check accepted an unsigned GOOD response: rc=%d stdout=%r stderr=%r",
+                          unsigned.returncode, unsigned.stdout, unsigned.stderr)
+
+        valid = run('good-issuer.der')
+        if valid.returncode != 0 or valid.stdout != 'OCSP check OK\n' or valid.stderr:
+            logging.error("ocsp_check rejected an issuer-authenticated GOOD response: rc=%d stdout=%r stderr=%r",
+                          valid.returncode, valid.stdout, valid.stderr)
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2)
 
 def cli_is_prime_tests(_tmp_dir):
     test_cli("is_prime", "5", "5 is probably prime")
@@ -529,9 +598,10 @@ mlLtJ5JvZ0/p6zP3x+Y9yPIrAR8L/acG5ItSrAKXzzuqQQZMv4aN
              "83:FC:67:87:30:C7:0C:9C:54:9A:E7:A1:FA:25:83:4C:77:A4:43:16:33:6D:47:3C:CE:4B:91:62:30:97:62:D4",
              open(pub_key, 'rb').read().decode())
 
+    # RFC 6979 deterministic signature, so it does not depend on the RNG
     valid_sig = "nI4mI1ec14Y7nYUWs2edysAVvkob0TWpmGh5rrYWDA+/W9Fj0ZM21qJw8qa3/avAOIVBO6hoMEVmfJYXlS+ReA=="
 
-    test_cli("sign", "%s %s" % (priv_key, pub_key), valid_sig)
+    test_cli("sign", "--deterministic %s %s" % (priv_key, pub_key), valid_sig)
 
     test_cli("verify", [pub_key, pub_key, '-'],
              "Signature is valid", valid_sig)
@@ -551,7 +621,7 @@ mlLtJ5JvZ0/p6zP3x+Y9yPIrAR8L/acG5ItSrAKXzzuqQQZMv4aN
 
     if cert_info.find('Subject: CN="CA",C="VT"') < 0:
         logging.error('Unexpected output for cert_info command %s', cert_info)
-    if cert_info.find('Subject keyid: 69DD911C9EEE3400C67CBC3F3056CBE711BD56AF9495013F') < 0:
+    if cert_info.find('Subject keyid: F4E2C7A1E26C971BEC4EE971363D8A28AD437F01') < 0:
         logging.error('Unexpected output for cert_info command %s', cert_info)
 
     test_cli("gen_pkcs10", "%s User --output=%s" % (priv_key, crt_req))
@@ -563,6 +633,64 @@ mlLtJ5JvZ0/p6zP3x+Y9yPIrAR8L/acG5ItSrAKXzzuqQQZMv4aN
 
     test_cli("cert_verify", user_cert,
              "Certificate did not validate - Certificate issuer not found")
+
+def cli_pk_sign_tests(tmp_dir):
+    # Ed25519 key from RFC 8032 section 7.1 "TEST 2"
+    ed25519_priv_pem = """-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIEzNCJso/5banbbDRuwRTg9bijGfNaumJNqM9u1PuKb7
+-----END PRIVATE KEY-----"""
+
+    ed25519_pub_pem = """-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAPUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=
+-----END PUBLIC KEY-----"""
+
+    priv_key = os.path.join(tmp_dir, 'ed25519.pem')
+    pub_key = os.path.join(tmp_dir, 'ed25519.pub')
+    msg = os.path.join(tmp_dir, 'msg')
+    sig = os.path.join(tmp_dir, 'sig')
+
+    with open(priv_key, 'w', encoding='utf8') as f:
+        f.write(ed25519_priv_pem)
+    with open(pub_key, 'w', encoding='utf8') as f:
+        f.write(ed25519_pub_pem)
+    with open(msg, 'wb') as f:
+        f.write(b'\x72')
+
+    # The signature from RFC 8032 for this key and message; verifies that the
+    # CLI produces standard (pure) Ed25519 signatures by default
+    rfc8032_sig = "kqAJqfDUyrhyDoILX2QlQKKye1QWUD+Ps3YiI+vbadoIWsHkPhWZbkWPNhPQ8R2MOHsurrQwKu6wDSkWErsMAA=="
+
+    test_cli("sign", [priv_key, msg], rfc8032_sig)
+    test_cli("verify", [pub_key, msg, '-'], "Signature is valid", rfc8032_sig)
+
+    # Ed25519ph is a distinct signature scheme
+    test_cli("sign", ["--prehash=default", priv_key, msg, "--output=%s" % (sig)], "")
+    test_cli("verify", ["--prehash=default", pub_key, msg, sig], "Signature is valid")
+    test_cli("verify", [pub_key, msg, sig], "Signature is invalid")
+
+    # ML-DSA takes no options at all
+    mldsa_priv = os.path.join(tmp_dir, 'mldsa.pem')
+    mldsa_pub = os.path.join(tmp_dir, 'mldsa.pub')
+    test_cli("keygen", ["--algo=ML-DSA", "--params=ML-DSA-4x4", "--output=%s" % (mldsa_priv)], "")
+    test_cli("pkcs8", "--pub-out --output=%s %s" % (mldsa_pub, mldsa_priv), "")
+    test_cli("sign", [mldsa_priv, msg, "--output=%s" % (sig)], "")
+    test_cli("verify", [mldsa_pub, msg, sig], "Signature is valid")
+    test_cli("sign", ["--deterministic", mldsa_priv, msg, "--output=%s" % (sig)], "")
+    test_cli("verify", [mldsa_pub, msg, sig], "Signature is valid")
+
+    # RSA defaults to PSS with SHA-256; other paddings and salt sizes can be selected
+    rsa_priv = os.path.join(tmp_dir, 'rsa.pem')
+    rsa_pub = os.path.join(tmp_dir, 'rsa.pub')
+    test_cli("keygen", ["--algo=RSA", "--params=2048", "--output=%s" % (rsa_priv)], "")
+    test_cli("pkcs8", "--pub-out --output=%s %s" % (rsa_pub, rsa_priv), "")
+    test_cli("sign", [rsa_priv, msg, "--output=%s" % (sig)], "")
+    test_cli("verify", [rsa_pub, msg, sig], "Signature is valid")
+    test_cli("verify", ["--padding=PSS", "--hash=SHA-256", rsa_pub, msg, sig], "Signature is valid")
+    test_cli("verify", ["--padding=PKCS1v15", rsa_pub, msg, sig], "Signature is invalid")
+    test_cli("sign", ["--padding=PKCS1v15", "--hash=SHA-512", rsa_priv, msg, "--output=%s" % (sig)], "")
+    test_cli("verify", ["--padding=PKCS1v15", "--hash=SHA-512", rsa_pub, msg, sig], "Signature is valid")
+    test_cli("sign", ["--padding=PSS", "--salt-size=0", "--deterministic", rsa_priv, msg, "--output=%s" % (sig)], "")
+    test_cli("verify", ["--padding=PSS", "--salt-size=0", rsa_pub, msg, sig], "Signature is valid")
 
 def cli_xmss_sign_tests(tmp_dir):
     if os.linesep != '\n':
@@ -712,10 +840,10 @@ def cli_rng_tests(_tmp_dir):
     hex_10 = re.compile('[A-F0-9]{20}')
 
     rngs = ['system', 'auto', 'entropy']
-    # execute ESDM tests only on Linux
 
+    # execute ESDM tests only if available
     if 'BOTAN_BUILD_WITH_ESDM' in os.environ:
-        rngs += ['esdm-full', 'esdm-pr']
+        rngs += ['esdm-full']
 
     for rng in rngs:
         output = test_cli("rng", ["10", '--%s' % (rng)], use_drbg=False)
@@ -767,15 +895,14 @@ def cli_roughtime_tests(tmp_dir):
     if not check_for_command("roughtime"):
         return
 
-    server_port = port_for('roughtime')
     chain_file = os.path.join(tmp_dir, 'roughtime-chain')
     ecosystem = os.path.join(tmp_dir, 'ecosystem')
 
-    def run_udp_server():
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        server_address = ('127.0.0.1', server_port)
-        sock.bind(server_address)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('127.0.0.1', 0))
+    server_port = sock.getsockname()[1]
 
+    def run_udp_server():
         while True:
             data, address = sock.recvfrom(4096)
 
@@ -1080,7 +1207,7 @@ def cli_timing_test_tests(_tmp_dir):
     output_re = re.compile('[0-9]+;[0-9];[0-9]+')
 
     for suite in timing_tests:
-        output = test_cli("timing_test", [suite, "--measurement-runs=16", "--warmup-runs=3", "--test-data-dir=%s" % TEST_DATA_DIR], None).split('\n')
+        output = test_cli("timing_test", [suite, "--measurement-runs=16", "--warmup-runs=3", "--test-data-dir=%s/timing" % TEST_DATA_DIR], None).split('\n')
 
         for line in output:
             if output_re.match(line) is None:
@@ -1182,9 +1309,9 @@ def cli_tls_socket_tests(tmp_dir):
     ]
 
     class TestServer(AsyncTestProcess):
-        def __init__(self, tmp_dir, port, psk, psk_identity, psk_prf, clients=0):
+        def __init__(self, tmp_dir, psk, psk_identity, psk_prf, clients=0):
             super().__init__("Server")
-            self.port = port
+            self.port = None
             self.psk = psk
             self.psk_identity = psk_identity
             self.psk_prf = psk_prf
@@ -1203,12 +1330,12 @@ def cli_tls_socket_tests(tmp_dir):
 
         async def __aenter__(self):
             server_cmd = [CLI_PATH, "tls_server", f"--max-clients={self.clients}",
-                          f"--port={self.port}", f"--policy={self.policy}",
+                          "--port=0", f"--policy={self.policy}",
                           f"--psk={self.psk}", f"--psk-identity={self.psk_identity}",
                           f"--psk-prf={self.psk_prf}",
                           self.cert_suite.cert, self.cert_suite.private_key]
 
-            await self._launch(server_cmd, b'Listening for new connections')
+            self.port = await self._launch_server(server_cmd)
 
             return self
 
@@ -1272,7 +1399,7 @@ def cli_tls_socket_tests(tmp_dir):
             await self._finalize()
 
     async def run_async_test():
-        async with TestServer(tmp_dir, port_for('tls_server'), psk, psk_identity, psk_prf, len(configs)) as server:
+        async with TestServer(tmp_dir, psk, psk_identity, psk_prf, len(configs)) as server:
             errors = 0
             for tls_config in configs:
                 logging.debug("Running test for %s in TLS %s mode", tls_config.name, tls_config.protocol_version)
@@ -1398,12 +1525,10 @@ def cli_tls_http_server_tests(tmp_dir):
     if not run_socket_tests() or not check_for_command("tls_http_server"):
         return
 
-    server_port = port_for('tls_http_server')
-
     class BotanHttpServer(AsyncTestProcess):
-        def __init__(self, tmp_dir, port, clients=0):
+        def __init__(self, tmp_dir, clients=0):
             super().__init__("HTTP Server")
-            self.port = port
+            self.port = None
             self.clients = clients
             self.cert_suite = ServerCertificateSuite(tmp_dir, "secp384r1", "SHA-384")
 
@@ -1412,10 +1537,10 @@ def cli_tls_http_server_tests(tmp_dir):
             return self.cert_suite.ca_cert
 
         async def __aenter__(self):
-            server_cmd = [CLI_PATH, 'tls_http_server', f'--port={self.port}', f'--max-clients={self.clients}',
+            server_cmd = [CLI_PATH, 'tls_http_server', '--port=0', f'--max-clients={self.clients}',
                           self.cert_suite.cert, self.cert_suite.private_key]
 
-            await self._launch(server_cmd, b'Listening for new connections')
+            self.port = await self._launch_server(server_cmd)
 
             return self
 
@@ -1423,13 +1548,13 @@ def cli_tls_http_server_tests(tmp_dir):
             await self._finalize()
 
     async def run_async_test():
-        async with BotanHttpServer(tmp_dir, server_port, 4) as tls_server:
+        async with BotanHttpServer(tmp_dir, 4) as tls_server:
             for tls_version in [ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3]:
                 context = ssl.create_default_context(cafile=tls_server.ca_cert)
                 context.minimum_version = tls_version
                 context.maximum_version = tls_version
 
-                conn = HTTPSConnection('localhost', port=server_port, context=context)
+                conn = HTTPSConnection('localhost', port=tls_server.port, context=context)
                 conn.request("GET", "/", headers={"Connection": "close"})
                 resp = conn.getresponse()
 
@@ -1453,17 +1578,15 @@ def cli_tls_proxy_tests(tmp_dir):
     if not run_socket_tests() or not check_for_command("tls_proxy"):
         return
 
-    server_port = port_for('tls_proxy_backend')
-    proxy_port = port_for('tls_proxy')
     max_clients = 4
 
     server_response = binascii.hexlify(os.urandom(32))
 
     class Proxy(AsyncTestProcess):
-        def __init__(self, tmp_dir, server_port, proxy_port, clients=0):
+        def __init__(self, tmp_dir, server_port, clients=0):
             super().__init__("Proxy")
             self.server_port = server_port
-            self.proxy_port = proxy_port
+            self.proxy_port = None
             self.clients = clients
 
             self.cert_suite = ServerCertificateSuite(tmp_dir, "secp384r1", "SHA-384")
@@ -1473,35 +1596,34 @@ def cli_tls_proxy_tests(tmp_dir):
             return self.cert_suite.ca_cert
 
         async def __aenter__(self):
-            proxy_cmd = [CLI_PATH, 'tls_proxy', str(proxy_port), '127.0.0.1', str(server_port),
+            proxy_cmd = [CLI_PATH, 'tls_proxy', '0', '127.0.0.1', str(self.server_port),
                          self.cert_suite.cert, self.cert_suite.private_key, f'--max-clients={self.clients}']
 
-            await self._launch(proxy_cmd, b'Listening for new connections')
+            self.proxy_port = await self._launch_server(proxy_cmd)
 
             return self
 
         async def __aexit__(self, *_):
             await self._finalize()
 
-    def run_http_server():
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, _fmt, *_args): # pylint: disable=arguments-differ
-                pass  # muzzle log output
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, _fmt, *_args): # pylint: disable=arguments-differ
+            pass  # muzzle log output
 
-            def do_GET(self): # pylint: disable=invalid-name
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(server_response)
+        def do_GET(self): # pylint: disable=invalid-name
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(server_response)
 
-        httpd = HTTPServer(('', server_port), Handler)
-        httpd.serve_forever()
+    httpd = HTTPServer(('', 0), Handler)
+    server_port = httpd.server_address[1]
 
-    http_thread = threading.Thread(target=run_http_server)
+    http_thread = threading.Thread(target=httpd.serve_forever)
     http_thread.daemon = True
     http_thread.start()
 
     async def run_async_test():
-        async with Proxy(tmp_dir, server_port, proxy_port, max_clients) as tls_proxy:
+        async with Proxy(tmp_dir, server_port, max_clients) as tls_proxy:
             context = ssl.create_default_context(cafile=tls_proxy.ca_cert)
             context.minimum_version = ssl.TLSVersion.TLSv1_3
             context.maximum_version = ssl.TLSVersion.TLSv1_3
@@ -1512,7 +1634,7 @@ def cli_tls_proxy_tests(tmp_dir):
                     context.minimum_version = ssl.TLSVersion.TLSv1_2
                     context.maximum_version = ssl.TLSVersion.TLSv1_2
 
-                conn = HTTPSConnection('localhost', port=proxy_port, context=context, timeout=20)
+                conn = HTTPSConnection('localhost', port=tls_proxy.proxy_port, context=context, timeout=20)
                 conn.request("GET", "/")
                 resp = conn.getresponse()
 
@@ -1609,6 +1731,143 @@ def cli_pk_encrypt_tests(tmp_dir):
     test_cli("pk_decrypt", [rsa_priv_key, ctext_file, "--output=%s" % (recovered_file)], "")
     test_cli("hash", ["--no-fsname", "--algo=SHA-256", recovered_file], rng_output_hash)
 
+def cli_pkcs12_tests(tmp_dir):
+    if not check_for_command("pkcs12_export") or not check_for_command("pkcs12_info"):
+        logging.info("Skipping PKCS#12 CLI tests: pkcs12_export/pkcs12_info not available")
+        return
+
+    priv_key  = os.path.join(tmp_dir, 'leaf.key')
+    cert_file = os.path.join(tmp_dir, 'leaf.crt')
+    pfx_file  = os.path.join(tmp_dir, 'leaf.pfx')
+    out_key   = os.path.join(tmp_dir, 'out.key')
+    out_cert  = os.path.join(tmp_dir, 'out.crt')
+
+    test_cli("keygen", ["--algo=ECDSA", "--params=secp256r1", "--output=" + priv_key], "")
+    test_cli("gen_self_signed", [priv_key, "PKCS12Test", "--output=" + cert_file], "")
+
+    # Basic export (default: PBES2-SHA256-AES256, SHA-256 MAC)
+    test_cli("pkcs12_export",
+             ["--pass=hunter2", "--output=" + pfx_file, priv_key, cert_file], "")
+
+    # pkcs12_info info-only (no output file args)
+    # Note: logging.error() is a hard failure in this harness (TestLogHandler increments TESTS_FAILED)
+    import_info = test_cli("pkcs12_info", ["--pass=hunter2", pfx_file], None)
+    if "ECDSA" not in import_info:
+        logging.error("pkcs12_info info missing key algorithm: %s", import_info)
+    if 'PKCS12Test' not in import_info:
+        logging.error("pkcs12_info info missing subject: %s", import_info)
+    # SHA-256 fingerprint should be in info output
+    if "SHA-256 Fingerprint" not in import_info:
+        logging.error("pkcs12_info info missing SHA-256 fingerprint: %s", import_info)
+
+    # pkcs12_info: extract key and cert to files
+    test_cli("pkcs12_info",
+             ["--pass=hunter2", "--key-out=" + out_key, "--cert-out=" + out_cert, pfx_file],
+             None)
+
+    if not os.path.exists(out_key):
+        logging.error("pkcs12_info did not write key file")
+    if not os.path.exists(out_cert):
+        logging.error("pkcs12_info did not write cert file")
+
+    # Roundtrip: cert extracted from PFX must match original (DER fingerprint comparison)
+    fp_orig = test_cli("cert_info", ["--fingerprint", cert_file], None)
+    fp_extr = test_cli("cert_info", ["--fingerprint", out_cert], None)
+    fp_prefix = "Fingerprint: "
+    orig_fp = next((line for line in fp_orig.splitlines() if line.startswith(fp_prefix)), None)
+    extr_fp = next((line for line in fp_extr.splitlines() if line.startswith(fp_prefix)), None)
+    if orig_fp is None or extr_fp is None:
+        logging.error("pkcs12 roundtrip: cert_info did not produce fingerprint")
+    elif orig_fp != extr_fp:
+        logging.error("pkcs12 roundtrip: certificate mismatch (orig=%s extr=%s)",
+                      orig_fp, extr_fp)
+
+    # Roundtrip: public key derived from extracted key must match original
+    pub_orig = os.path.join(tmp_dir, 'orig.pub')
+    pub_extr = os.path.join(tmp_dir, 'extr.pub')
+    test_cli("pkcs8", ["--pub-out", "--output=" + pub_orig, priv_key], "")
+    test_cli("pkcs8", ["--pub-out", "--output=" + pub_extr, out_key], "")
+    fp_orig = test_cli("fingerprint", ["--no-fsname", pub_orig], None)
+    fp_extr = test_cli("fingerprint", ["--no-fsname", pub_extr], None)
+    if fp_orig != fp_extr:
+        logging.error("pkcs12 roundtrip: key mismatch after import (orig=%s extr=%s)", fp_orig, fp_extr)
+
+    # Export with explicit legacy cipher for compatibility testing
+    pfx_legacy = os.path.join(tmp_dir, 'legacy.pfx')
+    test_cli("pkcs12_export",
+             ["--pass=hunter2", "--key-cipher=PBE-SHA1-3DES", "--mac-digest=SHA-1",
+              "--iterations=2048", "--output=" + pfx_legacy, priv_key, cert_file], "")
+    info_legacy = test_cli("pkcs12_info", ["--pass=hunter2", pfx_legacy], None)
+    if "ECDSA" not in info_legacy:
+        logging.error("pkcs12_info (legacy cipher) missing key algorithm: %s", info_legacy)
+
+    # Export with friendly name
+    pfx_named = os.path.join(tmp_dir, 'named.pfx')
+    test_cli("pkcs12_export",
+             ["--pass=hunter2", "--friendly-name=MioTest",
+              "--output=" + pfx_named, priv_key, cert_file], "")
+    info_named = test_cli("pkcs12_info", ["--pass=hunter2", pfx_named], None)
+    if "MioTest" not in info_named:
+        logging.error("pkcs12 friendly-name not preserved in info output: %s", info_named)
+
+    # Export with MAC SHA-256 explicitly
+    pfx_sha256mac = os.path.join(tmp_dir, 'sha256mac.pfx')
+    test_cli("pkcs12_export",
+             ["--pass=hunter2", "--mac-digest=SHA-256",
+              "--key-cipher=PBE-SHA1-3DES", "--iterations=2048",
+              "--output=" + pfx_sha256mac, priv_key, cert_file], "")
+    test_cli("pkcs12_info", ["--pass=hunter2", pfx_sha256mac], None)
+
+    # Export with cert cipher
+    pfx_certenc = os.path.join(tmp_dir, 'certenc.pfx')
+    test_cli("pkcs12_export",
+             ["--pass=hunter2", "--cert-cipher=PBE-SHA1-3DES",
+              "--key-cipher=PBE-SHA1-3DES", "--iterations=2048",
+              "--output=" + pfx_certenc, priv_key, cert_file], "")
+    test_cli("pkcs12_info", ["--pass=hunter2", pfx_certenc], None)
+
+    # Export with CA chain and test --chain-out
+    ca_key_file = os.path.join(tmp_dir, 'ca.key')
+    ca_cert_file = os.path.join(tmp_dir, 'ca.crt')
+    pfx_chain = os.path.join(tmp_dir, 'chain.pfx')
+    chain_out = os.path.join(tmp_dir, 'chain.pem')
+
+    test_cli("keygen", ["--algo=ECDSA", "--params=secp256r1", "--output=" + ca_key_file], "")
+    test_cli("gen_self_signed", [ca_key_file, "TestCA", "--output=" + ca_cert_file], "")
+
+    test_cli("pkcs12_export",
+             ["--pass=hunter2", "--key-cipher=PBE-SHA1-3DES", "--iterations=2048",
+              "--output=" + pfx_chain, priv_key, cert_file, ca_cert_file], "")
+    test_cli("pkcs12_info",
+             ["--pass=hunter2", "--chain-out=" + chain_out, pfx_chain], None)
+    if not os.path.exists(chain_out):
+        logging.error("pkcs12_info --chain-out did not produce a file")
+
+    # Export key with output password protection
+    out_key_enc = os.path.join(tmp_dir, 'out_enc.key')
+    test_cli("pkcs12_info",
+             ["--pass=hunter2",
+              "--key-out=" + out_key_enc,
+              "--out-key-pass=keypassword",
+              "--key-pbkdf-iter=2048",
+              pfx_file], None)
+    if not os.path.exists(out_key_enc):
+        logging.error("pkcs12_info --out-key-pass: key file not written")
+    else:
+        with open(out_key_enc, encoding='utf-8') as f:
+            key_pem = f.read()
+        if "ENCRYPTED" not in key_pem:
+            logging.error("pkcs12_info --out-key-pass: output key is not encrypted")
+
+    # Export with empty password and no MAC (key is still encrypted via PBE)
+    pfx_noenc = os.path.join(tmp_dir, 'noenc.pfx')
+    test_cli("pkcs12_export",
+             ["--pass=", "--no-mac", "--key-cipher=PBE-SHA1-3DES",
+              "--output=" + pfx_noenc, priv_key, cert_file], "")
+    info_noenc = test_cli("pkcs12_info", ["--pass=", pfx_noenc], None)
+    if "ECDSA" not in info_noenc:
+        logging.error("pkcs12_info (no-mac) missing key algorithm: %s", info_noenc)
+
 def cli_uuid_tests(_tmp_dir):
     test_cli("uuid", [], "D80F88F6-ADBE-45AC-B10C-3602E67D985B")
 
@@ -1671,6 +1930,32 @@ def cli_speed_pbkdf_tests(_tmp_dir):
         for line in output:
             if format_re.match(line) is None:
                 logging.error("Unexpected line %s", line)
+
+def cli_speed_pake_tests(_tmp_dir):
+    def verify_pake_output(output, matcher):
+        # Each PAKE reports three operations
+        if len(output) == 0 or len(output) % 3 != 0:
+            logging.error("Unexpected number of lines for PAKE speed test")
+
+        for line in output:
+            if matcher.match(line) is None:
+                logging.error("Unexpected line %s", line)
+
+    msec = 1
+
+    srp6_output = test_cli("speed", ["--msec=%d" % (msec), "SRP6"], None).split('\n')
+
+    # SRP6-2048 1200 server step1/sec; 0.83 ms/op 2988134 cycles/op (2 ops in 1.67 ms)
+    srp6_re = re.compile(r'^SRP6-[0-9]+ [0-9]+ (server step1|client agree|server step2)/sec; [0-9]+\.[0-9]+ ms/op .*\([0-9]+ (op|ops) in [0-9\.]+ ms\)')
+
+    verify_pake_output(srp6_output, srp6_re)
+
+    spake2p_output = test_cli("speed", ["--msec=%d" % (msec), "SPAKE2+"], None).split('\n')
+
+    # SPAKE2+ P256-SHA256 3672 prover share/sec; 0.27 ms/op 981056 cycles/op (4 ops in 1.09 ms)
+    spake2p_re = re.compile(r'^SPAKE2\+ .* [0-9]+ (prover share|verifier respond|prover confirm)/sec; [0-9]+\.[0-9]+ ms/op .*\([0-9]+ (op|ops) in [0-9\.]+ ms\)')
+
+    verify_pake_output(spake2p_output, spake2p_re)
 
 def cli_speed_table_tests(_tmp_dir):
     msec = 1
@@ -1773,9 +2058,8 @@ def cli_speed_tests(_tmp_dir):
     format_re_ks = re.compile(r'^AES-128/GCM\(16\).* [0-9]+ key schedule/sec; [0-9]+\.[0-9]+ ms/op .*\([0-9]+ (op|ops) in [0-9\.]+ ms\)')
     format_re_cipher = re.compile(r'^AES-128/GCM\(16\) .* buffer size [0-9]+ bytes: [0-9]+\.[0-9]+ MiB\/sec .*\([0-9]+\.[0-9]+ MiB in [0-9]+\.[0-9]+ ms\)')
     for line in output:
-        if format_re_ks.match(line) is None:
-            if format_re_cipher.match(line) is None:
-                logging.error('Unexpected line %s', line)
+        if format_re_ks.match(line) is None and format_re_cipher.match(line) is None:
+            logging.error('Unexpected line %s', line)
 
     output = test_cli("speed", ["--msec=%d" % (msec), "scrypt"], None).split('\n')
 
@@ -1861,7 +2145,7 @@ def main(args=None):
     CLI_PATH = args[1]
 
     global TEST_DATA_DIR
-    TEST_DATA_DIR = os.path.join(options.test_data_dir, 'src/tests/data/timing/')
+    TEST_DATA_DIR = os.path.join(options.test_data_dir, 'src/tests/data')
 
     test_regex = None
     if len(args) == 3:
@@ -1905,15 +2189,19 @@ def main(args=None):
         cli_key_tests,
         cli_marvin_tests,
         cli_mod_inverse_tests,
+        cli_ocsp_check_tests,
         cli_pbkdf_tune_tests,
         cli_pk_encrypt_tests,
+        cli_pk_sign_tests,
         cli_pk_workfactor_tests,
+        cli_pkcs12_tests,
         cli_psk_db_tests,
         cli_rng_tests,
         cli_roughtime_check_tests,
         cli_roughtime_tests,
         cli_speed_invalid_option_tests,
         cli_speed_math_tests,
+        cli_speed_pake_tests,
         cli_speed_pk_fast_tests,
         cli_speed_table_tests,
         cli_speed_tests,

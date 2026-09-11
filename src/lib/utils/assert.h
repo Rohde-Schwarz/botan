@@ -56,6 +56,13 @@ namespace Botan {
       }                                                         \
    } while(0)
 
+#define BOTAN_STATE_CHECK_MSG(expr, msg)                      \
+   /* NOLINTNEXTLINE(*-avoid-do-while) */                     \
+   do {                                                       \
+      if(!(expr))                                             \
+         Botan::throw_invalid_state(msg, __func__, __FILE__); \
+   } while(0)
+
 /**
 * Make an assertion
 */
@@ -143,7 +150,7 @@ constexpr void ignore_params([[maybe_unused]] const T&... args) {}
 
 #define BOTAN_UNUSED Botan::ignore_params
 
-/*
+/**
 * Define Botan::assert_unreachable and BOTAN_ASSERT_UNREACHABLE
 *
 * This is intended to be used in the same situations as `std::unreachable()`;
@@ -157,6 +164,9 @@ constexpr void ignore_params([[maybe_unused]] const T&... args) {}
 *
 * Due to this difference, and the fact that it is not inlined, calling
 * this is significantly more costly than using `std::unreachable`.
+*
+* @param file the source file the call occurred in
+* @param line the source line the call occurred on
 */
 [[noreturn]] void BOTAN_UNSTABLE_API assert_unreachable(const char* file, int line);
 

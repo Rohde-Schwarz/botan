@@ -7,7 +7,6 @@
 #ifndef BOTAN_SIMD_4X64_H_
 #define BOTAN_SIMD_4X64_H_
 
-#include <botan/compiler.h>
 #include <botan/types.h>
 #include <botan/internal/isa_extn.h>
 #include <botan/internal/target_info.h>
@@ -48,6 +47,16 @@ class SIMD_4x64 final {
       }
 
       static BOTAN_FN_ISA_SIMD_4X64 SIMD_4x64 load_be(const void* in) { return SIMD_4x64::load_le(in).bswap(); }
+
+      /**
+      * Load in big endian order from ptrs[i] + Stride * n + offset,
+      * gathering lane i's n'th block out of a set of per lane buffers
+      */
+      template <size_t Stride>
+      static BOTAN_FN_ISA_SIMD_4X64 SIMD_4x64
+      load_be(const uint8_t* const* ptrs, size_t i, size_t n, size_t offset = 0) {
+         return load_be(ptrs[i] + Stride * n + offset);
+      }
 
       static BOTAN_FN_ISA_SIMD_4X64 SIMD_4x64 broadcast_2x64(const uint64_t* in) {
          return SIMD_4x64(_mm256_broadcastsi128_si256(_mm_loadu_si128(reinterpret_cast<const __m128i*>(in))));
@@ -110,6 +119,11 @@ class SIMD_4x64 final {
 
       BOTAN_FN_ISA_SIMD_4X64 void operator|=(const SIMD_4x64& other) { m_simd = _mm256_or_si256(m_simd, other.m_simd); }
 
+      // (~reg) & other
+      SIMD_4x64 BOTAN_FN_ISA_SIMD_4X64 andc(const SIMD_4x64& other) const {
+         return SIMD_4x64(_mm256_andnot_si256(m_simd, other.m_simd));
+      }
+
       template <size_t ROT>
       BOTAN_FN_ISA_SIMD_4X64 SIMD_4x64 rotr() const
          requires(ROT > 0 && ROT < 64)
@@ -147,6 +161,63 @@ class SIMD_4x64 final {
       template <size_t ROT>
       SIMD_4x64 BOTAN_FN_ISA_SIMD_4X64 rotl() const {
          return this->rotr<64 - ROT>();
+      }
+
+      SIMD_4x64 BOTAN_FN_ISA_SIMD_4X64 sigma0() const {
+         const SIMD_4x64 r1 = this->rotr<28>();
+         const SIMD_4x64 r2 = this->rotr<34>();
+         const SIMD_4x64 r3 = this->rotr<39>();
+         return r1 ^ r2 ^ r3;
+      }
+
+      SIMD_4x64 BOTAN_FN_ISA_SIMD_4X64 sigma1() const {
+         const SIMD_4x64 r1 = this->rotr<14>();
+         const SIMD_4x64 r2 = this->rotr<18>();
+         const SIMD_4x64 r3 = this->rotr<41>();
+         return r1 ^ r2 ^ r3;
+      }
+
+      /**
+      * The Keccak chi operation, x ^ (~y & z)
+      */
+      static BOTAN_FN_ISA_SIMD_4X64 SIMD_4x64 chi(const SIMD_4x64& x, const SIMD_4x64& y, const SIMD_4x64& z) {
+#if defined(__AVX512VL__)
+         constexpr uint8_t xor_not_and = 0b11010010;
+         return SIMD_4x64(_mm256_ternarylogic_epi64(x.raw(), y.raw(), z.raw(), xor_not_and));
+#else
+         return x ^ y.andc(z);
+#endif
+      }
+
+      BOTAN_FN_ISA_SIMD_4X64
+      static SIMD_4x64 choose(const SIMD_4x64& mask, const SIMD_4x64& a, const SIMD_4x64& b) {
+#if defined(__AVX512VL__)
+         return SIMD_4x64(_mm256_ternarylogic_epi64(mask.raw(), a.raw(), b.raw(), 0xca));
+#else
+         return (mask & a) ^ mask.andc(b);
+#endif
+      }
+
+      BOTAN_FN_ISA_SIMD_4X64
+      static SIMD_4x64 majority(const SIMD_4x64& x, const SIMD_4x64& y, const SIMD_4x64& z) {
+#if defined(__AVX512VL__)
+         return SIMD_4x64(_mm256_ternarylogic_epi64(x.raw(), y.raw(), z.raw(), 0xe8));
+#else
+         return SIMD_4x64::choose(x ^ y, z, y);
+#endif
+      }
+
+      BOTAN_FN_ISA_SIMD_4X64
+      static void transpose(SIMD_4x64& B0, SIMD_4x64& B1, SIMD_4x64& B2, SIMD_4x64& B3) {
+         const __m256i T0 = _mm256_unpacklo_epi64(B0.m_simd, B1.m_simd);
+         const __m256i T1 = _mm256_unpackhi_epi64(B0.m_simd, B1.m_simd);
+         const __m256i T2 = _mm256_unpacklo_epi64(B2.m_simd, B3.m_simd);
+         const __m256i T3 = _mm256_unpackhi_epi64(B2.m_simd, B3.m_simd);
+
+         B0.m_simd = _mm256_permute2x128_si256(T0, T2, 0 + (2 << 4));
+         B1.m_simd = _mm256_permute2x128_si256(T1, T3, 0 + (2 << 4));
+         B2.m_simd = _mm256_permute2x128_si256(T0, T2, 1 + (3 << 4));
+         B3.m_simd = _mm256_permute2x128_si256(T1, T3, 1 + (3 << 4));
       }
 
       template <int SHIFT>

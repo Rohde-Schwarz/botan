@@ -10,6 +10,7 @@
 
 #include <botan/pk_keys.h>
 #include <botan/pk_ops_fwd.h>
+#include <botan/pk_options.h>
 #include <botan/symkey.h>
 #include <span>
 #include <string>
@@ -56,7 +57,7 @@ class BOTAN_PUBLIC_API(2, 0) PK_Encryptor {
       /**
       * Return an upper bound on the ciphertext length
       */
-      virtual size_t ciphertext_length(size_t ctext_len) const = 0;
+      virtual size_t ciphertext_length(size_t ptext_len) const = 0;
 
       PK_Encryptor() = default;
       virtual ~PK_Encryptor() = default;
@@ -133,6 +134,12 @@ class BOTAN_PUBLIC_API(2, 0) PK_Decryptor {
       */
       virtual size_t plaintext_length(size_t ctext_len) const = 0;
 
+      /**
+      * Return an upper bound on the ciphertext length for a particular
+      * plaintext input length.
+      */
+      virtual size_t ciphertext_length(size_t ptext_len) const = 0;
+
       PK_Decryptor() = default;
       virtual ~PK_Decryptor() = default;
 
@@ -153,6 +160,21 @@ class BOTAN_PUBLIC_API(2, 0) PK_Decryptor {
 */
 class BOTAN_PUBLIC_API(2, 0) PK_Signer final {
    public:
+      /**
+      * Construct a PK signer
+      *
+      * @param key the key to use to generate signatures
+      * @param rng the random generator to use
+      * @param options controls the behavior of the signature generation, eg which hash function to use
+      *
+      * Note that most common algorithms (eg RSA or ECDSA) require an options
+      * parameter to specify at least which hash function to use. Schemes without
+      * any parameters (eg Ed25519, ML-DSA, XMSS) can be used with the default.
+      */
+      PK_Signer(const Private_Key& key,
+                RandomNumberGenerator& rng,
+                const PK_Signature_Options& options = PK_Signature_Options());
+
       /**
       * Construct a PK Signer.
       * @param key the key to use inside this signer
@@ -273,7 +295,15 @@ class BOTAN_PUBLIC_API(2, 0) PK_Verifier final {
       /**
       * Construct a PK Verifier.
       * @param pub_key the public key to verify against
-      * @param padding the padding/hash to use (eg "SHA-512" or "PSS(SHA-256)")
+      * @param options relating to the signature; schemes without any parameters
+      * (eg Ed25519, ML-DSA, XMSS) can be used with the default.
+      */
+      explicit PK_Verifier(const Public_Key& pub_key, const PK_Signature_Options& options = PK_Signature_Options());
+
+      /**
+      * Construct a PK Verifier.
+      * @param pub_key the public key to verify against
+      * @param padding the padding/hash to use (eg "EMSA_PKCS1(SHA-256)")
       * @param format the signature format to use
       * @param provider the provider to use
       */
@@ -540,7 +570,9 @@ class BOTAN_PUBLIC_API(2, 0) PK_Decryptor_EME final : public PK_Decryptor {
                        std::string_view padding,
                        std::string_view provider = "");
 
-      size_t plaintext_length(size_t ptext_len) const override;
+      size_t plaintext_length(size_t ctext_len) const override;
+
+      size_t ciphertext_length(size_t ptext_len) const override;
 
       ~PK_Decryptor_EME() override;
 

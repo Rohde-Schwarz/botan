@@ -1,0 +1,17 @@
+<internal_defines>
+ARGON2_SIMD4X64 -> 20260816
+</internal_defines>
+
+<module_info>
+name -> "Argon2 SIMD 4x64"
+brief -> "Argon2 using 4x64 SIMD instructions"
+</module_info>
+
+<isa>
+avx2
+</isa>
+
+<requires>
+cpuid
+simd_4x64
+</requires>

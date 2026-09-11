@@ -67,6 +67,15 @@ class SIMD_16x32 final {
       BOTAN_FN_ISA_AVX512
       static SIMD_16x32 load_be(const uint8_t* in) { return load_le(in).bswap(); }
 
+      /**
+      * Load in big endian order from ptrs[i] + Stride * n + offset,
+      * gathering lane i's n'th block out of a set of per lane buffers
+      */
+      template <size_t Stride>
+      static BOTAN_FN_ISA_AVX512 SIMD_16x32 load_be(const uint8_t* const* ptrs, size_t i, size_t n, size_t offset = 0) {
+         return load_be(ptrs[i] + Stride * n + offset);
+      }
+
       BOTAN_FN_ISA_AVX512
       void store_le(uint8_t out[]) const { _mm512_storeu_si512(reinterpret_cast<__m512i*>(out), m_avx512); }
 
@@ -291,6 +300,15 @@ class SIMD_16x32 final {
          BD.m_avx512 = _mm512_shuffle_i32x4(t5, td, 0xdd);
          BE.m_avx512 = _mm512_shuffle_i32x4(t6, te, 0xdd);
          BF.m_avx512 = _mm512_shuffle_i32x4(t7, tf, 0xdd);
+      }
+
+      /**
+      * Unsigned lane comparison; returns a mask with all bits set in each
+      * 32-bit lane that is (unsigned) less than the corresponding lane of
+      * @p other, and all bits cleared otherwise.
+      */
+      SIMD_16x32 BOTAN_FN_ISA_AVX512 unsigned_lt(const SIMD_16x32& other) const noexcept {
+         return SIMD_16x32(_mm512_movm_epi32(_mm512_cmplt_epu32_mask(raw(), other.raw())));
       }
 
       BOTAN_FN_ISA_AVX512

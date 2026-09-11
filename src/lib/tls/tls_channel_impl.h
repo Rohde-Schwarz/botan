@@ -21,6 +21,11 @@
 #include <utility>
 #include <vector>
 
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+   #include <botan/tls_messages_13.h>
+   #include <botan/internal/tls_types_13.h>
+#endif
+
 namespace Botan {
 
 class Credentials_Manager;
@@ -31,7 +36,16 @@ namespace TLS {
 class Client;
 class Server;
 
-class Channel_Impl {
+class Channel_Impl : public std::enable_shared_from_this<Channel_Impl> {
+   protected:
+      /**
+      * Sentinel object to make constructors of derived classes un-callable by
+      * other classes.
+      */
+      struct Private {
+            explicit Private() = default;
+      };
+
    public:
       virtual ~Channel_Impl() = default;
 
@@ -84,6 +98,8 @@ class Channel_Impl {
       * @return true iff the connection is active for sending application data
       */
       virtual bool is_active() const = 0;
+
+      virtual std::optional<std::chrono::milliseconds> next_retransmission_timeout() const { return std::nullopt; }
 
       /**
       * @return true iff the connection has been definitely closed
@@ -167,10 +183,8 @@ class Channel_Impl {
       virtual bool secure_renegotiation_supported() const = 0;
 
       /**
-      * Perform a handshake timeout check. This does nothing unless
-      * this is a DTLS channel with a pending handshake state, in
-      * which case we check for timeout and potentially retransmit
-      * handshake packets.
+      * Perform a handshake timeout check. This does nothing unless this is a
+      * DTLS channel with a handshake in progress.
       */
       virtual bool timeout_check() = 0;
 
@@ -184,6 +198,8 @@ class Channel_Impl {
    protected:
       Channel_Impl() = default;
 
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+
       /**
        * This struct collect all information required to perform a downgrade from TLS 1.3 to TLS 1.2.
        *
@@ -196,7 +212,7 @@ class Channel_Impl {
        */
       struct Downgrade_Information {
             /// The client hello message including the handshake header bytes as transferred to the peer.
-            std::vector<uint8_t> client_hello_message;
+            std::optional<Client_Hello_13> client_hello;
 
             /// The full data transcript received from the peer. This will contain the server hello message that forced us to downgrade.
             std::vector<uint8_t> peer_transcript;
@@ -214,9 +230,12 @@ class Channel_Impl {
             std::shared_ptr<Credentials_Manager> creds;
             std::shared_ptr<RandomNumberGenerator> rng;
             std::shared_ptr<const Policy> policy;
+            TLS_Flavor flavor;
 
             bool received_tls_13_error_alert;
             bool will_downgrade;
+
+            std::optional<Epoch0_SequenceNumbers> epoch0_sequence_numbers;  // only relevant in DTLS
       };
 
       std::unique_ptr<Downgrade_Information> m_downgrade_info;  // NOLINT(*non-private-member-variable*)
@@ -226,9 +245,14 @@ class Channel_Impl {
          m_downgrade_info->peer_transcript.insert(m_downgrade_info->peer_transcript.end(), input.begin(), input.end());
       }
 
-      void preserve_client_hello(std::span<const uint8_t> msg) {
+      void preserve_client_hello(Client_Hello_13 client_hello) {
          BOTAN_STATE_CHECK(m_downgrade_info);
-         m_downgrade_info->client_hello_message.assign(msg.begin(), msg.end());
+         m_downgrade_info->client_hello.emplace(std::move(client_hello));
+      }
+
+      void preserve_sequence_numbers(std::optional<Epoch0_SequenceNumbers> epoch0_sec_nums) {
+         BOTAN_STATE_CHECK(m_downgrade_info);
+         m_downgrade_info->epoch0_sequence_numbers = epoch0_sec_nums;
       }
 
       friend class Client;
@@ -253,7 +277,7 @@ class Channel_Impl {
       }
 
       void request_downgrade_for_resumption(Session_with_Handle session) {
-         BOTAN_STATE_CHECK(m_downgrade_info && m_downgrade_info->client_hello_message.empty() &&
+         BOTAN_STATE_CHECK(m_downgrade_info && !m_downgrade_info->client_hello.has_value() &&
                            m_downgrade_info->peer_transcript.empty() && !m_downgrade_info->tls12_session.has_value());
          BOTAN_ASSERT_NOMSG(session.session.version().is_pre_tls_13());
          m_downgrade_info->tls12_session = std::move(session);
@@ -262,18 +286,32 @@ class Channel_Impl {
 
    public:
       /**
-       * Indicates whether a downgrade to TLS 1.2 or lower is in progress
-       *
-       * @sa Downgrade_Information
-       */
-      bool is_downgrading() const { return m_downgrade_info && m_downgrade_info->will_downgrade; }
-
-      /**
        * @sa Downgrade_Information
        */
       std::unique_ptr<Downgrade_Information> extract_downgrade_info() { return std::exchange(m_downgrade_info, {}); }
 
-      bool expects_downgrade() const { return m_downgrade_info != nullptr; }
+#endif
+
+      /**
+       * Indicates whether a downgrade to TLS 1.2 or lower is in progress
+       *
+       * @sa Downgrade_Information
+       */
+      bool is_downgrading() const {
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+         return m_downgrade_info && m_downgrade_info->will_downgrade;
+#else
+         return false;
+#endif
+      }
+
+      bool expects_downgrade() const {
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+         return m_downgrade_info != nullptr;
+#else
+         return false;
+#endif
+      }
 };
 
 }  // namespace TLS

@@ -30,9 +30,6 @@ class X509_Certificate;
 class X509_DN;
 class RandomNumberGenerator;
 
-class OctetString;
-typedef OctetString SymmetricKey;
-
 namespace OCSP {
 class Response;
 }
@@ -67,7 +64,7 @@ class BOTAN_UNSTABLE_API Hello_Verify_Request final : public Handshake_Message {
 
       Hello_Verify_Request(std::span<const uint8_t> client_hello_bits,
                            std::string_view client_identity,
-                           const SymmetricKey& secret_key);
+                           std::span<const uint8_t> cookie_secret);
 
    private:
       std::vector<uint8_t> m_cookie;
@@ -120,6 +117,8 @@ class BOTAN_UNSTABLE_API Client_Hello : public Handshake_Message {
       std::vector<Protocol_Version> supported_versions() const;
 
       std::string sni_hostname() const;
+
+      bool offered_tls13() const;
 
       bool supports_alpn() const;
 
@@ -188,6 +187,11 @@ class BOTAN_UNSTABLE_API Server_Hello : public Handshake_Message {
       const Extensions& extensions() const;
       const Session_ID& session_id() const;
 
+      /**
+       * Return desired downgrade version indicated by hello random, if any.
+       */
+      std::optional<Protocol_Version> random_signals_downgrade() const;
+
       virtual Protocol_Version selected_version() const = 0;
 
    protected:
@@ -221,11 +225,6 @@ class BOTAN_UNSTABLE_API Server_Hello_12_Shim : public Server_Hello {
        * @returns the selected version as indicated in the legacy_version field
        */
       Protocol_Version selected_version() const final;
-
-      /**
-       * Return desired downgrade version indicated by hello random, if any.
-       */
-      std::optional<Protocol_Version> random_signals_downgrade() const;
 };
 
 /**

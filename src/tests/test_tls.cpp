@@ -22,6 +22,10 @@
    #include <botan/internal/fmt.h>
    #include <set>
 
+   #if defined(BOTAN_HAS_DTLS_13)
+      #include <botan/internal/tls_timer_dtls13.h>
+   #endif
+
    #if defined(BOTAN_HAS_TLS_CBC)
       #include <botan/block_cipher.h>
       #include <botan/mac.h>
@@ -822,6 +826,142 @@ class TLS13_PSK_Import_Tests final : public Text_Based_Test {
 
 BOTAN_REGISTER_TEST("tls", "tls13_psk_import", TLS13_PSK_Import_Tests);
 
+   #endif
+
+   #if defined(BOTAN_HAS_DTLS_13)
+
+class Virtual_Clock_Callbacks final : public Botan::TLS::Callbacks {
+   public:
+      void tls_emit_data(std::span<const uint8_t> /*data*/) override {}
+
+      void tls_record_received(uint64_t /*seq*/, std::span<const uint8_t> /*data*/) override {}
+
+      void tls_alert(Botan::TLS::Alert /*alert*/) override {}
+
+      uint64_t tls_current_monotonic_clock_ms() override { return static_cast<uint64_t>(m_now.count()); }
+
+      void advance(std::chrono::milliseconds delta) { m_now += delta; }
+
+   private:
+      std::chrono::milliseconds m_now{0};
+};
+
+class DTLS_Timer_Test_Policy final : public Botan::TLS::Policy {
+   public:
+      explicit DTLS_Timer_Test_Policy(std::optional<size_t> max_retransmissions) :
+            m_max_retransmissions(max_retransmissions) {}
+
+      size_t dtls_initial_timeout() const override { return 100; }
+
+      size_t dtls_maximum_timeout() const override { return 250; }
+
+      std::optional<size_t> dtls_maximum_retransmissions() const override { return m_max_retransmissions; }
+
+   private:
+      std::optional<size_t> m_max_retransmissions;
+};
+
+std::optional<uint64_t> next_timeout_ms(const Botan::TLS::DTLS_Retransmission_Timer& timer) {
+   if(const auto timeout = timer.next_timeout()) {
+      return static_cast<uint64_t>(timeout->count());
+   }
+   return std::nullopt;
+}
+
+std::vector<Test::Result> dtls_retransmission_timer() {
+   using namespace std::chrono_literals;
+
+   return {
+      CHECK("freshly constructed timer is disarmed",
+            [&](Test::Result& result) {
+               auto callbacks = std::make_shared<Virtual_Clock_Callbacks>();
+               Botan::TLS::DTLS_Retransmission_Timer timer(DTLS_Timer_Test_Policy(3), callbacks);
+
+               result.test_is_false("not started", timer.started());
+               result.test_is_false("not expired when disarmed", timer.expired());
+               result.test_is_false("retransmissions not exhausted", timer.retransmissions_exhausted());
+               result.test_opt_is_null("no timeout scheduled", timer.next_timeout());
+            }),
+
+      CHECK("arming with flight_sent and expiry",
+            [&](Test::Result& result) {
+               auto callbacks = std::make_shared<Virtual_Clock_Callbacks>();
+               Botan::TLS::DTLS_Retransmission_Timer timer(DTLS_Timer_Test_Policy(3), callbacks);
+
+               timer.flight_sent();
+               result.test_is_true("started", timer.started());
+               result.test_is_false("not expired", timer.expired());
+               result.test_opt_u64_eq("initial timeout", next_timeout_ms(timer), 100);
+
+               callbacks->advance(50ms);
+               result.test_is_false("still not expired", timer.expired());
+               result.test_opt_u64_eq("remaining time reduced", next_timeout_ms(timer), 50);
+
+               callbacks->advance(51ms);
+               result.test_is_true("expired after deadline passed", timer.expired());
+               result.test_opt_u64_eq("expired timer reports 0ms", next_timeout_ms(timer), 0);
+            }),
+
+      CHECK("exponential backoff is capped at the maximum timeout",
+            [&](Test::Result& result) {
+               auto callbacks = std::make_shared<Virtual_Clock_Callbacks>();
+               Botan::TLS::DTLS_Retransmission_Timer timer(DTLS_Timer_Test_Policy(4), callbacks);
+
+               timer.flight_sent();
+               result.test_opt_u64_eq("initial span", next_timeout_ms(timer), 100);
+
+               // No clock advancement between calls, so next_timeout() reflects the full span
+               timer.retransmitted();
+               result.test_opt_u64_eq("span doubled", next_timeout_ms(timer), 200);
+
+               timer.retransmitted();
+               result.test_opt_u64_eq("span capped at maximum", next_timeout_ms(timer), 250);
+
+               timer.retransmitted();
+               result.test_opt_u64_eq("span remains capped", next_timeout_ms(timer), 250);
+            }),
+
+      CHECK("flight_sent resets the retransmission schedule",
+            [&](Test::Result& result) {
+               auto callbacks = std::make_shared<Virtual_Clock_Callbacks>();
+               Botan::TLS::DTLS_Retransmission_Timer timer(DTLS_Timer_Test_Policy(2), callbacks);
+
+               timer.flight_sent();
+               timer.retransmitted();
+               timer.retransmitted();
+               result.test_is_true("retransmissions exhausted", timer.retransmissions_exhausted());
+
+               timer.flight_sent();
+               result.test_is_false("retransmission counter reset", timer.retransmissions_exhausted());
+               result.test_opt_u64_eq("span reset to initial timeout", next_timeout_ms(timer), 100);
+            }),
+
+      CHECK("retransmission limit is enforced, nullopt means unbounded",
+            [&](Test::Result& result) {
+               auto bounded_callbacks = std::make_shared<Virtual_Clock_Callbacks>();
+               Botan::TLS::DTLS_Retransmission_Timer bounded(DTLS_Timer_Test_Policy(3), bounded_callbacks);
+               bounded.flight_sent();
+
+               bounded.retransmitted();
+               bounded.retransmitted();
+               result.test_is_false("not exhausted after 2 of 3 retransmissions", bounded.retransmissions_exhausted());
+
+               bounded.retransmitted();
+               result.test_is_true("exhausted after 3 of 3 retransmissions", bounded.retransmissions_exhausted());
+
+               auto unbounded_callbacks = std::make_shared<Virtual_Clock_Callbacks>();
+               Botan::TLS::DTLS_Retransmission_Timer unbounded(DTLS_Timer_Test_Policy(std::nullopt),
+                                                               unbounded_callbacks);
+               unbounded.flight_sent();
+               for(size_t i = 0; i < 20; ++i) {
+                  unbounded.retransmitted();
+               }
+               result.test_is_false("never exhausted without a limit", unbounded.retransmissions_exhausted());
+            }),
+   };
+}
+
+BOTAN_REGISTER_TEST_FN("tls", "dtls_retransmission_timer", dtls_retransmission_timer);
    #endif
 
 #endif

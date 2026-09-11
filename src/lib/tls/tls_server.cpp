@@ -21,7 +21,6 @@
 #if defined(BOTAN_HAS_TLS_13)
    #include <botan/internal/tls_server_impl_13.h>
 #endif
-
 namespace Botan::TLS {
 
 /*
@@ -37,12 +36,15 @@ Server::Server(const std::shared_ptr<Callbacks>& callbacks,
    const auto max_version = policy->latest_supported_version(is_datagram);
 
 #if defined(BOTAN_HAS_TLS_13)
-   if(!max_version.is_pre_tls_13()) {
-      m_impl = std::make_unique<Server_Impl_13>(callbacks, session_manager, creds, policy, rng);
+   if(max_version.is_tls_13_or_later()) {
+      const auto flavor = is_datagram ? TLS_Flavor::DTLS : TLS_Flavor::TLS;
+      m_impl = Server_Impl_13::create(callbacks, session_manager, creds, policy, rng, flavor);
 
+   #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
       if(m_impl->expects_downgrade()) {
          m_impl->set_io_buffer_size(io_buf_sz);
       }
+   #endif
 
       return;
    }
@@ -50,7 +52,7 @@ Server::Server(const std::shared_ptr<Callbacks>& callbacks,
 
 #if defined(BOTAN_HAS_TLS_12)
    if(max_version.is_pre_tls_13()) {
-      m_impl = std::make_unique<Server_Impl_12>(callbacks, session_manager, creds, policy, rng, is_datagram, io_buf_sz);
+      m_impl = Server_Impl_12::create(callbacks, session_manager, creds, policy, rng, is_datagram, io_buf_sz);
       return;
    }
 #endif
@@ -64,12 +66,12 @@ Server::~Server() = default;
 size_t Server::from_peer(std::span<const uint8_t> data) {
    auto read = m_impl->from_peer(data);
 
-#if defined(BOTAN_HAS_TLS_12)
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
    // If TLS 1.2 is not available, we will never downgrade, the downgrade info
    // won't even be created and `is_downgrading()` would always return false.
    if(m_impl->is_downgrading()) {
       auto info = m_impl->extract_downgrade_info();
-      m_impl = std::make_unique<Server_Impl_12>(*info);
+      m_impl = Server_Impl_12::create_for_downgrade(*info);
 
       // replay peer data received so far
       read = m_impl->from_peer(info->peer_transcript);
@@ -85,6 +87,10 @@ bool Server::is_handshake_complete() const {
 
 bool Server::is_active() const {
    return m_impl->is_active();
+}
+
+std::optional<std::chrono::milliseconds> Server::next_retransmission_timeout() const {
+   return m_impl->next_retransmission_timeout();
 }
 
 bool Server::is_closed() const {

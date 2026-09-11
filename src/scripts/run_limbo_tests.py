@@ -4,13 +4,14 @@
 Runs the tests from https://github.com/C2SP/x509-limbo
 """
 
-from botan3 import X509Cert
-from dateutil import parser
 import json
-import optparse # pylint: disable=deprecated-module
+import optparse  # pylint: disable=deprecated-module
 import re
 import subprocess
 import sys
+
+from botan3 import X509Cert
+from dateutil import parser
 
 ignored_tests = {}
 
@@ -35,8 +36,6 @@ tests_that_succeed_unexpectedly = {
     'rfc5280::ski::root-missing-ski': 'Conflates CA and verifier requirements',
 
     'webpki::aki::root-with-aki-missing-keyidentifier': 'Conflates CA and verifier requirements',
-    'webpki::aki::root-with-aki-authoritycertissuer': 'Conflates CA and verifier requirements',
-    'webpki::aki::root-with-aki-authoritycertserialnumber': 'Conflates CA and verifier requirements',
     'webpki::aki::root-with-aki-all-fields': 'Conflates CA and verifier requirements',
     'webpki::ee-basicconstraints-ca': 'Conflates CA and verifier requirements',
     'webpki::eku::ee-without-eku': 'Conflates CA and verifier requirements',
@@ -139,7 +138,8 @@ def dump_x509(who, cert):
     dump_cmd = ['openssl', 'x509', '-text', '-noout']
     proc = subprocess.run(dump_cmd,
                           input=bytes(cert, 'utf8'),
-                          capture_output=True)
+                          capture_output=True,
+                          check=False)
 
     print(proc.stdout.decode('utf8'))
 
@@ -191,9 +191,8 @@ def main(args = None):
     modified = 0
 
     for test in limbo_json['testcases']:
-        if run_only is not None:
-            if run_only.match(test['id']) is None:
-                continue
+        if run_only is not None and run_only.match(test['id']) is None:
+            continue
 
         if test['extended_key_usage'] != [] or test['max_chain_depth'] is not None:
             # we have no way of expressing this here

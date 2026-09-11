@@ -12,6 +12,10 @@
 #include <botan/secmem.h>
 #include <botan/tls_messages.h>
 
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+   #include <botan/tls_messages_13.h>
+#endif
+
 namespace Botan {
 
 class PK_Key_Agreement_Key;
@@ -54,6 +58,14 @@ class BOTAN_UNSTABLE_API Client_Hello_12 final : public Client_Hello_12_Shim {
                       std::vector<std::string> next_protocols);
 
       explicit Client_Hello_12(std::span<const uint8_t> buf);
+
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+      /**
+       * This creates a TLS 1.2 Client Hello object from a TLS 1.3 Client Hello
+       * object. This is used for downgrades from TLS 1.3 to TLS 1.2.
+       */
+      Client_Hello_12(Client_Hello_13 client_hello, Handshake_IO& io, Handshake_Hash& hash);
+#endif
 
    private:
       explicit Client_Hello_12(std::unique_ptr<Client_Hello_Internal> data);
@@ -122,7 +134,8 @@ class BOTAN_UNSTABLE_API Server_Hello_12 final : public Server_Hello_12_Shim {
                       std::vector<uint8_t> secure_reneg_info,
                       const Client_Hello_12& client_hello,
                       const Settings& settings,
-                      std::string_view next_protocol);
+                      std::string_view next_protocol,
+                      bool is_datagram);
 
       Server_Hello_12(Handshake_IO& io,
                       Handshake_Hash& hash,
@@ -133,7 +146,8 @@ class BOTAN_UNSTABLE_API Server_Hello_12 final : public Server_Hello_12_Shim {
                       const Client_Hello_12& client_hello,
                       const Session& resumed_session,
                       bool offer_session_ticket,
-                      std::string_view next_protocol);
+                      std::string_view next_protocol,
+                      bool is_datagram);
 
       explicit Server_Hello_12(std::span<const uint8_t> buf);
 

@@ -21,7 +21,6 @@
    #include <botan/x509path.h>
    #include <botan/internal/ffi_mp.h>
    #include <botan/internal/ffi_oid.h>
-   #include <botan/internal/stl_util.h>
 #endif
 
 #if defined(BOTAN_HAS_X509_CERTIFICATES)
@@ -649,7 +648,7 @@ int botan_x509_cert_serial_number(botan_x509_cert_t cert, botan_mp_t* serial_num
          return BOTAN_FFI_ERROR_NULL_POINTER;
       }
 
-      auto serial_bn = Botan::BigInt::from_bytes(c.serial_number());
+      auto serial_bn = c.serial().to_bigint();
       return ffi_new_object(serial_number, std::make_unique<Botan::BigInt>(std::move(serial_bn)));
    });
 #else
@@ -1395,7 +1394,7 @@ int botan_x509_crl_entry_serial_number(botan_x509_crl_entry_t entry, botan_mp_t*
          return BOTAN_FFI_ERROR_NULL_POINTER;
       }
 
-      auto serial_bn = Botan::BigInt::from_bytes(e.serial_number());
+      auto serial_bn = e.serial().to_bigint();
       return ffi_new_object(serial_number, std::make_unique<Botan::BigInt>(std::move(serial_bn)));
    });
 #else

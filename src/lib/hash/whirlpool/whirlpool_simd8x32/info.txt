@@ -1,0 +1,16 @@
+<internal_defines>
+WHIRLPOOL_SIMD8X32 -> 20260816
+</internal_defines>
+
+<module_info>
+name -> "Whirlpool SIMD 8x32"
+</module_info>
+
+<isa>
+avx2
+</isa>
+
+<requires>
+cpuid
+simd_8x32
+</requires>

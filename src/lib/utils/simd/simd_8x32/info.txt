@@ -1,0 +1,16 @@
+<internal_defines>
+SIMD_8X32 -> 20260816
+</internal_defines>
+
+<module_info>
+name -> "SIMD 8x32"
+brief -> "Lightweight wrappers for SIMD 8x32"
+</module_info>
+
+<isa>
+avx2
+</isa>
+
+<header:internal>
+simd_8x32.h
+</header:internal>

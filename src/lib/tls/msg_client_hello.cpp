@@ -14,6 +14,7 @@
 #include <botan/internal/tls_messages_internal.h>
 
 #include <botan/hash.h>
+#include <botan/mac.h>
 #include <botan/rng.h>
 #include <botan/tls_callbacks.h>
 #include <botan/tls_policy.h>
@@ -41,6 +42,20 @@ std::vector<uint8_t> make_hello_random(RandomNumberGenerator& rng, Callbacks& cb
    }
 
    return buf;
+}
+
+std::vector<uint8_t> calculate_cookie(std::span<const uint8_t> client_hello_bits,
+                                      std::string_view client_identity,
+                                      std::span<const uint8_t> cookie_secret) {
+   auto hmac = MessageAuthenticationCode::create_or_throw("HMAC(SHA-256)");
+   hmac->set_key(cookie_secret);
+
+   hmac->update_be(static_cast<uint64_t>(client_hello_bits.size()));
+   hmac->update(client_hello_bits);
+   hmac->update_be(static_cast<uint64_t>(client_identity.size()));
+   hmac->update(client_identity);
+
+   return hmac->final_stdvec();
 }
 
 Client_Hello_Internal::Client_Hello_Internal(std::span<const uint8_t> buf) {
@@ -109,7 +124,8 @@ Protocol_Version Client_Hello_Internal::version() const {
    //    0x0303 and a supported_versions extension present with 0x0304 as
    //    the highest version indicated therein.
    if(!extensions().has<Supported_Versions>() ||
-      !extensions().get<Supported_Versions>()->supports(Protocol_Version::TLS_V13)) {
+      (!extensions().get<Supported_Versions>()->supports(Protocol_Version::TLS_V13) &&
+       !extensions().get<Supported_Versions>()->supports(Protocol_Version::DTLS_V13))) {
       // The exact legacy_version is ignored we just inspect it to
       // distinguish TLS and DTLS.
       return (m_legacy_version.is_datagram_protocol()) ? Protocol_Version::DTLS_V12 : Protocol_Version::TLS_V12;
@@ -117,7 +133,7 @@ Protocol_Version Client_Hello_Internal::version() const {
 
    // Note: The Client_Hello_13 class will make sure that legacy_version
    //       is exactly 0x0303 (aka ossified TLS 1.2)
-   return Protocol_Version::TLS_V13;
+   return (m_legacy_version.is_datagram_protocol()) ? Protocol_Version::DTLS_V13 : Protocol_Version::TLS_V13;
 }
 
 Client_Hello::Client_Hello(Client_Hello&&) noexcept = default;
@@ -249,6 +265,20 @@ std::string Client_Hello::sni_hostname() const {
       return sni->host_name();
    }
    return "";
+}
+
+bool Client_Hello::offered_tls13() const {
+   // RFC 9846 4.2.2
+   //    TLS 1.3 ClientHellos are identified as having a legacy_version of
+   //    0x0303 and a "supported_versions" extension present with 0x0304 as the
+   //    highest version indicated therein.
+   const auto* versions = m_data->extensions().get<Supported_Versions>();
+   if(versions == nullptr) {
+      return false;
+   }
+
+   return versions->supports(Protocol_Version::TLS_V13) ||  //
+          versions->supports(Protocol_Version::DTLS_V13);
 }
 
 std::vector<Protocol_Version> Client_Hello::supported_versions() const {
