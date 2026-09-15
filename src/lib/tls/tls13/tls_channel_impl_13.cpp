@@ -332,23 +332,26 @@ void Channel_Impl_13::handle(const Key_Update& key_update) {
    }
 }
 
-void Channel_Impl_13::Flight::add(const Handshake_Message_13_Ref message,
-                                  Transcript_Hash_State* transcript_hash,
-                                  Callbacks& callbacks) {
-   BOTAN_ASSERT_NONNULL(transcript_hash);
+Channel_Impl_13::Flight& Channel_Impl_13::Flight::add(const Handshake_Message_13_Ref message,
+                                                      Transcript_Hash_State& transcript_hash,
+                                                      Callbacks& callbacks) {
    std::visit([&](const auto msg) { callbacks.tls_inspect_handshake_msg(msg.get()); }, message);
 
    auto [type, bytes] = detail::serialize_message(message);
 
-   transcript_hash->update(prepare_tls_handshake_header(type, bytes), bytes);
+   transcript_hash.update(prepare_tls_handshake_header(type, bytes), bytes);
 
    m_messages.emplace_back(type, std::move(bytes));
+
+   return *this;
 }
 
-void Channel_Impl_13::Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) {
+Channel_Impl_13::Flight& Channel_Impl_13::Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) {
    std::visit([&](const auto& msg) { callbacks.tls_inspect_handshake_msg(msg); }, message);
 
    m_messages.emplace_back(detail::serialize_message(message));
+
+   return *this;
 }
 
 void Channel_Impl_13::send_dummy_change_cipher_spec() {
@@ -483,10 +486,6 @@ void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
       throw Invalid_State("Cannot update keys: maximum DTLS epoch number reached");
    }
 
-   // TODO: The message and record marshalling code below is duplicated from the
-   //       AggregatedPostHandshakeMessages helper that is bound for a refactor.
-   //       Clean this up!
-
    auto key_update_msg = Key_Update(request_peer_update);
    callbacks().tls_inspect_handshake_msg(key_update_msg);
 
@@ -564,34 +563,6 @@ void Channel_Impl_13::send_record(Record_Type record_type, std::span<const uint8
 
    for(const auto& [record_to_write, _] : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
       callbacks().tls_emit_data(record_to_write);
-   }
-}
-
-void Channel_Impl_13::send_record(const PreparedHandshakeMessageFlight& flight) {
-   BOTAN_STATE_CHECK(!is_downgrading());
-   BOTAN_STATE_CHECK(m_can_write);
-
-   // TODO: Currently, this method is called separately for the ServerHello and
-   // the encrypted handshake messages of the server's first flight. Once
-   // AggregatedMessages also aggregates the ServerHello, we could move the
-   // calls to notify_flight_state_progress() from deep inside the state machine
-   // to this call, since then we will know for certain that the state has
-   // advanced as we are sending out the next complete flight.
-   for(const auto& [record_to_write, _] : m_record_layer->prepare_records(flight, m_cipher_state.get())) {
-      callbacks().tls_emit_data(record_to_write);
-   }
-
-   m_dtls_channel_companion->notify_sent_handshake_flight();
-   maybe_cancel_dtls_acknowledgement_timer();
-   maybe_arm_dtls_retransmission_timer();
-
-   // After the initial handshake message is sent, the record layer must
-   // adhere to a more strict record specification. Note that for the
-   // server case this is a NOOP.
-   // See (RFC 8446 5.1. regarding "legacy_record_version")
-   if(!m_first_message_sent) {
-      m_record_layer->disable_sending_compat_mode();
-      m_first_message_sent = true;
    }
 }
 

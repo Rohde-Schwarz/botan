@@ -240,8 +240,6 @@ std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handsha
 PreparedHandshakeMessage DTLS_Handshake_Layer::marshal_message_bytes(Handshake_Type type,
                                                                      std::span<const uint8_t> msg_bytes,
                                                                      std::optional<uint16_t> dtls_max_fragment_size) {
-   // TODO: Clean this up: the code duplication with prepare_post_handshake_message() is unfortunate.
-
    BOTAN_ARG_CHECK(dtls_max_fragment_size.has_value(), "DTLS max fragment size must be provided");
    BOTAN_ARG_CHECK(dtls_max_fragment_size.value() > header_length,
                    "DTLS max fragment size must be larger than header length");
