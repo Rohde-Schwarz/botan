@@ -53,72 +53,41 @@ class Channel_Impl_13 : public Channel_Impl,
                         protected Secret_Logger {
    protected:
       /**
-       * Helper class to coalesce handshake messages into a single TLS record
-       * of type 'Handshake'. This is used entirely internally in the Channel,
-       * Client and Server implementations.
-       *
-       * Note that implementations should use the derived classes that either
-       * aggregate conventional Handshake messages or Post-Handshake messages.
+       * Helper class to coalesce handshake messages into a TLS flight
+       * that can be coalesced into one or more records.
        */
-      class AggregatedMessages {
+      class Flight final {
          public:
-            AggregatedMessages(Channel_Impl_13& channel, Handshake_Layer& handshake_layer);
+            struct Message_Info {
+                  Handshake_Type type;              // NOLINT(*non-private-member-variable*)
+                  std::vector<uint8_t> serialized;  // NOLINT(*non-private-member-variable*)
 
-            AggregatedMessages(const AggregatedMessages&) = delete;
-            AggregatedMessages& operator=(const AggregatedMessages&) = delete;
-            AggregatedMessages(AggregatedMessages&&) = delete;
-            AggregatedMessages& operator=(AggregatedMessages&&) = delete;
+                  Message_Info(Handshake_Type t, std::vector<uint8_t> s) : type(t), serialized(std::move(s)) {}
 
-            ~AggregatedMessages() = default;
+                  explicit Message_Info(std::pair<Handshake_Type, std::vector<uint8_t>> p) :
+                        type(p.first), serialized(std::move(p.second)) {}
+            };
 
-            /**
-             * Send the messages aggregated in the message buffer.
-             */
-            void send();
-
-            bool contains_messages() const { return m_buffer.has_value(); }
-
-         protected:
-            void stash(PreparedHandshakeMessage message);
-
-         protected:
-            std::optional<PreparedHandshakeMessageFlight> m_buffer;  // NOLINT(*non-private-member-variable*)
-
-            Channel_Impl_13& m_channel;          // NOLINT(*non-private-member-variable*)
-            Handshake_Layer& m_handshake_layer;  // NOLINT(*non-private-member-variable*)
-      };
-
-      /**
-       * Aggregate conventional handshake messages. This will update the given
-       * Transcript_Hash_State accordingly as individual messages are added to
-       * the aggregation.
-       */
-      class AggregatedHandshakeMessages : public AggregatedMessages {
          public:
-            AggregatedHandshakeMessages(Channel_Impl_13& channel,
-                                        Handshake_Layer& handshake_layer,
-                                        Transcript_Hash_State& transcript_hash);
+            Flight() = default;
 
-            /**
-             * Adds a single handshake message to the send buffer. Note that this
-             * updates the handshake transcript hash regardless of sending the
-             * message.
-             */
-            AggregatedHandshakeMessages& add(Handshake_Message_13_Ref message);
+            Flight(const Flight& other) = delete;
+            Flight(Flight&& other) = default;
+            Flight& operator=(const Flight& other) = delete;
+            Flight& operator=(Flight&& other) = default;
+            ~Flight() = default;
+
+            void add(Handshake_Message_13_Ref msg, Transcript_Hash_State* transcript_hash, Callbacks& callbacks);
+            void add(Post_Handshake_Message_13 msg, Callbacks& callbacks);
+
+            bool contains_messages() const { return !m_messages.empty(); }
+
+            bool empty() const { return !contains_messages(); }
+
+            const std::vector<Message_Info>& messages() const { return m_messages; }
 
          private:
-            Transcript_Hash_State& m_transcript_hash;
-      };
-
-      /**
-       * Aggregate post-handshake messages. In contrast to ordinary handshake
-       * messages this does not maintain a Transcript_Hash_State.
-       */
-      class AggregatedPostHandshakeMessages : public AggregatedMessages {
-         public:
-            using AggregatedMessages::AggregatedMessages;
-
-            AggregatedPostHandshakeMessages& add(Post_Handshake_Message_13 message);
+            std::vector<Message_Info> m_messages;
       };
 
    public:
@@ -248,30 +217,16 @@ class Channel_Impl_13 : public Channel_Impl,
        */
       void opportunistically_update_traffic_keys() { m_opportunistic_key_update = true; }
 
-      template <typename... MsgTs>
-      void send_handshake_message(const std::variant<MsgTs...>& message) {
-         aggregate_handshake_messages().add(generalize_to<Handshake_Message_13_Ref>(message)).send();
-      }
-
-      template <typename MsgT>
-      void send_handshake_message(std::reference_wrapper<MsgT> message) {
-         send_handshake_message(generalize_to<Handshake_Message_13_Ref>(message));
-      }
-
-      void send_post_handshake_message(Post_Handshake_Message_13 message) {
-         aggregate_post_handshake_messages().add(std::move(message)).send();
-      }
-
       void send_dummy_change_cipher_spec();
 
-      AggregatedHandshakeMessages aggregate_handshake_messages() {
-         BOTAN_ASSERT_NONNULL(m_handshake_layer);
-         BOTAN_ASSERT_NONNULL(m_transcript_hash);
-         return AggregatedHandshakeMessages(*this, *m_handshake_layer, *m_transcript_hash);
+      static Flight aggregate_handshake_messages() {
+         // TODO: remove
+         return Flight();
       }
 
-      AggregatedPostHandshakeMessages aggregate_post_handshake_messages() {
-         return AggregatedPostHandshakeMessages(*this, *m_handshake_layer);
+      static Flight aggregate_post_handshake_messages() {
+         // TODO: remove
+         return Flight();
       }
 
       Callbacks& callbacks() const { return *m_callbacks; }
@@ -288,6 +243,7 @@ class Channel_Impl_13 : public Channel_Impl,
 
       void send_record(Record_Type record_type, std::span<const uint8_t> payload);
       void send_record(const PreparedHandshakeMessageFlight& flight);
+      void send_record(const Flight& flight);
 
       void send_acknowledgements();
 

@@ -14,6 +14,7 @@
 #include <botan/internal/concat_util.h>
 #include <botan/internal/fmt.h>
 #include <botan/internal/stl_util.h>
+#include <botan/internal/tls_messages_internal.h>
 #include <botan/internal/tls_reader.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 
@@ -62,18 +63,6 @@ void verify_handshake_message_size(size_t msg_len, size_t max_size) {
       throw TLS_Exception(Alert::HandshakeFailure,
                           Botan::fmt("Handshake message is {} bytes, policy maximum is {}", msg_len, max_size));
    }
-}
-
-std::array<uint8_t, 4> prepare_tls_header(Handshake_Type type, std::span<const uint8_t> msg_bytes) {
-   BOTAN_ASSERT_NOMSG(msg_bytes.size() <= 0xFFFFFF);
-   const uint32_t msg_size = static_cast<uint32_t>(msg_bytes.size());
-
-   return {
-      static_cast<uint8_t>(type),
-      get_byte<1>(msg_size),
-      get_byte<2>(msg_size),
-      get_byte<3>(msg_size),
-   };
 }
 
 class TLS_Handshake_Layer final : public Handshake_Layer {
@@ -255,56 +244,19 @@ std::unique_ptr<Handshake_Layer> Handshake_Layer::create(Connection_Side whoami,
    }
 }
 
-namespace {
+PreparedHandshakeMessage Handshake_Layer::marshal_message_bytes(Handshake_Type type,
+                                                                std::span<const uint8_t> msg_bytes,
+                                                                std::optional<uint16_t> dtls_max_fragment_size) {
+   BOTAN_UNUSED(dtls_max_fragment_size);  // Only relevant for DTL
 
-template <typename T>
-const T& get(const std::reference_wrapper<T>& v) {
-   return v.get();
-}
-
-template <typename T>
-const T& get(const T& v) {
-   // NOLINTNEXTLINE(bugprone-return-const-ref-from-parameter)
-   return v;
-}
-
-template <typename T>
-auto serialize_message(const T& message) {
-   return std::visit([](const auto& msg) { return std::pair(get(msg).wire_type(), get(msg).serialize()); }, message);
-}
-
-}  //namespace
-
-PreparedHandshakeMessage Handshake_Layer::prepare_message(Handshake_Message_13_Ref message,
-                                                          Transcript_Hash_State& transcript_hash,
-                                                          std::optional<uint16_t> dtls_max_fragment_size) {
-   BOTAN_UNUSED(dtls_max_fragment_size);  // Only relevant for DTLS
-
-   auto [type, msg_bytes] = serialize_message(message);
-
-   const auto tls_header = prepare_tls_header(type, msg_bytes);
-
-   transcript_hash.update(tls_header, msg_bytes);
-
-   return concat<MarshalledHandshakeMessage>(tls_header, msg_bytes);
+   return concat<MarshalledHandshakeMessage>(prepare_tls_handshake_header(type, msg_bytes), msg_bytes);
 }
 
 void Handshake_Layer::update_transcript_for_psk_binder_calc(const Client_Hello_13& message,
                                                             Transcript_Hash_State& transcript_hash) {
    const auto msg_bytes = message.serialize();
 
-   transcript_hash.update(prepare_tls_header(message.wire_type(), msg_bytes), msg_bytes);
-}
-
-PreparedHandshakeMessage Handshake_Layer::prepare_post_handshake_message(
-   const Post_Handshake_Message_13& message, std::optional<uint16_t> dtls_max_fragment_size) {
-   BOTAN_UNUSED(dtls_max_fragment_size);  // Only relevant for DTLS
-
-   auto [type, msg_bytes] = serialize_message(message);
-
-   const auto tls_header = prepare_tls_header(type, msg_bytes);
-
-   return concat<MarshalledHandshakeMessage>(tls_header, msg_bytes);
+   transcript_hash.update(prepare_tls_handshake_header(message.wire_type(), msg_bytes), msg_bytes);
 }
 
 Handshake_Type Handshake_Layer::read_handshake_message_type(uint8_t value) {

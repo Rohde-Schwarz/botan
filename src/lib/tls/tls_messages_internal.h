@@ -14,6 +14,7 @@
 #include <botan/tls_extensions.h>
 #include <botan/tls_session.h>
 #include <botan/tls_version.h>
+#include <botan/internal/loadstor.h>
 #include <vector>
 
 namespace Botan {
@@ -58,6 +59,22 @@ std::vector<uint8_t> make_server_hello_random(
 std::vector<uint8_t> calculate_cookie(std::span<const uint8_t> client_hello_bits,
                                       std::string_view client_identity,
                                       std::span<const uint8_t> cookie_secret);
+
+/**
+ * Prepare the TLS header according to RFC9846 Section 4, i.e.,
+ * msg_type (1 byte) | length (3 bytes)
+ */
+inline std::array<uint8_t, 4> prepare_tls_handshake_header(Handshake_Type type, std::span<const uint8_t> msg_bytes) {
+   BOTAN_ASSERT_NOMSG(msg_bytes.size() <= 0xFFFFFF);
+   const uint32_t msg_size = static_cast<uint32_t>(msg_bytes.size());
+
+   return {
+      static_cast<uint8_t>(type),
+      get_byte<1>(msg_size),
+      get_byte<2>(msg_size),
+      get_byte<3>(msg_size),
+   };
+}
 
 /**
  * Version-agnostic internal client hello data container that allows

@@ -64,7 +64,7 @@ std::shared_ptr<Client_Impl_13> Client_Impl_13::create(const std::shared_ptr<Cal
 #endif
    }
 
-   self->send_handshake_message(self->m_handshake->state.sending(
+   const auto ch = self->m_handshake->state.sending(
       Client_Hello_13(*policy,
                       *callbacks,
                       *rng,
@@ -72,7 +72,11 @@ std::shared_ptr<Client_Impl_13> Client_Impl_13::create(const std::shared_ptr<Cal
                       next_protocols,
                       self->m_handshake->resumed_session,
                       creds->find_preshared_keys(self->m_info.hostname(), Connection_Side::Client),
-                      flavor)));
+                      flavor));
+   Flight ch_flight;  // TODO: "one-message flights"
+   BOTAN_ASSERT_NONNULL(self->m_transcript_hash);
+   ch_flight.add(ch, self->m_transcript_hash.get(), self->callbacks());
+   self->send_record(ch_flight);
 
    self->maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingFirstClientHello);
 
@@ -483,7 +487,9 @@ void Client_Impl_13::handle(const Hello_Retry_Request& hrr) {
    callbacks().tls_examine_extensions(hrr.extensions(), Connection_Side::Server, Handshake_Type::HelloRetryRequest);
 
    maybe_handle_compatibility_mode(Compat_Mode_Situation::BeforeSendingSecondClientHello);
-   send_handshake_message(std::reference_wrapper(ch));
+   Flight ch_flight;
+   ch_flight.add(std::reference_wrapper(ch), m_transcript_hash.get(), callbacks());
+   send_record(ch_flight);
 
    // RFC 8446 4.1.4
    //    If a client receives a second HelloRetryRequest in the same connection [...],
@@ -635,7 +641,7 @@ void Client_Impl_13::handle(const Certificate_Verify_13& certificate_verify_msg)
    m_handshake->transitions.set_expected_next(Handshake_Type::Finished);
 }
 
-void Client_Impl_13::send_client_authentication(Channel_Impl_13::AggregatedHandshakeMessages& flight) {
+void Client_Impl_13::send_client_authentication(Channel_Impl_13::Flight& flight) {
    BOTAN_ASSERT_NONNULL(m_handshake);
    BOTAN_ASSERT_NONNULL(m_transcript_hash);
    BOTAN_ASSERT_NOMSG(m_handshake->state.has_certificate_request());
@@ -671,8 +677,9 @@ void Client_Impl_13::send_client_authentication(Channel_Impl_13::AggregatedHands
    //    certificate_request_context:  If this message is in response to a
    //       CertificateRequest, the value of certificate_request_context in
    //       that message.
-   flight.add(m_handshake->state.sending(
-      Certificate_13(cert_request, m_info.hostname(), credentials_manager(), callbacks(), cert_type)));
+   const auto cert = m_handshake->state.sending(
+      Certificate_13(cert_request, m_info.hostname(), credentials_manager(), callbacks(), cert_type));
+   flight.add(cert, m_transcript_hash.get(), callbacks());
 
    // RFC 8446 4.4.2
    //    If the server requests client authentication but no suitable certificate
@@ -681,15 +688,16 @@ void Client_Impl_13::send_client_authentication(Channel_Impl_13::AggregatedHands
    //
    // In that case, no Certificate Verify message will be sent.
    if(!m_handshake->state.client_certificate().empty()) {
-      flight.add(m_handshake->state.sending(Certificate_Verify_13(m_handshake->state.client_certificate(),
-                                                                  cert_request.signature_schemes(),
-                                                                  m_info.hostname(),
-                                                                  m_transcript_hash->current(),
-                                                                  Connection_Side::Client,
-                                                                  credentials_manager(),
-                                                                  policy(),
-                                                                  callbacks(),
-                                                                  rng())));
+      const auto cert_verify = m_handshake->state.sending(Certificate_Verify_13(m_handshake->state.client_certificate(),
+                                                                                cert_request.signature_schemes(),
+                                                                                m_info.hostname(),
+                                                                                m_transcript_hash->current(),
+                                                                                Connection_Side::Client,
+                                                                                credentials_manager(),
+                                                                                policy(),
+                                                                                callbacks(),
+                                                                                rng()));
+      flight.add(cert_verify, m_transcript_hash.get(), callbacks());
    }
 }
 
@@ -736,10 +744,11 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    }
 
    // send client finished handshake message (still using handshake traffic secrets)
-   flight.add(m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash->current())));
+   const auto finished = m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash->current()));
+   flight.add(finished, m_transcript_hash.get(), callbacks());
 
    maybe_handle_compatibility_mode(Compat_Mode_Situation::BeforeSendingEncryptedClientFlight);
-   flight.send();
+   send_record(flight);
 
    // derives the sending application traffic secrets
    m_cipher_state->advance_with_client_finished(m_transcript_hash->current());

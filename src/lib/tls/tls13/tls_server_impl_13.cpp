@@ -149,14 +149,15 @@ size_t Server_Impl_13::send_new_session_tickets(const size_t tickets) {
 
       if(callbacks().tls_should_persist_resumption_information(session)) {
          if(auto handle = session_manager().establish(session)) {
-            flight.add(New_Session_Ticket_13(std::move(nonce), session, handle.value(), callbacks()));
+            auto nst = New_Session_Ticket_13(std::move(nonce), session, handle.value(), callbacks());
+            flight.add(std::move(nst), callbacks());
             ++tickets_created;
          }
       }
    }
 
    if(flight.contains_messages()) {
-      flight.send();
+      send_record(flight);
    }
 
    return tickets_created;
@@ -364,7 +365,10 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
    // NOTE: the server_hello variable is moved into the handshake state. Later
    //       references to the Server Hello will need to consult the handshake
    //       state object!
-   send_handshake_message(m_handshake->state.sending(std::move(server_hello)));
+   const auto sh = m_handshake->state.sending(std::move(server_hello));
+   Flight sh_flight;
+   sh_flight.add(sh, m_transcript_hash.get(), callbacks());
+   send_record(sh_flight);
 
    if(!m_handshake->state.has_hello_retry_request()) {
       maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingFirstServerHello);
@@ -400,8 +404,9 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
    const bool is_resumption = m_handshake->resumed_session.has_value();
    const bool requesting_client_auth = certificate_request.has_value();
 
-   flight.add(m_handshake->state.sending(
-      Encrypted_Extensions(client_hello, policy(), callbacks(), is_resumption, requesting_client_auth)));
+   const auto ee = m_handshake->state.sending(
+      Encrypted_Extensions(client_hello, policy(), callbacks(), is_resumption, requesting_client_auth));
+   flight.add(ee, m_transcript_hash.get(), callbacks());
 
    if(!uses_psk) {
       // RFC 8446 4.3.2
@@ -409,7 +414,8 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
       //    request a certificate from the client. This message, if sent, MUST
       //    follow EncryptedExtensions.
       if(certificate_request.has_value()) {
-         flight.add(m_handshake->state.sending(std::move(certificate_request.value())));
+         const auto cr = m_handshake->state.sending(std::move(certificate_request.value()));
+         flight.add(cr, m_transcript_hash.get(), callbacks());
       }
 
       const auto& enc_exts = m_handshake->state.encrypted_extensions().extensions();
@@ -438,20 +444,24 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
          }
       }();
 
-      flight
-         .add(m_handshake->state.sending(Certificate_13(client_hello, credentials_manager(), callbacks(), cert_type)))
-         .add(m_handshake->state.sending(Certificate_Verify_13(m_handshake->state.server_certificate(),
-                                                               client_hello.signature_schemes(),
-                                                               client_hello.sni_hostname(),
-                                                               m_transcript_hash->current(),
-                                                               Connection_Side::Server,
-                                                               credentials_manager(),
-                                                               policy(),
-                                                               callbacks(),
-                                                               rng())));
+      const auto cert =
+         m_handshake->state.sending(Certificate_13(client_hello, credentials_manager(), callbacks(), cert_type));
+      flight.add(cert, m_transcript_hash.get(), callbacks());
+
+      const auto cert_verify = m_handshake->state.sending(Certificate_Verify_13(m_handshake->state.server_certificate(),
+                                                                                client_hello.signature_schemes(),
+                                                                                client_hello.sni_hostname(),
+                                                                                m_transcript_hash->current(),
+                                                                                Connection_Side::Server,
+                                                                                credentials_manager(),
+                                                                                policy(),
+                                                                                callbacks(),
+                                                                                rng()));
+      flight.add(cert_verify, m_transcript_hash.get(), callbacks());
    }
 
-   flight.add(m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash->current())));
+   const auto finished = m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash->current()));
+   flight.add(finished, m_transcript_hash.get(), callbacks());
 
    if(client_hello.extensions().has<Record_Size_Limit>() &&
       m_handshake->state.encrypted_extensions().extensions().has<Record_Size_Limit>()) {
@@ -475,7 +485,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
       set_record_size_limits(outgoing_limit->limit(), incoming_limit->limit());
    }
 
-   flight.send();
+   send_record(flight);
 
    m_cipher_state->advance_with_server_finished(m_transcript_hash->current(), *this);
 
@@ -498,7 +508,10 @@ void Server_Impl_13::handle_reply_to_client_hello(Hello_Retry_Request hello_retr
    auto cipher = Ciphersuite::by_id(hello_retry_request.ciphersuite());
    BOTAN_ASSERT_NOMSG(cipher.has_value());  // should work, since we chose that suite
 
-   send_handshake_message(m_handshake->state.sending(std::move(hello_retry_request)));
+   const auto hrr = m_handshake->state.sending(std::move(hello_retry_request));
+   Flight hrr_flight;
+   hrr_flight.add(hrr, m_transcript_hash.get(), callbacks());
+   send_record(hrr_flight);
    maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingHelloRetryRequest);
 
    m_transcript_hash =
