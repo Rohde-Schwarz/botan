@@ -14,6 +14,7 @@
 #include <botan/tls_messages_13.h>
 #include <botan/tls_policy.h>
 #include <botan/internal/tls_cipher_state.h>
+#include <botan/internal/tls_messages_internal.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 
 #if defined(BOTAN_HAS_DTLS_13)
@@ -331,64 +332,23 @@ void Channel_Impl_13::handle(const Key_Update& key_update) {
    }
 }
 
-Channel_Impl_13::AggregatedMessages::AggregatedMessages(Channel_Impl_13& channel, Handshake_Layer& handshake_layer) :
-      m_channel(channel), m_handshake_layer(handshake_layer) {}
+void Channel_Impl_13::Flight::add(const Handshake_Message_13_Ref message,
+                                  Transcript_Hash_State* transcript_hash,
+                                  Callbacks& callbacks) {
+   BOTAN_ASSERT_NONNULL(transcript_hash);
+   std::visit([&](const auto msg) { callbacks.tls_inspect_handshake_msg(msg.get()); }, message);
 
-Channel_Impl_13::AggregatedHandshakeMessages::AggregatedHandshakeMessages(Channel_Impl_13& channel,
-                                                                          Handshake_Layer& handshake_layer,
-                                                                          Transcript_Hash_State& transcript_hash) :
-      AggregatedMessages(channel, handshake_layer), m_transcript_hash(transcript_hash) {}
+   auto [type, bytes] = detail::serialize_message(message);
 
-Channel_Impl_13::AggregatedHandshakeMessages& Channel_Impl_13::AggregatedHandshakeMessages::add(
-   const Handshake_Message_13_Ref message) {
-   std::visit([&](const auto msg) { m_channel.callbacks().tls_inspect_handshake_msg(msg.get()); }, message);
-   const auto max_payload_size =  // TODO: m_record_layer
-      m_channel.m_record_layer->record_payload_size_limit(m_channel.policy(), m_channel.m_cipher_state.get());
+   transcript_hash->update(prepare_tls_handshake_header(type, bytes), bytes);
 
-   stash(m_handshake_layer.prepare_message(message, m_transcript_hash, max_payload_size));
-   return *this;
+   m_messages.emplace_back(type, std::move(bytes));
 }
 
-Channel_Impl_13::AggregatedPostHandshakeMessages& Channel_Impl_13::AggregatedPostHandshakeMessages::add(
-   Post_Handshake_Message_13 message) {
-   std::visit([&](const auto& msg) { m_channel.callbacks().tls_inspect_handshake_msg(msg); }, message);
-   const auto max_payload_size =  // TODO: m_record_layer
-      m_channel.m_record_layer->record_payload_size_limit(m_channel.policy(), m_channel.m_cipher_state.get());
+void Channel_Impl_13::Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) {
+   std::visit([&](const auto& msg) { callbacks.tls_inspect_handshake_msg(msg); }, message);
 
-   stash(m_handshake_layer.prepare_post_handshake_message(message, max_payload_size));
-   return *this;
-}
-
-void Channel_Impl_13::AggregatedMessages::stash(PreparedHandshakeMessage message) {
-   if(!contains_messages()) {
-      std::visit(overloaded{
-                    [&](const MarshalledHandshakeMessage&) { m_buffer.emplace(MarshalledHandshakeMessageFlight()); },
-                    [&](const std::vector<MarshalledHandshakeMessageFragment>&) {
-                       m_buffer.emplace(std::vector<MarshalledHandshakeMessageFragment>());
-                    },
-                 },
-                 message);
-   }
-
-   std::visit(overloaded{
-                 [&](MarshalledHandshakeMessageFlight& buf, MarshalledHandshakeMessage msg) {
-                    buf.get().insert(buf.end(), msg.begin(), msg.end());
-                 },
-                 [&](std::vector<MarshalledHandshakeMessageFragment>& buf,
-                     std::vector<MarshalledHandshakeMessageFragment> msg) {
-                    buf.insert(buf.end(), std::make_move_iterator(msg.begin()), std::make_move_iterator(msg.end()));
-                 },
-
-                 // Invalid state: Incoming messages' variant must be consistent
-                 [](auto&&, auto&&) { BOTAN_ASSERT_NOMSG(false); },
-              },
-              *m_buffer,  // checked via contains_messages() above
-              std::move(message));
-}
-
-void Channel_Impl_13::AggregatedMessages::send() {
-   BOTAN_STATE_CHECK(contains_messages());
-   m_channel.send_record(*m_buffer);
+   m_messages.emplace_back(detail::serialize_message(message));
 }
 
 void Channel_Impl_13::send_dummy_change_cipher_spec() {
@@ -530,19 +490,19 @@ void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
    auto key_update_msg = Key_Update(request_peer_update);
    callbacks().tls_inspect_handshake_msg(key_update_msg);
 
+   auto msg_bytes = m_handshake_layer->marshal_message_bytes(Handshake_Type::KeyUpdate, key_update_msg.serialize(), 13);
+
    const auto flight = std::visit(
       overloaded{
-         [&](MarshalledHandshakeMessage msg) -> PreparedHandshakeMessageFlight {
+         [](MarshalledHandshakeMessage msg) -> PreparedHandshakeMessageFlight {
             return MarshalledHandshakeMessageFlight(std::move(msg).get());
          },
-         [&](std::vector<MarshalledHandshakeMessageFragment> msg_fragments) -> PreparedHandshakeMessageFlight {
-            return msg_fragments;
-         },
+         [](std::vector<MarshalledHandshakeMessageFragment> frags) -> PreparedHandshakeMessageFlight { return frags; },
       },
-      m_handshake_layer->prepare_post_handshake_message(std::move(key_update_msg),
-                                                        13 /* header + 1 byte of payload */));
+      std::move(msg_bytes));
 
    const auto prepared_records = m_record_layer->prepare_records(flight, m_cipher_state.get());
+
    BOTAN_ASSERT_NOMSG(prepared_records.size() == 1);  // KeyUpdate is small enough to fit into a single record
    callbacks().tls_emit_data(prepared_records.front().first);
 
@@ -557,7 +517,7 @@ void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
       // deferred to the handling of the respective acknowledgement.
       const auto key_update_record_number = prepared_records.front().second;
       m_dtls_channel_companion->register_pending_key_update(key_update_record_number);
-      maybe_arm_dtls_retransmission_timer();
+      maybe_arm_dtls_retransmission_timer();  // TODO: This may be a no-op since the timer is not started() here?
    } else {
       // For TLS, we may immediately update the write keys after sending the
       // KeyUpdate message because we have reliable transport
@@ -622,6 +582,55 @@ void Channel_Impl_13::send_record(const PreparedHandshakeMessageFlight& flight) 
    }
 
    m_dtls_channel_companion->notify_sent_handshake_flight();
+   maybe_cancel_dtls_acknowledgement_timer();
+   maybe_arm_dtls_retransmission_timer();
+
+   // After the initial handshake message is sent, the record layer must
+   // adhere to a more strict record specification. Note that for the
+   // server case this is a NOOP.
+   // See (RFC 8446 5.1. regarding "legacy_record_version")
+   if(!m_first_message_sent) {
+      m_record_layer->disable_sending_compat_mode();
+      m_first_message_sent = true;
+   }
+}
+
+void Channel_Impl_13::send_record(const Flight& flight) {
+   // TODO: should probably be called send_records
+   BOTAN_STATE_CHECK(flight.contains_messages());
+   BOTAN_STATE_CHECK(!is_downgrading());
+   BOTAN_STATE_CHECK(m_can_write);
+
+   const auto max_payload_size = m_record_layer->record_payload_size_limit(policy(), m_cipher_state.get());
+
+   PreparedHandshakeMessageFlight prepared =
+      is_datagram() ? PreparedHandshakeMessageFlight(std::vector<MarshalledHandshakeMessageFragment>{})
+                    : PreparedHandshakeMessageFlight(MarshalledHandshakeMessageFlight{});
+
+   // TODO: should be able to get rid of the variants by feeding the result of marshal_message_bytes into the companios/IO
+   for(const auto& msg_info : flight.messages()) {
+      auto prep = m_handshake_layer->marshal_message_bytes(msg_info.type, msg_info.serialized, max_payload_size);
+      std::visit(overloaded{
+                    [&](MarshalledHandshakeMessage msg) {
+                       auto& flat = std::get<MarshalledHandshakeMessageFlight>(prepared).get();
+                       const auto& v = msg.get();
+                       flat.insert(flat.end(), v.begin(), v.end());
+                    },
+                    [&](std::vector<MarshalledHandshakeMessageFragment> frags) {
+                       auto& all = std::get<std::vector<MarshalledHandshakeMessageFragment>>(prepared);
+                       all.insert(
+                          all.end(), std::make_move_iterator(frags.begin()), std::make_move_iterator(frags.end()));
+                    },
+                 },
+                 std::move(prep));
+   }
+
+   for(const auto& [record_to_write, _] : m_record_layer->prepare_records(prepared, m_cipher_state.get())) {
+      callbacks().tls_emit_data(record_to_write);
+   }
+
+   m_dtls_channel_companion->notify_sent_handshake_flight();
+   // TODO: Move below to companion/IO as well
    maybe_cancel_dtls_acknowledgement_timer();
    maybe_arm_dtls_retransmission_timer();
 

@@ -237,37 +237,15 @@ std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handsha
    return msg;
 }
 
-namespace {
-//TODO: de-duplicate, this is copied from TLS handshake layer
-template <typename T>
-const T& get(const std::reference_wrapper<T>& v) {
-   return v.get();
-}
-
-template <typename T>
-const T& get(const T& v) {
-   // NOLINTNEXTLINE(bugprone-return-const-ref-from-parameter)
-   return v;
-}
-
-template <typename T>
-auto serialize_message(const T& message) {
-   return std::visit([](const auto& msg) { return std::pair(get(msg).wire_type(), get(msg).serialize()); }, message);
-}
-
-}  //namespace
-
-PreparedHandshakeMessage DTLS_Handshake_Layer::prepare_message(const Handshake_Message_13_Ref message,
-                                                               Transcript_Hash_State& transcript_hash,
-                                                               std::optional<uint16_t> dtls_max_fragment_size) {
+PreparedHandshakeMessage DTLS_Handshake_Layer::marshal_message_bytes(Handshake_Type type,
+                                                                     std::span<const uint8_t> msg_bytes,
+                                                                     std::optional<uint16_t> dtls_max_fragment_size) {
    // TODO: Clean this up: the code duplication with prepare_post_handshake_message() is unfortunate.
 
    BOTAN_ARG_CHECK(dtls_max_fragment_size.has_value(), "DTLS max fragment size must be provided");
    BOTAN_ARG_CHECK(dtls_max_fragment_size.value() > header_length,
                    "DTLS max fragment size must be larger than header length");
 
-   auto [type, msg_bytes] = serialize_message(message);
-
    const uint16_t message_seq = m_send_message_seq++;
 
    const auto max_bytes_per_fragment = dtls_max_fragment_size.value() - header_length;
@@ -291,47 +269,6 @@ PreparedHandshakeMessage DTLS_Handshake_Layer::prepare_message(const Handshake_M
          concat<MarshalledHandshakeMessageFragment>(header.serialize(), bs.take(bytes_in_this_fragment)));
    }
    BOTAN_ASSERT_NOMSG(fragments.size() == number_of_fragments);
-
-   const auto tls_header = std::span{fragments.front()}.first<4>();
-   transcript_hash.update(tls_header, msg_bytes);
-
-   return fragments;
-}
-
-PreparedHandshakeMessage DTLS_Handshake_Layer::prepare_post_handshake_message(
-   const Post_Handshake_Message_13& message, std::optional<uint16_t> dtls_max_fragment_size) {
-   // TODO: Clean this up: the code duplication with prepare_message() is unfortunate.
-
-   BOTAN_ARG_CHECK(dtls_max_fragment_size.has_value(), "DTLS max fragment size must be provided");
-   BOTAN_ARG_CHECK(dtls_max_fragment_size.value() > header_length,
-                   "DTLS max fragment size must be larger than header length");
-
-   auto [type, msg_bytes] = serialize_message(message);
-
-   const uint16_t message_seq = m_send_message_seq++;
-
-   const auto max_bytes_per_fragment = dtls_max_fragment_size.value() - header_length;
-   const auto number_of_fragments = ceil_division(msg_bytes.size(), max_bytes_per_fragment);
-   BOTAN_ASSERT_NOMSG(number_of_fragments > 0);
-
-   std::vector<MarshalledHandshakeMessageFragment> fragments;
-   fragments.reserve(number_of_fragments);
-
-   BufferSlicer bs(msg_bytes);
-   while(!bs.empty()) {
-      const auto bytes_in_this_fragment = std::min(bs.remaining(), max_bytes_per_fragment);
-      const auto header = DTLS_Handshake_Header{
-         .msg_type = type,
-         .message_length = static_cast<uint32_t>(msg_bytes.size()),
-         .message_sequence_number = message_seq,
-         .fragment_offset = static_cast<uint32_t>(msg_bytes.size() - bs.remaining()),
-         .fragment_length = static_cast<uint32_t>(bytes_in_this_fragment),
-      };
-      fragments.push_back(
-         concat<MarshalledHandshakeMessageFragment>(header.serialize(), bs.take(bytes_in_this_fragment)));
-   }
-   BOTAN_ASSERT_NOMSG(fragments.size() == number_of_fragments);
-
    return fragments;
 }
 

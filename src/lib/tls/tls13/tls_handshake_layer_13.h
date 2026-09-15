@@ -94,21 +94,10 @@ class BOTAN_TEST_API Handshake_Layer {
        */
       virtual std::optional<Post_Handshake_Message_13> next_post_handshake_message(const Policy& policy) = 0;
 
-      /**
-       * Marshals one handshake @p message for sending in an (encrypted) record and updates the
-       * provided transcript hash state accordingly. For DTLS, multiple fragments may be
-       * produced if the handshake message is too large to fit into a single record.
-       *
-       * @param message the handshake message to be marshalled
-       * @param transcript_hash the transcript hash state to be updated
-       * @param dtls_max_fragment_size the maximum size of the payload in a single record,
-                                       used to determine if fragmentation is needed in DTLS.
-       *
-       * @return a single marshalled handshake message either in one piece or fragmented for DTLS
-       */
-      virtual PreparedHandshakeMessage prepare_message(Handshake_Message_13_Ref message,
-                                                       Transcript_Hash_State& transcript_hash,
-                                                       std::optional<uint16_t> dtls_max_fragment_size = std::nullopt);
+      virtual PreparedHandshakeMessage marshal_message_bytes(
+         Handshake_Type type,
+         std::span<const uint8_t> msg_bytes,
+         std::optional<uint16_t> dtls_max_fragment_size = std::nullopt);
 
       /**
        * Marshals a ClientHello prematurely for a truncated transcript hash
@@ -119,18 +108,6 @@ class BOTAN_TEST_API Handshake_Layer {
        */
       static void update_transcript_for_psk_binder_calc(const Client_Hello_13& message,
                                                         Transcript_Hash_State& transcript_hash);
-
-      /**
-       * Marshals one post-handshake message for sending in an (encrypted) record.
-       *
-       * @param message the post handshake message to be marshalled
-       * @param dtls_max_fragment_size the maximum size of the payload in a single record,
-                                       used to determine if fragmentation is needed in DTLS.
-       *
-       * @return the marshalled post-handshake message
-       */
-      virtual PreparedHandshakeMessage prepare_post_handshake_message(
-         const Post_Handshake_Message_13& message, std::optional<uint16_t> dtls_max_fragment_size = std::nullopt);
 
       /**
        * Check if the Handshake_Layer has stored a partial message in its internal buffer.

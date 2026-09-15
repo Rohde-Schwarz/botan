@@ -36,12 +36,9 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
 
       NextMessageStep next_message_buffer(std::span<const uint8_t> bytes, const Policy& policy) override;
 
-      PreparedHandshakeMessage prepare_message(Handshake_Message_13_Ref message,
-                                               Transcript_Hash_State& transcript_hash,
-                                               std::optional<uint16_t> dtls_max_fragment_size) override;
-
-      PreparedHandshakeMessage prepare_post_handshake_message(const Post_Handshake_Message_13& message,
-                                                              std::optional<uint16_t> dtls_max_fragment_size) override;
+      PreparedHandshakeMessage marshal_message_bytes(Handshake_Type type,
+                                                     std::span<const uint8_t> msg_bytes,
+                                                     std::optional<uint16_t> dtls_max_fragment_size) override;
 
       std::optional<Handshake_Message_13> next_message(const Policy& policy,
                                                        Transcript_Hash_State& transcript_hash) override;
