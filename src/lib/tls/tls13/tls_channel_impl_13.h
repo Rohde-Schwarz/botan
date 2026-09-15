@@ -53,8 +53,9 @@ class Channel_Impl_13 : public Channel_Impl,
                         protected Secret_Logger {
    protected:
       /**
-       * Helper class to coalesce handshake messages into a TLS flight
-       * that can be coalesced into one or more records.
+       * Helper class to coalesce handshake messages into a TLS flight.
+       * The class keeps score of the contained messages. It does not marshal
+       * them.
        */
       class Flight final {
          public:
@@ -77,8 +78,20 @@ class Channel_Impl_13 : public Channel_Impl,
             Flight& operator=(Flight&& other) = default;
             ~Flight() = default;
 
-            void add(Handshake_Message_13_Ref msg, Transcript_Hash_State* transcript_hash, Callbacks& callbacks);
-            void add(Post_Handshake_Message_13 msg, Callbacks& callbacks);
+            /**
+             * Add @p msg to the flight, updating @p transcript_hash in the process and letting
+             * the user inspect the message via @p callbacks.
+             * Use this variant of `add` to add handshake messages where the transcript hash
+             * needs to be updated. For post-handshake messages, the corresponding `add()`
+             * variant without a transcript hash needs to be used.
+             */
+            Flight& add(Handshake_Message_13_Ref msg, Transcript_Hash_State& transcript_hash, Callbacks& callbacks);
+            /**
+             * Add @p msg to the flight, letting the user inspect the message via @p callbacks.
+             * Use this variant of `add` to add post-handshake messages. For handshake messages, the transcript
+             * hash needs to be updated, so the corresponding `add()` variant needs to be used in that case.
+             */
+            Flight& add(Post_Handshake_Message_13 msg, Callbacks& callbacks);
 
             bool contains_messages() const { return !m_messages.empty(); }
 
@@ -219,16 +232,6 @@ class Channel_Impl_13 : public Channel_Impl,
 
       void send_dummy_change_cipher_spec();
 
-      static Flight aggregate_handshake_messages() {
-         // TODO: remove
-         return Flight();
-      }
-
-      static Flight aggregate_post_handshake_messages() {
-         // TODO: remove
-         return Flight();
-      }
-
       Callbacks& callbacks() const { return *m_callbacks; }
 
       Session_Manager& session_manager() { return *m_session_manager; }
@@ -242,7 +245,6 @@ class Channel_Impl_13 : public Channel_Impl,
       bool is_datagram() const { return m_flavor == TLS_Flavor::DTLS; }
 
       void send_record(Record_Type record_type, std::span<const uint8_t> payload);
-      void send_record(const PreparedHandshakeMessageFlight& flight);
       void send_record(const Flight& flight);
 
       void send_acknowledgements();

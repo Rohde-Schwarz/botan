@@ -126,8 +126,7 @@ size_t Server_Impl_13::send_new_session_tickets(const size_t tickets) {
    if(tickets == 0) {
       return 0;
    }
-
-   auto flight = aggregate_post_handshake_messages();
+   Flight flight;
    size_t tickets_created = 0;
 
    BOTAN_STATE_CHECK(m_active_state.has_value());
@@ -367,7 +366,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
    //       state object!
    const auto sh = m_handshake->state.sending(std::move(server_hello));
    Flight sh_flight;
-   sh_flight.add(sh, m_transcript_hash.get(), callbacks());
+   sh_flight.add(sh, *m_transcript_hash, callbacks());
    send_record(sh_flight);
 
    if(!m_handshake->state.has_hello_retry_request()) {
@@ -400,13 +399,13 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
       uses_psk ? std::nullopt
                : Certificate_Request_13::maybe_create(client_hello, credentials_manager(), callbacks(), policy());
 
-   auto flight = aggregate_handshake_messages();
+   auto flight = Flight();
    const bool is_resumption = m_handshake->resumed_session.has_value();
    const bool requesting_client_auth = certificate_request.has_value();
 
    const auto ee = m_handshake->state.sending(
       Encrypted_Extensions(client_hello, policy(), callbacks(), is_resumption, requesting_client_auth));
-   flight.add(ee, m_transcript_hash.get(), callbacks());
+   flight.add(ee, *m_transcript_hash, callbacks());
 
    if(!uses_psk) {
       // RFC 8446 4.3.2
@@ -415,7 +414,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
       //    follow EncryptedExtensions.
       if(certificate_request.has_value()) {
          const auto cr = m_handshake->state.sending(std::move(certificate_request.value()));
-         flight.add(cr, m_transcript_hash.get(), callbacks());
+         flight.add(cr, *m_transcript_hash, callbacks());
       }
 
       const auto& enc_exts = m_handshake->state.encrypted_extensions().extensions();
@@ -446,7 +445,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
 
       const auto cert =
          m_handshake->state.sending(Certificate_13(client_hello, credentials_manager(), callbacks(), cert_type));
-      flight.add(cert, m_transcript_hash.get(), callbacks());
+      flight.add(cert, *m_transcript_hash, callbacks());
 
       const auto cert_verify = m_handshake->state.sending(Certificate_Verify_13(m_handshake->state.server_certificate(),
                                                                                 client_hello.signature_schemes(),
@@ -457,11 +456,11 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
                                                                                 policy(),
                                                                                 callbacks(),
                                                                                 rng()));
-      flight.add(cert_verify, m_transcript_hash.get(), callbacks());
+      flight.add(cert_verify, *m_transcript_hash, callbacks());
    }
 
    const auto finished = m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash->current()));
-   flight.add(finished, m_transcript_hash.get(), callbacks());
+   flight.add(finished, *m_transcript_hash, callbacks());
 
    if(client_hello.extensions().has<Record_Size_Limit>() &&
       m_handshake->state.encrypted_extensions().extensions().has<Record_Size_Limit>()) {
@@ -509,9 +508,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Hello_Retry_Request hello_retr
    BOTAN_ASSERT_NOMSG(cipher.has_value());  // should work, since we chose that suite
 
    const auto hrr = m_handshake->state.sending(std::move(hello_retry_request));
-   Flight hrr_flight;
-   hrr_flight.add(hrr, m_transcript_hash.get(), callbacks());
-   send_record(hrr_flight);
+   send_record(Flight().add(hrr, *m_transcript_hash, callbacks()));
    maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingHelloRetryRequest);
 
    m_transcript_hash =

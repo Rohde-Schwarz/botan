@@ -73,10 +73,8 @@ std::shared_ptr<Client_Impl_13> Client_Impl_13::create(const std::shared_ptr<Cal
                       self->m_handshake->resumed_session,
                       creds->find_preshared_keys(self->m_info.hostname(), Connection_Side::Client),
                       flavor));
-   Flight ch_flight;  // TODO: "one-message flights"
    BOTAN_ASSERT_NONNULL(self->m_transcript_hash);
-   ch_flight.add(ch, self->m_transcript_hash.get(), self->callbacks());
-   self->send_record(ch_flight);
+   self->send_record(Flight().add(ch, *self->m_transcript_hash, self->callbacks()));
 
    self->maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingFirstClientHello);
 
@@ -488,7 +486,7 @@ void Client_Impl_13::handle(const Hello_Retry_Request& hrr) {
 
    maybe_handle_compatibility_mode(Compat_Mode_Situation::BeforeSendingSecondClientHello);
    Flight ch_flight;
-   ch_flight.add(std::reference_wrapper(ch), m_transcript_hash.get(), callbacks());
+   ch_flight.add(std::reference_wrapper(ch), *m_transcript_hash, callbacks());
    send_record(ch_flight);
 
    // RFC 8446 4.1.4
@@ -679,7 +677,7 @@ void Client_Impl_13::send_client_authentication(Channel_Impl_13::Flight& flight)
    //       that message.
    const auto cert = m_handshake->state.sending(
       Certificate_13(cert_request, m_info.hostname(), credentials_manager(), callbacks(), cert_type));
-   flight.add(cert, m_transcript_hash.get(), callbacks());
+   flight.add(cert, *m_transcript_hash, callbacks());
 
    // RFC 8446 4.4.2
    //    If the server requests client authentication but no suitable certificate
@@ -697,7 +695,7 @@ void Client_Impl_13::send_client_authentication(Channel_Impl_13::Flight& flight)
                                                                                 policy(),
                                                                                 callbacks(),
                                                                                 rng()));
-      flight.add(cert_verify, m_transcript_hash.get(), callbacks());
+      flight.add(cert_verify, *m_transcript_hash, callbacks());
    }
 }
 
@@ -734,7 +732,7 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    // the derivation of sending application data.
    m_cipher_state->advance_with_server_finished(m_transcript_hash->current(), *this);
 
-   auto flight = aggregate_handshake_messages();
+   auto flight = Flight();
 
    // RFC 8446 4.4.2
    //    The client MUST send a Certificate message if and only if the server
@@ -745,7 +743,7 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
 
    // send client finished handshake message (still using handshake traffic secrets)
    const auto finished = m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash->current()));
-   flight.add(finished, m_transcript_hash.get(), callbacks());
+   flight.add(finished, *m_transcript_hash, callbacks());
 
    maybe_handle_compatibility_mode(Compat_Mode_Situation::BeforeSendingEncryptedClientFlight);
    send_record(flight);
