@@ -24,7 +24,7 @@ class Secret_Logger;
 class Cipher_State;
 struct RecordNumber;
 
-class Channel_IO {
+class Channel_IO : public std::enable_shared_from_this<Channel_IO> {
    protected:
       Channel_IO() = default;
 

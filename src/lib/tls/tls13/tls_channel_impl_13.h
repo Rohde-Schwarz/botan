@@ -154,6 +154,8 @@ class Channel_Impl_13 : public Channel_Impl,
 
       std::optional<std::chrono::milliseconds> next_retransmission_timeout() const override;
 
+      Cipher_State* cipher_state() { return m_cipher_state.get(); }
+
    protected:
       virtual void process_handshake_msg(Handshake_Message_13 msg) = 0;
       virtual void process_post_handshake_msg(Post_Handshake_Message_13 msg) = 0;
@@ -201,13 +203,6 @@ class Channel_Impl_13 : public Channel_Impl,
    private:
       void process_alert(const secure_vector<uint8_t>& record);
       void process_acknowledgements(std::span<const uint8_t> record);
-
-      enum class TimerGeneration : bool {
-         Advance,
-         Keep,
-      };
-
-      void maybe_arm_dtls_retransmission_timer(TimerGeneration generation_policy = TimerGeneration::Advance);
 
       void maybe_arm_dtls_acknowledgement_timer();
       void maybe_cancel_dtls_acknowledgement_timer();
@@ -265,7 +260,6 @@ class Channel_Impl_13 : public Channel_Impl,
       std::unique_ptr<Channel_IO> m_channel_io;  // NOLINT(*-non-private-member-*)
 
       /* DTLS specific */
-      uint64_t m_retransmission_timer_generation = 0;     // NOLINT(*-non-private-member-*)
       std::shared_ptr<AcknowledgementTimer> m_ack_timer;  // NOLINT(*-non-private-member-*)
 
    private:
