@@ -12,6 +12,38 @@
 
 namespace Botan::TLS {
 
+/**
+ * Token owned by a DTLS_Channel_IO object as a shared_ptr
+ * and passed to deferred operations as a weak_ptr.
+ * This ensures that the DTLS_Channel_IO object is still alive
+ * if the token is still present.
+ */
+class DTLS_Channel_IO::TimerToken {
+   public:
+      explicit TimerToken(DTLS_Channel_IO& channel_io) : m_channel_io(channel_io) {}
+
+      DTLS_Channel_IO& channel_io() { return m_channel_io; }
+
+   private:
+      DTLS_Channel_IO& m_channel_io;
+};
+
+DTLS_Channel_IO::DTLS_Channel_IO(Channel_Impl_13& channel,
+                                 std::shared_ptr<const Policy> policy,
+                                 std::shared_ptr<Callbacks> callbacks,
+                                 std::shared_ptr<Record_Layer> record_layer,
+                                 std::shared_ptr<Handshake_Layer> handshake_layer) :
+      m_policy(std::move(policy)),
+      m_callbacks(std::move(callbacks)),
+      m_record_layer(std::dynamic_pointer_cast<DTLS_Record_Layer>(std::move(record_layer))),
+      m_handshake_layer(std::dynamic_pointer_cast<DTLS_Handshake_Layer>(std::move(handshake_layer))),
+      m_channel(channel),
+      m_retransmission_timer(*m_policy, m_callbacks) {
+   BOTAN_ASSERT_NONNULL(m_callbacks);
+   BOTAN_ASSERT_NONNULL(m_record_layer);
+   BOTAN_ASSERT_NONNULL(m_handshake_layer);
+}
+
 void DTLS_Channel_IO::send_record(Record_Type record_type,
                                   std::span<const uint8_t> payload,
                                   Cipher_State* cipher_state) {
@@ -37,6 +69,7 @@ void DTLS_Channel_IO::send_record(const Flight& flight, Cipher_State* cipher_sta
 
    notify_sent_handshake_flight();
    arm_dtls_retransmission_timer();
+   maybe_cancel_dtls_acknowledgement_timer();
 }
 
 void DTLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) {
@@ -59,7 +92,19 @@ void DTLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state
    const auto key_update_record_number = prepared_records.front().second;
    register_pending_key_update(key_update_record_number);
 
+   // TODO: BoGo is completely green if we forget to
+   // arm the retransmission timer here -> add a regression test.
+   // But here it may be possible that the timer is not started.
+   // If we just reset it, it may possibly interfere with
+   // a retransmission of the last client flight, have to check
+   // that again.
+   m_retransmission_timer.start_if_not_started();
    arm_dtls_retransmission_timer();
+}
+
+void DTLS_Channel_IO::send_acknowledgements() {
+   const auto max_plaintext_length = m_record_layer->record_payload_size_limit(*m_policy, m_channel.cipher_state());
+   send_record(Record_Type::ACK, current_ack_record(max_plaintext_length), m_channel.cipher_state());
 }
 
 bool DTLS_Channel_IO::timeout_check(Cipher_State* cipher_state) {
@@ -82,7 +127,7 @@ bool DTLS_Channel_IO::timeout_check(Cipher_State* cipher_state) {
    return true;
 }
 
-void DTLS_Channel_IO::arm_dtls_retransmission_timer(TimerGeneration generation_policy) {
+void DTLS_Channel_IO::arm_dtls_retransmission_timer() {
    const auto next_timeout = next_retransmission_timeout();
 
    // If there is no timeout, the handshake is complete or there is no handshake
@@ -91,56 +136,65 @@ void DTLS_Channel_IO::arm_dtls_retransmission_timer(TimerGeneration generation_p
       return;
    }
 
-   // If a new timer generation was requested, we increment the channel-wide
-   // generation counter to invalidate any other timer chain that might still be
+   // We invalidate any other timer chain that might still be
    // running from a backoff interval that has been cut short by incoming data
-   // from the peer.
-   if(generation_policy == TimerGeneration::Advance) {
-      ++m_retransmission_timer_generation;
-   }
+   // from the peer by dropping any possible previous m_retransmission_token.
+   m_retransmission_token = std::make_shared<TimerToken>(*this);
 
    // The actual asynchronous operation:
-   auto on_timer = [self = weak_from_this(), generation = m_retransmission_timer_generation]() mutable {
+   auto on_timer = [token = std::weak_ptr(m_retransmission_token)]() mutable {
       // If this operation is called after the channel implementation is gone,
-      // the channel magically became some other type, or the operation was
-      // called more than once (see below) just return.
-      auto io = std::dynamic_pointer_cast<DTLS_Channel_IO>(self.lock());
-      if(!io) {
+      // the channel magically became some other type, or the token was consumed
+      // because the operation was called more than once (see below) just return.
+      auto handle = token.lock();
+      if(!handle) {
+         // Arming superseded, cancelled, or channel gone
          return;
       }
 
-      // Ensures that if the user erronerously performs subsequent invocations of this operation,
-      // these will be harmless no-ops.
-      self.reset();
-
-      io->on_retransmission_timer(generation);
+      auto& io = handle->channel_io();
+      io.m_retransmission_token.reset();  // firing consumes the token
+      io.on_retransmission_timer();
    };
 
    m_callbacks->tls_register_deferred_operation(next_timeout->count(), on_timer);
 }
 
-void DTLS_Channel_IO::on_retransmission_timer(uint64_t generation) {
-   // This timer-chain may have been superseded by a newer one, when a
-   // backoff interval was reset by the arrival of a belated handshake
-   // message. This generation is no longer active and ends here.
-   if(generation != m_retransmission_timer_generation) {
-      return;
-   }
+void DTLS_Channel_IO::on_retransmission_timer() {
+   timeout_check(m_channel.cipher_state());
 
-   // Now we know that we're on the active retransmission/backoff
-   // chain...
-   if(timeout_check(m_channel.cipher_state())) {
-      // ... and a retransmission was performed: Spawn the next timer
-      // generation for the next backoff interval in this chain.
-      arm_dtls_retransmission_timer(TimerGeneration::Advance);
-   } else {
-      // ... but no retransmission was performed. Either, because the user
-      // invoked the operation too early, in which case we will just reset
-      // the timer for the remaining time until the next deadline, or a
-      // retransmission was not needed anymore (because the peer's flight
-      // arrived), then maybe_arm_* will not re-arm the timer.
-      arm_dtls_retransmission_timer(TimerGeneration::Keep);
+   // Spawn the next timer generation for the next backoff interval in this
+   // chain. This will be a no-op if the timer is no longer needed.
+   arm_dtls_retransmission_timer();
+}
+
+void DTLS_Channel_IO::maybe_arm_dtls_acknowledgement_timer() {
+   const auto ack_time = m_policy->dtls_initial_timeout() / 4;
+
+   if(!m_ack_token && protocol_version_committed()) {
+      m_ack_token = std::make_shared<TimerToken>(*this);
+
+      m_callbacks->tls_register_deferred_operation(ack_time, [token = std::weak_ptr(m_ack_token)] {
+         auto handle = token.lock();
+         if(!handle) {
+            return;
+         }
+
+         auto& channel_io = handle->channel_io();
+
+         // The ACK timer is meant to be single-shot. We reset the ACK timer
+         // handle to let belated or resent fragments start a new ACK timer.
+         // Note the difference to the retransmission timer, where any new
+         // armament supersedes and invalidates any prior deferred op.
+         channel_io.m_ack_token.reset();
+
+         channel_io.send_acknowledgements();
+      });
    }
+}
+
+void DTLS_Channel_IO::maybe_cancel_dtls_acknowledgement_timer() {
+   m_ack_token.reset();
 }
 
 }  // namespace Botan::TLS

@@ -215,21 +215,27 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
                }
             }
 
-            // RFC 9147 7.1
-            //    [...] it is RECOMMENDED that [an implementation] generats ACKs
-            //    under two circumstances:
-            //
-            //    - [...]
-            //    - When they have received part of a flight and do not
-            //      immediately receive the rest of the flight [...]. One
-            //      approach is to set a timer [...] and then send an ACK when
-            //      that timer expires.
-            //
-            // This opportunistically sets such a timer which gets cancelled
-            // when we successfully generate our next handshake flight in
-            // response to the incoming data. If we fail to generate such a
-            // flight, the timer will eventually emit ACKs to the peer.
-            maybe_arm_dtls_acknowledgement_timer();
+            if(is_datagram()) {
+               // RFC 9147 7.1
+               //    [...] it is RECOMMENDED that [an implementation] generats ACKs
+               //    under two circumstances:
+               //
+               //    - [...]
+               //    - When they have received part of a flight and do not
+               //      immediately receive the rest of the flight [...]. One
+               //      approach is to set a timer [...] and then send an ACK when
+               //      that timer expires.
+               //
+               // This opportunistically sets such a timer which gets cancelled
+               // when we successfully generate our next handshake flight in
+               // response to the incoming data. If we fail to generate such a
+               // flight, the timer will eventually emit ACKs to the peer.
+
+               // TODO: this dynamic cast is temporary, we will move large parts
+               // of from_peer to the channel_io.
+               auto* dtls_channel_io = dynamic_cast<DTLS_Channel_IO*>(m_channel_io.get());
+               dtls_channel_io->maybe_arm_dtls_acknowledgement_timer();
+            }
 
             while(true) {
                if(!is_handshake_complete()) {
@@ -275,7 +281,6 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
                   if(is_downgrading()) {
                      // Downgrade to TLS 1.2 was detected. Stop everything we do and await being replaced by a 1.2 implementation.
-                     m_ack_timer.reset();
                      return 0;
                   } else if(m_downgrade_info != nullptr) {
                      // We received a TLS 1.3 error alert that could have been a TLS 1.2 warning alert.
@@ -606,9 +611,6 @@ void Channel_Impl_13::send_record(const Flight& flight) {
 
    m_channel_io->send_record(flight, m_cipher_state.get());
 
-   // TODO: Move below to companion/IO as well
-   maybe_cancel_dtls_acknowledgement_timer();
-
    // After the initial handshake message is sent, the record layer must
    // adhere to a more strict record specification. Note that for the
    // server case this is a NOOP.
@@ -617,12 +619,6 @@ void Channel_Impl_13::send_record(const Flight& flight) {
       m_record_layer->disable_sending_compat_mode();
       m_first_message_sent = true;
    }
-}
-
-void Channel_Impl_13::send_acknowledgements() {
-   send_record(
-      Record_Type::ACK,
-      m_channel_io->current_ack_record(m_record_layer->record_payload_size_limit(policy(), m_cipher_state.get())));
 }
 
 void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
@@ -673,47 +669,6 @@ void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
 
 void Channel_Impl_13::process_acknowledgements(std::span<const uint8_t> record) {
    m_channel_io->process_acknowledgements(m_cipher_state.get(), record, *this);
-}
-
-class AcknowledgementTimer : public std::enable_shared_from_this<AcknowledgementTimer> {
-   public:
-      explicit AcknowledgementTimer(std::shared_ptr<Channel_Impl> channel) :
-            m_channel(std::dynamic_pointer_cast<Channel_Impl_13>(std::move(channel))) {}
-
-      std::shared_ptr<Channel_Impl_13> channel() const { return m_channel.lock(); }
-
-   private:
-      std::weak_ptr<Channel_Impl_13> m_channel;
-};
-
-void Channel_Impl_13::maybe_arm_dtls_acknowledgement_timer() {
-   const auto ack_time = m_policy->dtls_initial_timeout() / 4;
-
-   if(!m_ack_timer && m_channel_io->protocol_version_committed()) {
-      m_ack_timer = std::make_shared<AcknowledgementTimer>(shared_from_this());
-
-      m_callbacks->tls_register_deferred_operation(ack_time, [self = std::weak_ptr(m_ack_timer)] {
-         auto handle = self.lock();
-         if(!handle) {
-            return;
-         }
-
-         auto channel = handle->channel();
-         if(!channel) {
-            return;
-         }
-
-         channel->send_acknowledgements();
-
-         // The ACK timer is meant to be single-shot. We reset the ACK timer
-         // handle to let belated or resent fragments start a new ACK timer.
-         channel->m_ack_timer.reset();
-      });
-   }
-}
-
-void Channel_Impl_13::maybe_cancel_dtls_acknowledgement_timer() {
-   m_ack_timer.reset();
 }
 
 void Channel_Impl_13::shutdown() {
