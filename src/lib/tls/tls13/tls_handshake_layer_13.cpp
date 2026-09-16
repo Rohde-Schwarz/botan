@@ -244,14 +244,6 @@ std::unique_ptr<Handshake_Layer> Handshake_Layer::create(Connection_Side whoami,
    }
 }
 
-PreparedHandshakeMessage Handshake_Layer::marshal_message_bytes(Handshake_Type type,
-                                                                std::span<const uint8_t> msg_bytes,
-                                                                std::optional<uint16_t> dtls_max_fragment_size) {
-   BOTAN_UNUSED(dtls_max_fragment_size);  // Only relevant for DTL
-
-   return concat<MarshalledHandshakeMessage>(prepare_tls_handshake_header(type, msg_bytes), msg_bytes);
-}
-
 void Handshake_Layer::update_transcript_for_psk_binder_calc(const Client_Hello_13& message,
                                                             Transcript_Hash_State& transcript_hash) {
    const auto msg_bytes = message.serialize();

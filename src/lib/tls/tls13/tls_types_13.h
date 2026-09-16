@@ -11,7 +11,6 @@
 
 #include <botan/secmem.h>
 #include <botan/strong_type.h>
-#include <variant>
 #include <vector>
 
 namespace Botan::TLS {
@@ -31,8 +30,8 @@ enum class Epoch_Number /* NOLINT(*-enum-size) */ : uint64_t {
  * RFC 9147 Section 4
  */
 struct RecordNumber {
-      Epoch_Number epoch;
-      uint64_t sequence_number;
+      Epoch_Number epoch;        // NOLINT(*-non-private-member-variable*)
+      uint64_t sequence_number;  // NOLINT(*-non-private-member-variable*)
 
       auto operator<=>(const RecordNumber&) const = default;
 };
@@ -48,16 +47,6 @@ using MarshalledHandshakeMessageFlight = Strong<std::vector<uint8_t>, struct Mar
 /// Holds the serialization of a single TLS 1.3 handshake message fragment along
 /// with the handshake protocol header. This is used in DTLS' fragmentation.
 using MarshalledHandshakeMessageFragment = Strong<std::vector<uint8_t>, struct MarshalledHandshakeMessageFragment_>;
-
-/// Holds either a single TLS 1.3 handshake message or a vector of handshake
-/// fragments of a single handshake message in the DTLS case.
-using PreparedHandshakeMessage =
-   std::variant<MarshalledHandshakeMessage, std::vector<MarshalledHandshakeMessageFragment>>;
-
-/// Holds the entire serialization of a handshake message flight. Either as a
-/// flat vector of bytes or as a vector of handshake message fragments in DTLS.
-using PreparedHandshakeMessageFlight =
-   std::variant<MarshalledHandshakeMessageFlight, std::vector<MarshalledHandshakeMessageFragment>>;
 
 /// Holds the serialization of a single TLS 1.3 record along with the record
 /// protocol header. Protected records hold the encrypted payload and AEAD tag.

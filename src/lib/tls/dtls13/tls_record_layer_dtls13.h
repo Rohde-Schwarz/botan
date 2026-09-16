@@ -69,8 +69,8 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
                                                              std::span<const uint8_t> fragment,
                                                              Cipher_State* cipher_state) const override;
 
-      std::vector<MarshalledRecordAndNumber> prepare_records(const PreparedHandshakeMessageFlight& flight,
-                                                             Cipher_State* cipher_state) const override;
+      std::vector<MarshalledRecordAndNumber> prepare_records(
+         const std::vector<MarshalledHandshakeMessageFragment>& fragments, Cipher_State* cipher_state) const;
 
       /**
        * Re-prepares all records that are currently not acknowledged by the

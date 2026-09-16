@@ -94,11 +94,6 @@ class BOTAN_TEST_API Handshake_Layer {
        */
       virtual std::optional<Post_Handshake_Message_13> next_post_handshake_message(const Policy& policy) = 0;
 
-      virtual PreparedHandshakeMessage marshal_message_bytes(
-         Handshake_Type type,
-         std::span<const uint8_t> msg_bytes,
-         std::optional<uint16_t> dtls_max_fragment_size = std::nullopt);
-
       /**
        * Marshals a ClientHello prematurely for a truncated transcript hash
        * calculation (cf. RFC 8446 Section 4.2.11.2).
