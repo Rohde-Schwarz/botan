@@ -13,17 +13,69 @@
 #include <botan/tls_exceptn.h>
 #include <botan/tls_messages_13.h>
 #include <botan/tls_policy.h>
+#include <botan/internal/tls_channel_io.h>
 #include <botan/internal/tls_cipher_state.h>
+#include <botan/internal/tls_handshake_layer_13.h>
 #include <botan/internal/tls_messages_internal.h>
+#include <botan/internal/tls_record_layer_13.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 
 #if defined(BOTAN_HAS_DTLS_13)
-   #include <botan/internal/tls_dtls_channel_companion_dtls13.h>
-#else
-   #include <botan/internal/tls_dtls_channel_companion.h>
+   #include <botan/internal/tls_channel_io_dtls13.h>
+
+   #include <utility>
 #endif
 
+namespace Botan::TLS {
+
 namespace {
+
+class TLS_Channel_IO final : public Channel_IO {
+   public:
+      TLS_Channel_IO(std::shared_ptr<const Policy> policy,
+                     std::shared_ptr<Callbacks> callbacks,
+                     std::shared_ptr<Record_Layer> record_layer,
+                     std::shared_ptr<Handshake_Layer> handshake_layer) :
+            m_policy(std::move(policy)),
+            m_callbacks(std::move(callbacks)),
+            m_record_layer(std::move(record_layer)),
+            m_handshake_layer(std::move(handshake_layer)) {}
+
+      void send_record(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override {
+         for(const auto& [record_to_write, _] : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
+            m_callbacks->tls_emit_data(record_to_write);
+         }
+      }
+
+      void send_record(const Flight& flight, Cipher_State* cipher_state) override {
+         const auto max_payload_size = m_record_layer->record_payload_size_limit(*m_policy, cipher_state);
+
+         auto prepared = PreparedHandshakeMessageFlight(MarshalledHandshakeMessageFlight{});
+
+         for(const auto& msg_info : flight.messages()) {
+            auto prep = m_handshake_layer->marshal_message_bytes(msg_info.type, msg_info.serialized, max_payload_size);
+            auto msg = std::get<MarshalledHandshakeMessage>(prep);
+            const auto& v = msg.get();
+            auto& flat = std::get<MarshalledHandshakeMessageFlight>(prepared).get();
+            flat.insert(flat.end(), v.begin(), v.end());
+         }
+
+         for(const auto& [record_to_write, _] : m_record_layer->prepare_records(prepared, cipher_state)) {
+            m_callbacks->tls_emit_data(record_to_write);
+         }
+      }
+
+      void send_acknowledgements() override {
+         throw TLS_Exception(AlertType::InternalError, "DTLS ACK mechanism called from TLS");
+      }
+
+   private:
+      std::shared_ptr<const Policy> m_policy;
+      std::shared_ptr<Callbacks> m_callbacks;
+      std::shared_ptr<Record_Layer> m_record_layer;
+      std::shared_ptr<Handshake_Layer> m_handshake_layer;
+};
+
 bool is_user_canceled_alert(const Botan::TLS::Alert& alert) {
    return alert.type() == Botan::TLS::Alert::UserCanceled;
 }
@@ -38,8 +90,6 @@ bool is_error_alert(const Botan::TLS::Alert& alert) {
    return !is_close_notify_alert(alert) && !is_user_canceled_alert(alert);
 }
 }  // namespace
-
-namespace Botan::TLS {
 
 Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
                                  const std::shared_ptr<Session_Manager>& session_manager,
@@ -71,12 +121,12 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
    BOTAN_ASSERT_NONNULL(m_policy);
    if(is_datagram()) {
 #if defined(BOTAN_HAS_DTLS_13)
-      m_dtls_channel_companion = std::make_unique<DTLS_Channel_Companion_DTLS>(m_policy, m_callbacks, m_record_layer);
+      m_channel_io = std::make_unique<DTLS_Channel_IO>(m_policy, m_callbacks, m_record_layer, m_handshake_layer);
 #else
       throw TLS_Exception(AlertType::InternalError, "DTLS 1.3 is not supported in this build of Botan");
 #endif
    } else {
-      m_dtls_channel_companion = std::make_unique<DTLS_Channel_Companion>();
+      m_channel_io = std::make_unique<TLS_Channel_IO>(m_policy, m_callbacks, m_record_layer, m_handshake_layer);
    }
 }
 
@@ -144,7 +194,7 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
                const bool is_post_handshake_traffic =
                   record.epoch.has_value() && record.epoch.value() >= Epoch_Number::ApplicationTraffic_0;
                if(!is_post_handshake_traffic) {
-                  m_dtls_channel_companion->maybe_clear_resend_buffer();
+                  m_channel_io->maybe_clear_resend_buffer();
                }
             }
 
@@ -332,9 +382,9 @@ void Channel_Impl_13::handle(const Key_Update& key_update) {
    }
 }
 
-Channel_Impl_13::Flight& Channel_Impl_13::Flight::add(const Handshake_Message_13_Ref message,
-                                                      Transcript_Hash_State& transcript_hash,
-                                                      Callbacks& callbacks) {
+Flight& Flight::add(const Handshake_Message_13_Ref message,
+                    Transcript_Hash_State& transcript_hash,
+                    Callbacks& callbacks) {
    std::visit([&](const auto msg) { callbacks.tls_inspect_handshake_msg(msg.get()); }, message);
 
    auto [type, bytes] = detail::serialize_message(message);
@@ -346,7 +396,7 @@ Channel_Impl_13::Flight& Channel_Impl_13::Flight::add(const Handshake_Message_13
    return *this;
 }
 
-Channel_Impl_13::Flight& Channel_Impl_13::Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) {
+Flight& Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) {
    std::visit([&](const auto& msg) { callbacks.tls_inspect_handshake_msg(msg); }, message);
 
    m_messages.emplace_back(detail::serialize_message(message));
@@ -366,7 +416,7 @@ void Channel_Impl_13::send_dummy_change_cipher_spec() {
    BOTAN_STATE_CHECK(!is_handshake_complete());
 
    constexpr auto ccs_content = std::array<uint8_t, 1>{0x01};
-   send_record(Record_Type::ChangeCipherSpec, ccs_content);
+   m_channel_io->send_record(Record_Type::ChangeCipherSpec, ccs_content, nullptr);
 }
 
 void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
@@ -472,7 +522,7 @@ SymmetricKey Channel_Impl_13::key_material_export(std::string_view label,
 
 void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
    BOTAN_STATE_CHECK(!is_downgrading() && is_handshake_complete() && is_active() &&
-                     !m_dtls_channel_companion->has_pending_key_update());
+                     !m_channel_io->has_pending_key_update());
    BOTAN_ASSERT_NONNULL(m_cipher_state);
 
    // RFC 9147 8. (Errata-ID 8050)
@@ -515,7 +565,7 @@ void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
       // For DTLS, the actual call to cipher_state->update_write_keys() is
       // deferred to the handling of the respective acknowledgement.
       const auto key_update_record_number = prepared_records.front().second;
-      m_dtls_channel_companion->register_pending_key_update(key_update_record_number);
+      m_channel_io->register_pending_key_update(key_update_record_number);
       maybe_arm_dtls_retransmission_timer();  // TODO: This may be a no-op since the timer is not started() here?
    } else {
       // For TLS, we may immediately update the write keys after sending the
@@ -561,9 +611,7 @@ void Channel_Impl_13::send_record(Record_Type record_type, std::span<const uint8
    // the cipher state is already set up for handshake message encryption.
    auto* cipher_state = (record_type != Record_Type::ChangeCipherSpec) ? m_cipher_state.get() : nullptr;
 
-   for(const auto& [record_to_write, _] : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
-      callbacks().tls_emit_data(record_to_write);
-   }
+   m_channel_io->send_record(record_type, payload, cipher_state);
 }
 
 void Channel_Impl_13::send_record(const Flight& flight) {
@@ -572,35 +620,9 @@ void Channel_Impl_13::send_record(const Flight& flight) {
    BOTAN_STATE_CHECK(!is_downgrading());
    BOTAN_STATE_CHECK(m_can_write);
 
-   const auto max_payload_size = m_record_layer->record_payload_size_limit(policy(), m_cipher_state.get());
+   m_channel_io->send_record(flight, m_cipher_state.get());
 
-   PreparedHandshakeMessageFlight prepared =
-      is_datagram() ? PreparedHandshakeMessageFlight(std::vector<MarshalledHandshakeMessageFragment>{})
-                    : PreparedHandshakeMessageFlight(MarshalledHandshakeMessageFlight{});
-
-   // TODO: should be able to get rid of the variants by feeding the result of marshal_message_bytes into the companios/IO
-   for(const auto& msg_info : flight.messages()) {
-      auto prep = m_handshake_layer->marshal_message_bytes(msg_info.type, msg_info.serialized, max_payload_size);
-      std::visit(overloaded{
-                    [&](MarshalledHandshakeMessage msg) {
-                       auto& flat = std::get<MarshalledHandshakeMessageFlight>(prepared).get();
-                       const auto& v = msg.get();
-                       flat.insert(flat.end(), v.begin(), v.end());
-                    },
-                    [&](std::vector<MarshalledHandshakeMessageFragment> frags) {
-                       auto& all = std::get<std::vector<MarshalledHandshakeMessageFragment>>(prepared);
-                       all.insert(
-                          all.end(), std::make_move_iterator(frags.begin()), std::make_move_iterator(frags.end()));
-                    },
-                 },
-                 std::move(prep));
-   }
-
-   for(const auto& [record_to_write, _] : m_record_layer->prepare_records(prepared, m_cipher_state.get())) {
-      callbacks().tls_emit_data(record_to_write);
-   }
-
-   m_dtls_channel_companion->notify_sent_handshake_flight();
+   m_channel_io->notify_sent_handshake_flight();
    // TODO: Move below to companion/IO as well
    maybe_cancel_dtls_acknowledgement_timer();
    maybe_arm_dtls_retransmission_timer();
@@ -616,9 +638,9 @@ void Channel_Impl_13::send_record(const Flight& flight) {
 }
 
 void Channel_Impl_13::send_acknowledgements() {
-   send_record(Record_Type::ACK,
-               m_dtls_channel_companion->current_ack_record(
-                  m_record_layer->record_payload_size_limit(policy(), m_cipher_state.get())));
+   send_record(
+      Record_Type::ACK,
+      m_channel_io->current_ack_record(m_record_layer->record_payload_size_limit(policy(), m_cipher_state.get())));
 }
 
 void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
@@ -668,7 +690,7 @@ void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
 }
 
 void Channel_Impl_13::process_acknowledgements(std::span<const uint8_t> record) {
-   m_dtls_channel_companion->process_acknowledgements(m_cipher_state.get(), record, *this);
+   m_channel_io->process_acknowledgements(m_cipher_state.get(), record, *this);
 }
 
 void Channel_Impl_13::maybe_arm_dtls_retransmission_timer(TimerGeneration generation_policy) {
@@ -676,7 +698,7 @@ void Channel_Impl_13::maybe_arm_dtls_retransmission_timer(TimerGeneration genera
       return;
    }
 
-   const auto next_timeout = m_dtls_channel_companion->next_retransmission_timeout();
+   const auto next_timeout = m_channel_io->next_retransmission_timeout();
 
    // If there is no timeout, the handshake is complete or there is no handshake
    // in progress, so there is nothing to arm a timer for.
@@ -716,7 +738,7 @@ void Channel_Impl_13::maybe_arm_dtls_retransmission_timer(TimerGeneration genera
 
       // Now we know that we're on the active retransmission/backoff
       // chain...
-      if(channel->m_dtls_channel_companion->timeout_check(channel->m_cipher_state.get())) {
+      if(channel->m_channel_io->timeout_check(channel->m_cipher_state.get())) {
          // ... and a retransmission was performed: Spawn the next timer
          // generation for the next backoff interval in this chain.
          channel->maybe_arm_dtls_retransmission_timer(TimerGeneration::Advance);
@@ -747,7 +769,7 @@ class AcknowledgementTimer : public std::enable_shared_from_this<Acknowledgement
 void Channel_Impl_13::maybe_arm_dtls_acknowledgement_timer() {
    const auto ack_time = m_policy->dtls_initial_timeout() / 4;
 
-   if(!m_ack_timer && m_dtls_channel_companion->protocol_version_committed()) {
+   if(!m_ack_timer && m_channel_io->protocol_version_committed()) {
       m_ack_timer = std::make_shared<AcknowledgementTimer>(shared_from_this());
 
       m_callbacks->tls_register_deferred_operation(ack_time, [self = std::weak_ptr(m_ack_timer)] {

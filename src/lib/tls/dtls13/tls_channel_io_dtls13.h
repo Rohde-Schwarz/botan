@@ -6,13 +6,14 @@
 * Botan is released under the Simplified BSD License (see license.txt)
 */
 
-#ifndef BOTAN_TLS_CHANNEL_COMPANION_DTLS13_H_
-#define BOTAN_TLS_CHANNEL_COMPANION_DTLS13_H_
+#ifndef BOTAN_TLS_CHANNEL_IO_DTLS13_H_
+#define BOTAN_TLS_CHANNEL_IO_DTLS13_H_
 
 #include <botan/assert.h>
 #include <botan/tls_exceptn.h>
+#include <botan/internal/tls_channel_io.h>
 #include <botan/internal/tls_cipher_state.h>
-#include <botan/internal/tls_dtls_channel_companion.h>
+#include <botan/internal/tls_handshake_layer_dtls13.h>
 #include <botan/internal/tls_record_layer_dtls13.h>
 #include <botan/internal/tls_timer_dtls13.h>
 #include <chrono>
@@ -20,20 +21,53 @@
 
 namespace Botan::TLS {
 
-class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
+class DTLS_Channel_IO : public Channel_IO {
+      // TODO: Move stuff to cpp
+
    public:
-      DTLS_Channel_Companion_DTLS(std::shared_ptr<const Policy> policy,
-                                  std::shared_ptr<Callbacks> callbacks,
-                                  std::shared_ptr<Record_Layer> record_layer) :
+      DTLS_Channel_IO(std::shared_ptr<const Policy> policy,
+                      std::shared_ptr<Callbacks> callbacks,
+                      std::shared_ptr<Record_Layer> record_layer,
+                      std::shared_ptr<Handshake_Layer> handshake_layer) :
             m_policy(std::move(policy)),
             m_callbacks(std::move(callbacks)),
             m_record_layer(std::dynamic_pointer_cast<DTLS_Record_Layer>(std::move(record_layer))),
+            m_handshake_layer(std::dynamic_pointer_cast<DTLS_Handshake_Layer>(std::move(handshake_layer))),
             m_retransmission_timer(*m_policy, m_callbacks) {
          BOTAN_ASSERT_NONNULL(m_callbacks);
          BOTAN_ASSERT_NONNULL(m_record_layer);
       }
 
    public:
+      void send_record(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override {
+         for(const auto& [record_to_write, _] : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
+            m_callbacks->tls_emit_data(record_to_write);
+         }
+      }
+
+      void send_record(const Flight& flight, Cipher_State* cipher_state) override {
+         const auto max_payload_size = m_record_layer->record_payload_size_limit(*m_policy, cipher_state);
+
+         auto prepared = PreparedHandshakeMessageFlight(std::vector<MarshalledHandshakeMessageFragment>{});
+
+         for(const auto& msg_info : flight.messages()) {
+            auto prep = m_handshake_layer->marshal_message_bytes(msg_info.type, msg_info.serialized, max_payload_size);
+            auto frags = std::get<std::vector<MarshalledHandshakeMessageFragment>>(prep);
+
+            auto& all = std::get<std::vector<MarshalledHandshakeMessageFragment>>(prepared);
+            all.insert(all.end(), std::make_move_iterator(frags.begin()), std::make_move_iterator(frags.end()));
+         }
+
+         // TODO: prepare_records now no longer needs the variants
+         for(const auto& [record_to_write, _] : m_record_layer->prepare_records(prepared, cipher_state)) {
+            m_callbacks->tls_emit_data(record_to_write);
+         }
+      }
+
+      void send_acknowledgements() override {
+         //Still TODO
+      }
+
       void notify_protocol_version_committed() override { m_dtls_version_committed = true; }
 
       void notify_sent_handshake_flight() override { m_retransmission_timer.flight_sent(); }
@@ -141,6 +175,7 @@ class DTLS_Channel_Companion_DTLS : public DTLS_Channel_Companion {
       std::shared_ptr<const Policy> m_policy;
       std::shared_ptr<Callbacks> m_callbacks;
       std::shared_ptr<DTLS_Record_Layer> m_record_layer;
+      std::shared_ptr<DTLS_Handshake_Layer> m_handshake_layer;
 
       DTLS_Retransmission_Timer m_retransmission_timer;
 

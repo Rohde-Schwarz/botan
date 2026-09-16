@@ -17,8 +17,8 @@
 #include <botan/internal/ct_utils.h>
 #include <botan/internal/loadstor.h>
 #include <botan/internal/stl_util.h>
+#include <botan/internal/tls_channel_io.h>
 #include <botan/internal/tls_cipher_state.h>
-#include <botan/internal/tls_dtls_channel_companion.h>
 
 namespace Botan::TLS {
 
@@ -41,7 +41,7 @@ std::shared_ptr<Server_Impl_13> Server_Impl_13::create(const std::shared_ptr<Cal
       // If we don't expect to downgrade, we can already enable all DTLS-only
       // features (e.g. record ACKing), because we know that we won't ever
       // talk to a legacy peer and succeed a handshake.
-      self->m_dtls_channel_companion->notify_protocol_version_committed();
+      self->m_channel_io->notify_protocol_version_committed();
    }
 
    self->m_handshake->transitions.set_expected_next(Handshake_Type::ClientHello);
@@ -561,8 +561,8 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello) {
    // We do however clear our outstanding ACKs, because the ClientHello is the
    // only message in the flight; by definition it is the "final" message of
    // this flight.
-   m_dtls_channel_companion->notify_protocol_version_committed();
-   m_dtls_channel_companion->clear_outstanding_acknowledgements();
+   m_channel_io->notify_protocol_version_committed();
+   m_channel_io->clear_outstanding_acknowledgements();
 
    if(is_initial_client_hello) {
       const auto preferred_version = client_hello.highest_supported_version(policy());

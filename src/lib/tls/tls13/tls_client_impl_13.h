@@ -12,6 +12,7 @@
 
 #include <botan/tls_server_info.h>
 #include <botan/internal/tls_channel_impl_13.h>
+#include <botan/internal/tls_flight_13.h>
 #include <botan/internal/tls_handshake_state_13.h>
 #include <botan/internal/tls_handshake_transitions.h>
 
@@ -113,7 +114,7 @@ class Client_Impl_13 final : public Channel_Impl_13 {
       void handle(const Finished_13& finished_msg);
       void handle(const New_Session_Ticket_13& new_session_ticket);
 
-      void send_client_authentication(Channel_Impl_13::Flight& flight);
+      void send_client_authentication(Flight& flight);
       std::optional<Session_with_Handle> find_session_for_resumption();
 
    private:

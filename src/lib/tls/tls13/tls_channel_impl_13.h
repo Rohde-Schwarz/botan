@@ -21,7 +21,8 @@ namespace Botan::TLS {
 
 class Cipher_State;
 class Transcript_Hash_State;
-class DTLS_Channel_Companion;
+class Channel_IO;
+class Flight;
 class AcknowledgementTimer;
 
 /**
@@ -51,58 +52,6 @@ class Secret_Logger /* NOLINT(*-special-member-functions) */ {
 */
 class Channel_Impl_13 : public Channel_Impl,
                         protected Secret_Logger {
-   protected:
-      /**
-       * Helper class to coalesce handshake messages into a TLS flight.
-       * The class keeps score of the contained messages. It does not marshal
-       * them.
-       */
-      class Flight final {
-         public:
-            struct Message_Info {
-                  Handshake_Type type;              // NOLINT(*non-private-member-variable*)
-                  std::vector<uint8_t> serialized;  // NOLINT(*non-private-member-variable*)
-
-                  Message_Info(Handshake_Type t, std::vector<uint8_t> s) : type(t), serialized(std::move(s)) {}
-
-                  explicit Message_Info(std::pair<Handshake_Type, std::vector<uint8_t>> p) :
-                        type(p.first), serialized(std::move(p.second)) {}
-            };
-
-         public:
-            Flight() = default;
-
-            Flight(const Flight& other) = delete;
-            Flight(Flight&& other) = default;
-            Flight& operator=(const Flight& other) = delete;
-            Flight& operator=(Flight&& other) = default;
-            ~Flight() = default;
-
-            /**
-             * Add @p msg to the flight, updating @p transcript_hash in the process and letting
-             * the user inspect the message via @p callbacks.
-             * Use this variant of `add` to add handshake messages where the transcript hash
-             * needs to be updated. For post-handshake messages, the corresponding `add()`
-             * variant without a transcript hash needs to be used.
-             */
-            Flight& add(Handshake_Message_13_Ref msg, Transcript_Hash_State& transcript_hash, Callbacks& callbacks);
-            /**
-             * Add @p msg to the flight, letting the user inspect the message via @p callbacks.
-             * Use this variant of `add` to add post-handshake messages. For handshake messages, the transcript
-             * hash needs to be updated, so the corresponding `add()` variant needs to be used in that case.
-             */
-            Flight& add(Post_Handshake_Message_13 msg, Callbacks& callbacks);
-
-            bool contains_messages() const { return !m_messages.empty(); }
-
-            bool empty() const { return !contains_messages(); }
-
-            const std::vector<Message_Info>& messages() const { return m_messages; }
-
-         private:
-            std::vector<Message_Info> m_messages;
-      };
-
    public:
       /**
       * Set up a new (D)TLS 1.3 session
@@ -308,17 +257,16 @@ class Channel_Impl_13 : public Channel_Impl,
       void set_selected_certificate_type(Certificate_Type cert_type);
 
    protected:
-      /* handshake state */
-      std::shared_ptr<Record_Layer> m_record_layer;  // NOLINT(*-non-private-member-*)
-      // For DTLS currently, handshake_layer has a ref to record_layer, so record_layer
-      // has to outlive handshake_layer. TODO: A HSL <-> RL bridge for DTLS should
-      // avoid this.
+      // TODO: These should be able to only live in Channel_IO
+      std::shared_ptr<Record_Layer> m_record_layer;        // NOLINT(*-non-private-member-*)
       std::shared_ptr<Handshake_Layer> m_handshake_layer;  // NOLINT(*-non-private-member-*)
 
+      /* IO Handling */
+      std::unique_ptr<Channel_IO> m_channel_io;  // NOLINT(*-non-private-member-*)
+
       /* DTLS specific */
-      std::unique_ptr<DTLS_Channel_Companion> m_dtls_channel_companion;  // NOLINT(*-non-private-member-*)
-      uint64_t m_retransmission_timer_generation = 0;                    // NOLINT(*-non-private-member-*)
-      std::shared_ptr<AcknowledgementTimer> m_ack_timer;                 // NOLINT(*-non-private-member-*)
+      uint64_t m_retransmission_timer_generation = 0;     // NOLINT(*-non-private-member-*)
+      std::shared_ptr<AcknowledgementTimer> m_ack_timer;  // NOLINT(*-non-private-member-*)
 
    private:
       /* callbacks */

@@ -1,18 +1,22 @@
 /*
-* DTLS Channel Mix-in - adding DTLS-specific functionality on demand
+* (D)TLS Channel IO
 * (C) 2026 Jack Lloyd
 *     2026 Amos Treiber, René Meusel - Rohde & Schwarz Networks and Cybersecurity GmbH
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
 
-#ifndef BOTAN_TLS_DTLS_CHANNEL_COMPANION_BASE_H_
-#define BOTAN_TLS_DTLS_CHANNEL_COMPANION_BASE_H_
+#ifndef BOTAN_TLS_CHANNEL_IO_BASE_H_
+#define BOTAN_TLS_CHANNEL_IO_BASE_H_
 
 #include <botan/assert.h>
 #include <botan/tls_exceptn.h>
 #include <chrono>
 #include <optional>
+
+#include <botan/internal/tls_flight_13.h>
+#include <botan/internal/tls_handshake_layer_13.h>
+#include <botan/internal/tls_record_layer_13.h>
 
 namespace Botan::TLS {
 
@@ -20,25 +24,26 @@ class Secret_Logger;
 class Cipher_State;
 struct RecordNumber;
 
-/**
- * Provides an abstract interface for DTLS-specific functionality that acts as
- * an entry-point for the TLS 1.3 channel implementation. The default
- * implementations of the virtual methods in this class are typically no-ops, or
- * throw meaningful error if some DTLS-only functionality was accidentally
- * invoked from within a TLS connection.
- */
-class DTLS_Channel_Companion {
-   public:
-      DTLS_Channel_Companion() = default;
-
-      virtual ~DTLS_Channel_Companion() = default;
-
-      DTLS_Channel_Companion(const DTLS_Channel_Companion&) = delete;
-      DTLS_Channel_Companion& operator=(const DTLS_Channel_Companion&) = delete;
-      DTLS_Channel_Companion(DTLS_Channel_Companion&&) = delete;
-      DTLS_Channel_Companion& operator=(DTLS_Channel_Companion&&) = delete;
+class Channel_IO {
+   protected:
+      Channel_IO() = default;
 
    public:
+      Channel_IO(const Channel_IO&) = delete;
+      Channel_IO& operator=(const Channel_IO&) = delete;
+      Channel_IO(Channel_IO&&) = delete;
+      Channel_IO& operator=(Channel_IO&&) = delete;
+
+      virtual ~Channel_IO() = default;
+
+      virtual void send_record(Record_Type record_type,
+                               std::span<const uint8_t> payload,
+                               Cipher_State* cipher_state) = 0;
+      virtual void send_record(const Flight& flight, Cipher_State* cipher_state) = 0;
+
+      virtual void send_acknowledgements() = 0;
+
+      // TODO: Move all DTLS specifics to DTLS_Channel_IO, ideally no DTLS stuff should remain here.
       /**
        * Notifies that the TLS state machine is sure that we're talking to a
        * peer using DTLS 1.3. Typically that is the case after receiving and
