@@ -19,8 +19,8 @@
 #include <botan/internal/loadstor.h>
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_channel_impl_13.h>
+#include <botan/internal/tls_channel_io.h>
 #include <botan/internal/tls_cipher_state.h>
-#include <botan/internal/tls_dtls_channel_companion.h>
 
 #include <utility>
 
@@ -47,7 +47,7 @@ std::shared_ptr<Client_Impl_13> Client_Impl_13::create(const std::shared_ptr<Cal
       // If we don't expect to downgrade, we can already enable all DTLS-only
       // features (e.g. record ACKing), because we know that we won't ever
       // talk to a legacy peer and succeed a handshake.
-      self->m_dtls_channel_companion->notify_protocol_version_committed();
+      self->m_channel_io->notify_protocol_version_committed();
    }
 
    if(auto session = self->find_session_for_resumption()) {
@@ -369,7 +369,7 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
       // i.e., we keep the resend buffer and the next timeout_check() call will
       // trigger a full resend of all ClientHello fragments, which is still
       // valid behavior.
-      m_dtls_channel_companion->notify_protocol_version_committed();
+      m_channel_io->notify_protocol_version_committed();
    }
 
    auto cipher = Ciphersuite::by_id(sh.ciphersuite());
@@ -449,9 +449,9 @@ void Client_Impl_13::handle(const Hello_Retry_Request& hrr) {
    // We also clear our outstanding ACKs, because the HelloRetryRequest is the
    // only message in the flight; by definition it is the "final" message of
    // this flight.
-   m_dtls_channel_companion->notify_protocol_version_committed();
-   m_dtls_channel_companion->clear_outstanding_acknowledgements();
-   m_dtls_channel_companion->maybe_clear_resend_buffer();
+   m_channel_io->notify_protocol_version_committed();
+   m_channel_io->clear_outstanding_acknowledgements();
+   m_channel_io->maybe_clear_resend_buffer();
 
    auto& ch = m_handshake->state.client_hello();
 
@@ -639,7 +639,7 @@ void Client_Impl_13::handle(const Certificate_Verify_13& certificate_verify_msg)
    m_handshake->transitions.set_expected_next(Handshake_Type::Finished);
 }
 
-void Client_Impl_13::send_client_authentication(Channel_Impl_13::Flight& flight) {
+void Client_Impl_13::send_client_authentication(Flight& flight) {
    BOTAN_ASSERT_NONNULL(m_handshake);
    BOTAN_ASSERT_NONNULL(m_transcript_hash);
    BOTAN_ASSERT_NOMSG(m_handshake->state.has_certificate_request());
@@ -705,7 +705,7 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
 
    // The Server's Finished message is the last handshake message in the flight.
    // Therefore, we can clear our outstanding ACKs.
-   m_dtls_channel_companion->clear_outstanding_acknowledgements();
+   m_channel_io->clear_outstanding_acknowledgements();
 
    // RFC 8446 4.4.4
    //    Recipients of Finished messages MUST verify that the contents are
