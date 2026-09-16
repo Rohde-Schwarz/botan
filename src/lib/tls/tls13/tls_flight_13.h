@@ -15,10 +15,10 @@
 namespace Botan::TLS {
 
 /**
-       * Helper class to coalesce handshake messages into a TLS flight.
-       * The class keeps score of the contained messages. It does not marshal
-       * them.
-       */
+ * Helper class to coalesce handshake messages into a TLS flight.
+ * The class keeps score of the contained messages. It does not marshal
+ * them.
+ */
 class Flight final {
    public:
       struct Message_Info {

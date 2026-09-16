@@ -10,7 +10,6 @@
 #define BOTAN_TLS_HANDSHAKE_LAYER_13_H_
 
 #include <optional>
-#include <vector>
 
 #include <botan/tls_magic.h>
 #include <botan/tls_messages_13.h>

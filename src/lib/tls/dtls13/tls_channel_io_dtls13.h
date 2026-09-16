@@ -21,11 +21,20 @@
 
 namespace Botan::TLS {
 
+class Channel_Impl_13;
+
 class DTLS_Channel_IO : public Channel_IO {
       // TODO: Move stuff to cpp
 
+   private:
+      enum class TimerGeneration : bool {
+         Advance,
+         Keep,
+      };
+
    public:
-      DTLS_Channel_IO(std::shared_ptr<const Policy> policy,
+      DTLS_Channel_IO(Channel_Impl_13& channel,
+                      std::shared_ptr<const Policy> policy,
                       std::shared_ptr<Callbacks> callbacks,
                       std::shared_ptr<Record_Layer> record_layer,
                       std::shared_ptr<Handshake_Layer> handshake_layer) :
@@ -33,6 +42,7 @@ class DTLS_Channel_IO : public Channel_IO {
             m_callbacks(std::move(callbacks)),
             m_record_layer(std::dynamic_pointer_cast<DTLS_Record_Layer>(std::move(record_layer))),
             m_handshake_layer(std::dynamic_pointer_cast<DTLS_Handshake_Layer>(std::move(handshake_layer))),
+            m_channel(channel),
             m_retransmission_timer(*m_policy, m_callbacks) {
          BOTAN_ASSERT_NONNULL(m_callbacks);
          BOTAN_ASSERT_NONNULL(m_record_layer);
@@ -40,50 +50,11 @@ class DTLS_Channel_IO : public Channel_IO {
       }
 
    public:
-      void send_record(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override {
-         for(const auto& [record_to_write, _] : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
-            m_callbacks->tls_emit_data(record_to_write);
-         }
-      }
+      void send_record(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override;
 
-      void send_record(const Flight& flight, Cipher_State* cipher_state) override {
-         const auto max_payload_size = m_record_layer->record_payload_size_limit(*m_policy, cipher_state);
+      void send_record(const Flight& flight, Cipher_State* cipher_state) override;
 
-         auto prepared = std::vector<MarshalledHandshakeMessageFragment>{};
-
-         for(const auto& msg_info : flight.messages()) {
-            auto frags = m_handshake_layer->fragment_message(msg_info.type, msg_info.serialized, max_payload_size);
-
-            prepared.insert(
-               prepared.end(), std::make_move_iterator(frags.begin()), std::make_move_iterator(frags.end()));
-         }
-
-         // TODO: prepare_records now no longer needs the variants
-         for(const auto& [record_to_write, _] : m_record_layer->prepare_records(prepared, cipher_state)) {
-            m_callbacks->tls_emit_data(record_to_write);
-         }
-      }
-
-      void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) override {
-         BOTAN_UNUSED(logger);  // Actual key update is deferred to ACK receiving
-         auto msg_bytes = m_handshake_layer->fragment_message(Handshake_Type::KeyUpdate, msg.serialize(), 13);
-
-         const auto prepared_records = m_record_layer->prepare_records(msg_bytes, cipher_state);
-
-         BOTAN_ASSERT_NOMSG(prepared_records.size() == 1);  // KeyUpdate is small enough to fit into a single record
-         m_callbacks->tls_emit_data(prepared_records.front().first);
-
-         // RFC 9147 8.
-         //    [...]  KeyUpdates MUST be acknowledged. In order to facilitate epoch
-         //    reconstruction [...], implementations MUST NOT send records with the
-         //    new keys or send a new KeyUpdate until the previous KeyUpdate has
-         //    been acknowledged [...].
-         //
-         // The actual call to cipher_state->update_write_keys() is
-         // deferred to the handling of the respective acknowledgement.
-         const auto key_update_record_number = prepared_records.front().second;
-         register_pending_key_update(key_update_record_number);
-      }
+      void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) override;
 
       void send_acknowledgements() override {
          //Still TODO
@@ -116,25 +87,7 @@ class DTLS_Channel_IO : public Channel_IO {
 
       void clear_outstanding_acknowledgements() override { m_record_layer->clear_outstanding_acknowledgements(); }
 
-      bool timeout_check(Cipher_State* cipher_state) override {
-         if(!m_retransmission_timer.started()) {
-            return false;
-         }
-
-         if(m_retransmission_timer.retransmissions_exhausted()) {
-            throw TLS_Exception(Alert::None, "DTLS handshake timed out: maximum retransmissions exceeded");
-         }
-
-         if(!m_retransmission_timer.expired()) {
-            return false;  // timer has not yet expired
-         }
-
-         for(const auto& record_to_write : m_record_layer->prepare_unacknowledged_records(cipher_state)) {
-            m_callbacks->tls_emit_data(record_to_write);
-         }
-         m_retransmission_timer.retransmitted();
-         return true;
-      }
+      bool timeout_check(Cipher_State* cipher_state) override;
 
       std::optional<std::chrono::milliseconds> next_retransmission_timeout() const override {
          if(!m_retransmission_timer.started()) {
@@ -143,6 +96,8 @@ class DTLS_Channel_IO : public Channel_IO {
 
          return m_retransmission_timer.next_timeout();
       }
+
+      void arm_dtls_retransmission_timer(TimerGeneration generation_policy = TimerGeneration::Advance);
 
       std::vector<uint8_t> current_ack_record(size_t max_plaintext_length) const override {
          return m_record_layer->acknowledgements().serialize(max_plaintext_length);
@@ -193,12 +148,19 @@ class DTLS_Channel_IO : public Channel_IO {
       }
 
    private:
+      void on_retransmission_timer(uint64_t generation);
+
+   private:
       std::shared_ptr<const Policy> m_policy;
       std::shared_ptr<Callbacks> m_callbacks;
       std::shared_ptr<DTLS_Record_Layer> m_record_layer;
       std::shared_ptr<DTLS_Handshake_Layer> m_handshake_layer;
 
+      // This channel owns us and will therefore outlive us
+      Channel_Impl_13& m_channel;
+
       DTLS_Retransmission_Timer m_retransmission_timer;
+      uint64_t m_retransmission_timer_generation = 0;
 
       std::optional<RecordNumber> m_pending_key_update_record;
 
