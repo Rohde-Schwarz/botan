@@ -772,7 +772,11 @@ void Server_Impl_13::handle(const Finished_13& finished_msg) {
       //     be acknowledged with an ACK message.
       //
       // So here we always explicitly ack the Finished message.
-      send_acknowledgements();
+      m_channel_io->send_acknowledgements();
+
+      // TODO: This is the only call site of send_acknowledgements outside of DTLS-specific
+      //       code. Maybe there is a way to "silently" do this in channel_io, though
+      //       then it somehow needs to know that a final flight was received.
    }
 
    // no more handshake messages expected

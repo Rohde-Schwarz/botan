@@ -23,7 +23,6 @@ class Cipher_State;
 class Transcript_Hash_State;
 class Channel_IO;
 class Flight;
-class AcknowledgementTimer;
 
 /**
  * Encapsulates the callbacks in the state machine described in RFC 8446 7.1,
@@ -198,14 +197,9 @@ class Channel_Impl_13 : public Channel_Impl,
       void send_record(Record_Type record_type, std::span<const uint8_t> payload);
       void send_record(const Flight& flight);
 
-      void send_acknowledgements();
-
    private:
       void process_alert(const secure_vector<uint8_t>& record);
       void process_acknowledgements(std::span<const uint8_t> record);
-
-      void maybe_arm_dtls_acknowledgement_timer();
-      void maybe_cancel_dtls_acknowledgement_timer();
 
       /**
        * Terminate the connection (on sending or receiving an error alert) and
@@ -258,9 +252,6 @@ class Channel_Impl_13 : public Channel_Impl,
 
       /* IO Handling */
       std::unique_ptr<Channel_IO> m_channel_io;  // NOLINT(*-non-private-member-*)
-
-      /* DTLS specific */
-      std::shared_ptr<AcknowledgementTimer> m_ack_timer;  // NOLINT(*-non-private-member-*)
 
    private:
       /* callbacks */

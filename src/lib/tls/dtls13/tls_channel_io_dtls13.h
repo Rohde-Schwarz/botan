@@ -24,30 +24,15 @@ namespace Botan::TLS {
 class Channel_Impl_13;
 
 class DTLS_Channel_IO : public Channel_IO {
-      // TODO: Move stuff to cpp
-
    private:
-      enum class TimerGeneration : bool {
-         Advance,
-         Keep,
-      };
+      class TimerToken;
 
    public:
       DTLS_Channel_IO(Channel_Impl_13& channel,
                       std::shared_ptr<const Policy> policy,
                       std::shared_ptr<Callbacks> callbacks,
                       std::shared_ptr<Record_Layer> record_layer,
-                      std::shared_ptr<Handshake_Layer> handshake_layer) :
-            m_policy(std::move(policy)),
-            m_callbacks(std::move(callbacks)),
-            m_record_layer(std::dynamic_pointer_cast<DTLS_Record_Layer>(std::move(record_layer))),
-            m_handshake_layer(std::dynamic_pointer_cast<DTLS_Handshake_Layer>(std::move(handshake_layer))),
-            m_channel(channel),
-            m_retransmission_timer(*m_policy, m_callbacks) {
-         BOTAN_ASSERT_NONNULL(m_callbacks);
-         BOTAN_ASSERT_NONNULL(m_record_layer);
-         BOTAN_ASSERT_NONNULL(m_handshake_layer);
-      }
+                      std::shared_ptr<Handshake_Layer> handshake_layer);
 
    public:
       void send_record(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override;
@@ -56,9 +41,7 @@ class DTLS_Channel_IO : public Channel_IO {
 
       void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) override;
 
-      void send_acknowledgements() override {
-         //Still TODO
-      }
+      void send_acknowledgements() override;
 
       void notify_protocol_version_committed() override { m_dtls_version_committed = true; }
 
@@ -97,7 +80,7 @@ class DTLS_Channel_IO : public Channel_IO {
          return m_retransmission_timer.next_timeout();
       }
 
-      void arm_dtls_retransmission_timer(TimerGeneration generation_policy = TimerGeneration::Advance);
+      void maybe_arm_dtls_acknowledgement_timer();
 
       std::vector<uint8_t> current_ack_record(size_t max_plaintext_length) const override {
          return m_record_layer->acknowledgements().serialize(max_plaintext_length);
@@ -148,7 +131,10 @@ class DTLS_Channel_IO : public Channel_IO {
       }
 
    private:
-      void on_retransmission_timer(uint64_t generation);
+      void arm_dtls_retransmission_timer();
+      void on_retransmission_timer();
+
+      void maybe_cancel_dtls_acknowledgement_timer();
 
    private:
       std::shared_ptr<const Policy> m_policy;
@@ -159,8 +145,10 @@ class DTLS_Channel_IO : public Channel_IO {
       // This channel owns us and will therefore outlive us
       Channel_Impl_13& m_channel;
 
+      std::shared_ptr<TimerToken> m_ack_token;
+
+      std::shared_ptr<TimerToken> m_retransmission_token;
       DTLS_Retransmission_Timer m_retransmission_timer;
-      uint64_t m_retransmission_timer_generation = 0;
 
       std::optional<RecordNumber> m_pending_key_update_record;
 

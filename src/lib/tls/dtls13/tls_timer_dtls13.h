@@ -39,7 +39,8 @@ class DTLS_Retransmission_Timer {
       bool started() const { return m_next_deadline.has_value(); }
 
       /**
-       * @returns true if the deadline was reached; false if the timer was never armed
+       * @returns true if the deadline was reached; false otherwise or if the
+       * timer was never armed
        */
       bool expired() const {
          if(!started()) {
@@ -83,6 +84,17 @@ class DTLS_Retransmission_Timer {
          m_next_timeout_span = m_initial_timeout;
          m_next_deadline = now() + m_next_timeout_span;
          m_retransmissions = 0;
+      }
+
+      /**
+       * Start the timer if not already armed.
+       */
+      void start_if_not_started() {
+         if(!started()) {
+            m_next_timeout_span = m_initial_timeout;
+            m_next_deadline = now() + m_next_timeout_span;
+            m_retransmissions = 0;
+         }
       }
 
       /**
