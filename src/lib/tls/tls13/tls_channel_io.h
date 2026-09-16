@@ -36,11 +36,14 @@ class Channel_IO {
 
       virtual ~Channel_IO() = default;
 
+      // TODO: Consider making send_record private and exposing:
+      // send_flight, send_alert, send_app_data, send_ccs
       virtual void send_record(Record_Type record_type,
                                std::span<const uint8_t> payload,
                                Cipher_State* cipher_state) = 0;
       virtual void send_record(const Flight& flight, Cipher_State* cipher_state) = 0;
 
+      virtual void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) = 0;
       virtual void send_acknowledgements() = 0;
 
       // TODO: Move all DTLS specifics to DTLS_Channel_IO, ideally no DTLS stuff should remain here.

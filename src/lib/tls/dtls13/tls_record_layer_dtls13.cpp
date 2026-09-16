@@ -368,18 +368,15 @@ std::vector<MarshalledRecordAndNumber> DTLS_Record_Layer::prepare_records(Record
    return {prepare_record(type, fragment, cipher_state)};
 }
 
-std::vector<MarshalledRecordAndNumber> DTLS_Record_Layer::prepare_records(const PreparedHandshakeMessageFlight& flight,
-                                                                          Cipher_State* cipher_state) const {
-   const auto* fragments = std::get_if<std::vector<MarshalledHandshakeMessageFragment>>(&flight);
-   BOTAN_ARG_CHECK(fragments != nullptr, "Flight must be a vector of MarshalledHandshakeMessageFragment");
-
+std::vector<MarshalledRecordAndNumber> DTLS_Record_Layer::prepare_records(
+   const std::vector<MarshalledHandshakeMessageFragment>& fragments, Cipher_State* cipher_state) const {
    std::vector<MarshalledRecordAndNumber> prepared_records;
-   prepared_records.reserve(fragments->size());
+   prepared_records.reserve(fragments.size());
 
    // For DTLS we assume that the Handshake_Layer fragmented the flight of
    // marshalled handshake messages so that each fragment fits into a single
    // DTLS record. Therefore, we simply prepare a record for each fragment.
-   for(const auto& fragment : *fragments) {
+   for(const auto& fragment : fragments) {
       auto marshalled_record_and_number = prepare_record(Record_Type::Handshake, fragment, cipher_state);
       m_unacked_outgoing_handshake_records.push_back({
          .record_numbers = {marshalled_record_and_number.second},

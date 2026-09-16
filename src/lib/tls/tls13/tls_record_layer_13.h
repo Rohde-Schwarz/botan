@@ -88,9 +88,6 @@ class BOTAN_TEST_API Record_Layer {
                                                                      std::span<const uint8_t> payload,
                                                                      Cipher_State* cipher_state = nullptr) const = 0;
 
-      virtual std::vector<MarshalledRecordAndNumber> prepare_records(const PreparedHandshakeMessageFlight& flight,
-                                                                     Cipher_State* cipher_state = nullptr) const = 0;
-
       /**
        * Returns the maximum number of bytes that can be put into a record.
        *

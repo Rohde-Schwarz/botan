@@ -36,6 +36,7 @@ class DTLS_Channel_IO : public Channel_IO {
             m_retransmission_timer(*m_policy, m_callbacks) {
          BOTAN_ASSERT_NONNULL(m_callbacks);
          BOTAN_ASSERT_NONNULL(m_record_layer);
+         BOTAN_ASSERT_NONNULL(m_handshake_layer);
       }
 
    public:
@@ -48,20 +49,40 @@ class DTLS_Channel_IO : public Channel_IO {
       void send_record(const Flight& flight, Cipher_State* cipher_state) override {
          const auto max_payload_size = m_record_layer->record_payload_size_limit(*m_policy, cipher_state);
 
-         auto prepared = PreparedHandshakeMessageFlight(std::vector<MarshalledHandshakeMessageFragment>{});
+         auto prepared = std::vector<MarshalledHandshakeMessageFragment>{};
 
          for(const auto& msg_info : flight.messages()) {
-            auto prep = m_handshake_layer->marshal_message_bytes(msg_info.type, msg_info.serialized, max_payload_size);
-            auto frags = std::get<std::vector<MarshalledHandshakeMessageFragment>>(prep);
+            auto frags = m_handshake_layer->fragment_message(msg_info.type, msg_info.serialized, max_payload_size);
 
-            auto& all = std::get<std::vector<MarshalledHandshakeMessageFragment>>(prepared);
-            all.insert(all.end(), std::make_move_iterator(frags.begin()), std::make_move_iterator(frags.end()));
+            prepared.insert(
+               prepared.end(), std::make_move_iterator(frags.begin()), std::make_move_iterator(frags.end()));
          }
 
          // TODO: prepare_records now no longer needs the variants
          for(const auto& [record_to_write, _] : m_record_layer->prepare_records(prepared, cipher_state)) {
             m_callbacks->tls_emit_data(record_to_write);
          }
+      }
+
+      void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) override {
+         BOTAN_UNUSED(logger);  // Actual key update is deferred to ACK receiving
+         auto msg_bytes = m_handshake_layer->fragment_message(Handshake_Type::KeyUpdate, msg.serialize(), 13);
+
+         const auto prepared_records = m_record_layer->prepare_records(msg_bytes, cipher_state);
+
+         BOTAN_ASSERT_NOMSG(prepared_records.size() == 1);  // KeyUpdate is small enough to fit into a single record
+         m_callbacks->tls_emit_data(prepared_records.front().first);
+
+         // RFC 9147 8.
+         //    [...]  KeyUpdates MUST be acknowledged. In order to facilitate epoch
+         //    reconstruction [...], implementations MUST NOT send records with the
+         //    new keys or send a new KeyUpdate until the previous KeyUpdate has
+         //    been acknowledged [...].
+         //
+         // The actual call to cipher_state->update_write_keys() is
+         // deferred to the handling of the respective acknowledgement.
+         const auto key_update_record_number = prepared_records.front().second;
+         register_pending_key_update(key_update_record_number);
       }
 
       void send_acknowledgements() override {

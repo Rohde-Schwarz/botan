@@ -51,8 +51,6 @@ class TLS_Record_Layer final : public Record_Layer {
       std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
                                                              std::span<const uint8_t> payload,
                                                              Cipher_State* cipher_state) const override;
-      std::vector<MarshalledRecordAndNumber> prepare_records(const PreparedHandshakeMessageFlight& flight,
-                                                             Cipher_State* cipher_state = nullptr) const override;
 
       void clear_read_buffer() override;
 
@@ -232,17 +230,6 @@ std::vector<MarshalledRecordAndNumber> TLS_Record_Layer::prepare_records(const R
 
    BOTAN_ASSERT_NOMSG(output.size() == records);
    return output;
-}
-
-std::vector<MarshalledRecordAndNumber> TLS_Record_Layer::prepare_records(const PreparedHandshakeMessageFlight& flight,
-                                                                         Cipher_State* cipher_state) const {
-   const auto* data = std::get_if<MarshalledHandshakeMessageFlight>(&flight);
-   BOTAN_ARG_CHECK(data != nullptr, "Flight must be a MarshalledHandshakeMessageFlight");
-
-   // Here, `data` is a flat byte vector that (potentially) contains multiple
-   // marshalled handshake messages. We simply delegate it to the other overload
-   // of `prepare_records` that handles the actual record marshalling.
-   return prepare_records(Record_Type::Handshake, std::span{*data}, cipher_state);
 }
 
 uint16_t TLS_Record_Layer::record_payload_size_limit(const Policy& policy, Cipher_State* cipher_state) const {

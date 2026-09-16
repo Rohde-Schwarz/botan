@@ -13,6 +13,7 @@
 #include <botan/tls_exceptn.h>
 #include <botan/tls_messages_13.h>
 #include <botan/tls_policy.h>
+#include <botan/internal/concat_util.h>
 #include <botan/internal/tls_channel_io.h>
 #include <botan/internal/tls_cipher_state.h>
 #include <botan/internal/tls_handshake_layer_13.h>
@@ -29,6 +30,10 @@
 namespace Botan::TLS {
 
 namespace {
+
+MarshalledHandshakeMessage marshal_message_bytes(Handshake_Type type, std::span<const uint8_t> msg_bytes) {
+   return concat<MarshalledHandshakeMessage>(prepare_tls_handshake_header(type, msg_bytes), msg_bytes);
+}
 
 class TLS_Channel_IO final : public Channel_IO {
    public:
@@ -48,21 +53,33 @@ class TLS_Channel_IO final : public Channel_IO {
       }
 
       void send_record(const Flight& flight, Cipher_State* cipher_state) override {
-         const auto max_payload_size = m_record_layer->record_payload_size_limit(*m_policy, cipher_state);
-
-         auto prepared = PreparedHandshakeMessageFlight(MarshalledHandshakeMessageFlight{});
+         auto prepared = MarshalledHandshakeMessageFlight();
 
          for(const auto& msg_info : flight.messages()) {
-            auto prep = m_handshake_layer->marshal_message_bytes(msg_info.type, msg_info.serialized, max_payload_size);
-            auto msg = std::get<MarshalledHandshakeMessage>(prep);
+            auto msg = marshal_message_bytes(msg_info.type, msg_info.serialized);
             const auto& v = msg.get();
-            auto& flat = std::get<MarshalledHandshakeMessageFlight>(prepared).get();
+            auto& flat = prepared.get();
             flat.insert(flat.end(), v.begin(), v.end());
          }
 
-         for(const auto& [record_to_write, _] : m_record_layer->prepare_records(prepared, cipher_state)) {
+         for(const auto& [record_to_write, _] :
+             m_record_layer->prepare_records(Record_Type::Handshake, prepared, cipher_state)) {
             m_callbacks->tls_emit_data(record_to_write);
          }
+      }
+
+      void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) override {
+         auto msg_bytes = marshal_message_bytes(Handshake_Type::KeyUpdate, msg.serialize());
+
+         const auto prepared_records = m_record_layer->prepare_records(Record_Type::Handshake, msg_bytes, cipher_state);
+
+         BOTAN_ASSERT_NOMSG(prepared_records.size() == 1);  // KeyUpdate is small enough to fit into a single record
+         m_callbacks->tls_emit_data(prepared_records.front().first);
+
+         // Immediately update the write keys after sending the
+         // KeyUpdate message (in contrast to DTLS, we have
+         // reliable transport and know it went through).
+         cipher_state->update_write_keys(logger);
       }
 
       void send_acknowledgements() override {
@@ -416,7 +433,7 @@ void Channel_Impl_13::send_dummy_change_cipher_spec() {
    BOTAN_STATE_CHECK(!is_handshake_complete());
 
    constexpr auto ccs_content = std::array<uint8_t, 1>{0x01};
-   m_channel_io->send_record(Record_Type::ChangeCipherSpec, ccs_content, nullptr);
+   send_record(Record_Type::ChangeCipherSpec, ccs_content);
 }
 
 void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
@@ -539,38 +556,11 @@ void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
    auto key_update_msg = Key_Update(request_peer_update);
    callbacks().tls_inspect_handshake_msg(key_update_msg);
 
-   auto msg_bytes = m_handshake_layer->marshal_message_bytes(Handshake_Type::KeyUpdate, key_update_msg.serialize(), 13);
-
-   const auto flight = std::visit(
-      overloaded{
-         [](MarshalledHandshakeMessage msg) -> PreparedHandshakeMessageFlight {
-            return MarshalledHandshakeMessageFlight(std::move(msg).get());
-         },
-         [](std::vector<MarshalledHandshakeMessageFragment> frags) -> PreparedHandshakeMessageFlight { return frags; },
-      },
-      std::move(msg_bytes));
-
-   const auto prepared_records = m_record_layer->prepare_records(flight, m_cipher_state.get());
-
-   BOTAN_ASSERT_NOMSG(prepared_records.size() == 1);  // KeyUpdate is small enough to fit into a single record
-   callbacks().tls_emit_data(prepared_records.front().first);
+   m_channel_io->send_key_update(std::move(key_update_msg), m_cipher_state.get(), *this);
 
    if(is_datagram()) {
-      // RFC 9147 8.
-      //    [...]  KeyUpdates MUST be acknowledged. In order to facilitate epoch
-      //    reconstruction [...], implementations MUST NOT send records with the
-      //    new keys or send a new KeyUpdate until the previous KeyUpdate has
-      //    been acknowledged [...].
-      //
-      // For DTLS, the actual call to cipher_state->update_write_keys() is
-      // deferred to the handling of the respective acknowledgement.
-      const auto key_update_record_number = prepared_records.front().second;
-      m_channel_io->register_pending_key_update(key_update_record_number);
-      maybe_arm_dtls_retransmission_timer();  // TODO: This may be a no-op since the timer is not started() here?
-   } else {
-      // For TLS, we may immediately update the write keys after sending the
-      // KeyUpdate message because we have reliable transport
-      m_cipher_state->update_write_keys(*this);
+      // TODO: move to m_channel_io
+      maybe_arm_dtls_retransmission_timer();
    }
 
    if(request_peer_update) {

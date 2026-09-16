@@ -20,8 +20,6 @@
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 
-#include <iostream>
-
 namespace Botan::TLS {
 
 namespace {
@@ -237,16 +235,13 @@ std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handsha
    return msg;
 }
 
-PreparedHandshakeMessage DTLS_Handshake_Layer::marshal_message_bytes(Handshake_Type type,
-                                                                     std::span<const uint8_t> msg_bytes,
-                                                                     std::optional<uint16_t> dtls_max_fragment_size) {
-   BOTAN_ARG_CHECK(dtls_max_fragment_size.has_value(), "DTLS max fragment size must be provided");
-   BOTAN_ARG_CHECK(dtls_max_fragment_size.value() > header_length,
-                   "DTLS max fragment size must be larger than header length");
+std::vector<MarshalledHandshakeMessageFragment> DTLS_Handshake_Layer::fragment_message(
+   Handshake_Type type, std::span<const uint8_t> msg_bytes, uint16_t max_fragment_size) {
+   BOTAN_ARG_CHECK(max_fragment_size > header_length, "DTLS max fragment size must be larger than header length");
 
    const uint16_t message_seq = m_send_message_seq++;
 
-   const auto max_bytes_per_fragment = dtls_max_fragment_size.value() - header_length;
+   const auto max_bytes_per_fragment = max_fragment_size - header_length;
    const auto number_of_fragments = ceil_division(msg_bytes.size(), max_bytes_per_fragment);
    BOTAN_ASSERT_NOMSG(number_of_fragments > 0);
 
