@@ -468,6 +468,7 @@ void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
    // We don't terminate the association but we reject any further key updates.
    if(is_datagram() &&
       to_underlying(m_cipher_state->current_write_epoch_number()) == std::numeric_limits<uint16_t>::max()) {
+      // TODO: move to Channel_IO
       throw Invalid_State("Cannot update keys: maximum DTLS epoch number reached");
    }
 

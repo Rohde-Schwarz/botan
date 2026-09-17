@@ -129,7 +129,7 @@ class Channel_IO {
       void set_selected_certificate_type(Certificate_Type t) { m_handshake_layer->set_selected_certificate_type(t); }
 
       std::optional<Epoch0_SequenceNumbers> epoch0_sequence_numbers() const {
-         // TODO: Remove optional, make this DTLS-only
+         // TODO: If possible, remove optional, make this DTLS-only
          return m_record_layer->epoch0_sequence_numbers();
       }
 
