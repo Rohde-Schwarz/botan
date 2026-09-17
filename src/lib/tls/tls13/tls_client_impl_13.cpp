@@ -74,7 +74,7 @@ std::shared_ptr<Client_Impl_13> Client_Impl_13::create(const std::shared_ptr<Cal
                       creds->find_preshared_keys(self->m_info.hostname(), Connection_Side::Client),
                       flavor));
    BOTAN_ASSERT_NONNULL(self->m_transcript_hash);
-   self->send_record(Flight().add(ch, *self->m_transcript_hash, self->callbacks()));
+   self->send_record(Flight::from_message(ch, *self->m_transcript_hash, self->callbacks()));
 
    self->maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingFirstClientHello);
 

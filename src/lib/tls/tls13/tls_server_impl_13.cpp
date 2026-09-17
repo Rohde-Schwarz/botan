@@ -510,7 +510,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Hello_Retry_Request hello_retr
    BOTAN_ASSERT_NOMSG(cipher.has_value());  // should work, since we chose that suite
 
    const auto hrr = m_handshake->state.sending(std::move(hello_retry_request));
-   send_record(Flight().add(hrr, *m_transcript_hash, callbacks()));
+   send_record(Flight::from_message(hrr, *m_transcript_hash, callbacks()));
    maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingHelloRetryRequest);
 
    m_transcript_hash =

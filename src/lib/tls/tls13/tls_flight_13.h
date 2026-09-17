@@ -41,19 +41,30 @@ class Flight final {
       ~Flight() = default;
 
       /**
-             * Add @p msg to the flight, updating @p transcript_hash in the process and letting
-             * the user inspect the message via @p callbacks.
-             * Use this variant of `add` to add handshake messages where the transcript hash
-             * needs to be updated. For post-handshake messages, the corresponding `add()`
-             * variant without a transcript hash needs to be used.
-             */
-      Flight& add(Handshake_Message_13_Ref msg, Transcript_Hash_State& transcript_hash, Callbacks& callbacks);
+       * Create a flight containing a single (post-)handshake message.
+       */
+      template <typename... ParamTs>
+      static Flight from_message(ParamTs&&... params) {
+         Flight flight;
+         flight.add(std::forward<ParamTs>(params)...);
+         return flight;
+      }
+
       /**
-             * Add @p msg to the flight, letting the user inspect the message via @p callbacks.
-             * Use this variant of `add` to add post-handshake messages. For handshake messages, the transcript
-             * hash needs to be updated, so the corresponding `add()` variant needs to be used in that case.
-             */
-      Flight& add(Post_Handshake_Message_13 msg, Callbacks& callbacks);
+       * Add @p msg to the flight, updating @p transcript_hash in the process and letting
+       * the user inspect the message via @p callbacks.
+       * Use this variant of `add` to add handshake messages where the transcript hash
+       * needs to be updated. For post-handshake messages, the corresponding `add()`
+       * variant without a transcript hash needs to be used.
+       */
+      void add(Handshake_Message_13_Ref msg, Transcript_Hash_State& transcript_hash, Callbacks& callbacks);
+
+      /**
+       * Add @p msg to the flight, letting the user inspect the message via @p callbacks.
+       * Use this variant of `add` to add post-handshake messages. For handshake messages, the transcript
+       * hash needs to be updated, so the corresponding `add()` variant needs to be used in that case.
+       */
+      void add(Post_Handshake_Message_13 msg, Callbacks& callbacks);
 
       bool contains_messages() const { return !m_messages.empty(); }
 
