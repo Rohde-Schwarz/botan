@@ -32,11 +32,11 @@ namespace Botan::TLS {
 DTLS_Record_Layer::DTLS_Record_Layer(Connection_Side side,
                                      std::shared_ptr<const Policy> policy,
                                      std::shared_ptr<Callbacks> callbacks) :
-      Record_Layer(side, std::move(policy), false, true), m_callbacks(std::move(callbacks)) {}
+      Record_Layer(side, std::move(policy), /*receive_compat_mode*/ true), m_callbacks(std::move(callbacks)) {}
 
 bool DTLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) {
    try {
-      return read_datagram(data_from_peer);
+      return copy_data(data_from_peer);
    } catch(const TLS_Exception& ex) {
       // RFC 9147 Section 4.5.2
       //    Unlike TLS, DTLS is resilient in the face of invalid records
@@ -79,6 +79,10 @@ bool DTLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer, bool 
       // connection attempt.
       throw;
    }
+}
+
+bool DTLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer) {
+   return read_datagram(data_from_peer);
 }
 
 bool DTLS_Record_Layer::read_datagram(std::span<const uint8_t> datagram) {
