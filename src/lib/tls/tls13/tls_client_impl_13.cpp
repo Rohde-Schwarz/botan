@@ -479,9 +479,7 @@ void Client_Impl_13::handle(const Hello_Retry_Request& hrr) {
    callbacks().tls_examine_extensions(hrr.extensions(), Connection_Side::Server, Handshake_Type::HelloRetryRequest);
 
    maybe_handle_compatibility_mode(Compat_Mode_Situation::BeforeSendingSecondClientHello);
-   Flight ch_flight;
-   ch_flight.add(std::reference_wrapper(ch), *m_transcript_hash, callbacks());
-   send_record(ch_flight);
+   send_record(Flight::from_message(ch, *m_transcript_hash, callbacks()));
 
    // RFC 8446 4.1.4
    //    If a client receives a second HelloRetryRequest in the same connection [...],
@@ -739,7 +737,7 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    flight.add(finished, *m_transcript_hash, callbacks());
 
    maybe_handle_compatibility_mode(Compat_Mode_Situation::BeforeSendingEncryptedClientFlight);
-   send_record(flight);
+   send_record(std::move(flight));
 
    // derives the sending application traffic secrets
    m_cipher_state->advance_with_client_finished(m_transcript_hash->current());
