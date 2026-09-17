@@ -44,9 +44,9 @@ DTLS_Channel_IO::DTLS_Channel_IO(Connection_Side side,
    BOTAN_ASSERT_NONNULL(m_handshake_layer);
 }
 
-void DTLS_Channel_IO::send_record(Record_Type record_type,
-                                  std::span<const uint8_t> payload,
-                                  Cipher_State* cipher_state) {
+void DTLS_Channel_IO::send_records(Record_Type record_type,
+                                   std::span<const uint8_t> payload,
+                                   Cipher_State* cipher_state) {
    for(const auto& [record_to_write, _] : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
       m_callbacks->tls_emit_data(record_to_write);
    }
@@ -113,7 +113,7 @@ void DTLS_Channel_IO::ingest_records(std::span<const uint8_t> data) {
 
 void DTLS_Channel_IO::send_acknowledgements() {
    const auto max_plaintext_length = record_layer().record_payload_size_limit(*m_policy, m_channel.cipher_state());
-   send_record(Record_Type::ACK, current_ack_record(max_plaintext_length), m_channel.cipher_state());
+   send_records(Record_Type::ACK, current_ack_record(max_plaintext_length), m_channel.cipher_state());
 }
 
 Channel_IO::ReceiveEvent DTLS_Channel_IO::next_receive_event(Cipher_State* cipher_state,

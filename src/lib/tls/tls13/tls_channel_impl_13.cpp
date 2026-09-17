@@ -36,7 +36,9 @@ class TLS_Channel_IO final : public Channel_IO {
       TLS_Channel_IO(Connection_Side side, std::shared_ptr<const Policy> policy, std::shared_ptr<Callbacks> callbacks) :
             Channel_IO(TLS_Flavor::TLS, side, std::move(policy), std::move(callbacks)) {}
 
-      void send_record(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override {
+      void send_records(Record_Type record_type,
+                        std::span<const uint8_t> payload,
+                        Cipher_State* cipher_state) override {
          for(const auto& [record_to_write, _] : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
             m_callbacks->tls_emit_data(record_to_write);
          }
@@ -519,7 +521,7 @@ void Channel_Impl_13::send_record(Record_Type record_type, std::span<const uint8
    // the cipher state is already set up for handshake message encryption.
    auto* cipher_state = (record_type != Record_Type::ChangeCipherSpec) ? m_cipher_state.get() : nullptr;
 
-   m_channel_io->send_record(record_type, payload, cipher_state);
+   m_channel_io->send_records(record_type, payload, cipher_state);
 }
 
 void Channel_Impl_13::send(Flight flight) {
