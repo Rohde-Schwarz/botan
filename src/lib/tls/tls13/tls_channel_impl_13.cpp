@@ -321,21 +321,25 @@ void Channel_Impl_13::handle(const Key_Update& key_update) {
 Flight& Flight::add(const Handshake_Message_13_Ref message,
                     Transcript_Hash_State& transcript_hash,
                     Callbacks& callbacks) {
-   std::visit([&](const auto msg) { callbacks.tls_inspect_handshake_msg(msg.get()); }, message);
-
-   auto [type, bytes] = detail::serialize_message(message);
-
-   transcript_hash.update(prepare_tls_handshake_header(type, bytes), bytes);
-
-   m_messages.emplace_back(type, std::move(bytes));
+   std::visit(
+      [&](const auto msg) {
+         callbacks.tls_inspect_handshake_msg(msg.get());
+         const auto& serialized_msg = m_messages.emplace_back(msg.get().wire_type(), msg.get().serialize());
+         const auto header = prepare_tls_handshake_header(serialized_msg.type, serialized_msg.serialized);
+         transcript_hash.update(header, serialized_msg.serialized);
+      },
+      message);
 
    return *this;
 }
 
 Flight& Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) {
-   std::visit([&](const auto& msg) { callbacks.tls_inspect_handshake_msg(msg); }, message);
-
-   m_messages.emplace_back(detail::serialize_message(message));
+   std::visit(
+      [&](const auto& msg) {
+         callbacks.tls_inspect_handshake_msg(msg);
+         m_messages.emplace_back(msg.wire_type(), msg.serialize());
+      },
+      message);
 
    return *this;
 }
