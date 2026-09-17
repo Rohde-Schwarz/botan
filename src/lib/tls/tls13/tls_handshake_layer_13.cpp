@@ -105,8 +105,8 @@ class TLS_Handshake_Layer final : public Handshake_Layer {
 
          return NextMessageResult{
             .type = type,
-            .tls_header_bytes = bytes.subspan<0, HEADER_LENGTH>(),
-            .message_bytes = bytes.subspan(HEADER_LENGTH, msg_len),
+            .tls_header_bytes = HandshakeProtocolHeader(std::array{bytes[0], bytes[1], bytes[2], bytes[3]}),
+            .message_bytes = StrongSpan<const SerializedHandshakeMessage>(bytes.subspan(HEADER_LENGTH, msg_len)),
             .bytes_consumed = HEADER_LENGTH + msg_len,
          };
       }
@@ -246,7 +246,8 @@ std::unique_ptr<Handshake_Layer> Handshake_Layer::create(Connection_Side whoami,
 
 void Handshake_Layer::update_transcript_for_psk_binder_calc(const Client_Hello_13& message,
                                                             Transcript_Hash_State& transcript_hash) {
-   const auto msg_bytes = message.serialize();
+   // TODO: Handshake_Message::serialize() should return strong type
+   const auto msg_bytes = SerializedHandshakeMessage(message.serialize());
 
    transcript_hash.update(prepare_tls_handshake_header(message.wire_type(), msg_bytes), msg_bytes);
 }
