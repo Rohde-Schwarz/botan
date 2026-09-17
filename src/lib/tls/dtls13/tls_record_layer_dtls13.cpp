@@ -132,6 +132,7 @@ PlaintextRecord_DTLS DTLS_Record_Layer::read_plaintext_record(BufferSlicer& bs) 
    //    compatibility purposes.
    //
    // TODO: Does it really make sense to make this rely on m_receiving_compat_mode of TLS?
+   // In that case, m_receiving_compat_mode can move to just the TLS impl.
    if(header.legacy_version != Protocol_Version::DTLS_V12 &&
       (header.legacy_version != Protocol_Version::DTLS_V10 || !receiving_compat_mode())) {
       throw TLS_Exception(Alert::IllegalParameter, "Received unexpected record version");
