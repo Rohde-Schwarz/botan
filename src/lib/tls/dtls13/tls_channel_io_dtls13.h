@@ -35,7 +35,7 @@ class DTLS_Channel_IO : public Channel_IO {
                       std::shared_ptr<Callbacks> callbacks);
 
    public:
-      void send_record(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override;
+      void send_records(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override;
 
       void send(Flight flight, Cipher_State* cipher_state) override;
 
