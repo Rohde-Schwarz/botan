@@ -487,26 +487,6 @@ using Client_Handshake_13_Message =
                 Finished_13>;
 using Client_Handshake_13_Message_Ref = detail::as_wrapped_references_t<Client_Handshake_13_Message>;
 
-namespace detail {
-
-template <typename T>
-const T& get(const std::reference_wrapper<T>& v) {
-   return v.get();
-}
-
-template <typename T>
-const T& get(const T& v) {
-   // NOLINTNEXTLINE(bugprone-return-const-ref-from-parameter)
-   return v;
-}
-
-template <typename T>
-auto serialize_message(const T& message) {
-   return std::visit([](const auto& msg) { return std::pair(get(msg).wire_type(), get(msg).serialize()); }, message);
-}
-
-}  // namespace detail
-
 }  // namespace Botan::TLS
 
 #endif
