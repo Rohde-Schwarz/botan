@@ -318,9 +318,7 @@ void Channel_Impl_13::handle(const Key_Update& key_update) {
    }
 }
 
-Flight& Flight::add(const Handshake_Message_13_Ref message,
-                    Transcript_Hash_State& transcript_hash,
-                    Callbacks& callbacks) {
+void Flight::add(const Handshake_Message_13_Ref message, Transcript_Hash_State& transcript_hash, Callbacks& callbacks) {
    std::visit(
       [&](const auto msg) {
          callbacks.tls_inspect_handshake_msg(msg.get());
@@ -329,19 +327,15 @@ Flight& Flight::add(const Handshake_Message_13_Ref message,
          transcript_hash.update(header, serialized_msg.serialized);
       },
       message);
-
-   return *this;
 }
 
-Flight& Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) {
+void Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) {
    std::visit(
       [&](const auto& msg) {
          callbacks.tls_inspect_handshake_msg(msg);
          m_messages.emplace_back(msg.wire_type(), msg.serialize());
       },
       message);
-
-   return *this;
 }
 
 void Channel_Impl_13::send_dummy_change_cipher_spec() {
