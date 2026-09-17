@@ -11,6 +11,7 @@
 
 #include <botan/tls_magic.h>
 #include <botan/tls_messages_13.h>
+#include <botan/internal/tls_types_13.h>
 
 namespace Botan::TLS {
 
@@ -22,13 +23,11 @@ namespace Botan::TLS {
 class Flight final {
    public:
       struct Message_Info {
-            Handshake_Type type;              // NOLINT(*non-private-member-variable*)
-            std::vector<uint8_t> serialized;  // NOLINT(*non-private-member-variable*)
+            Handshake_Type type;                    // NOLINT(*non-private-member-variable*)
+            HandshakeProtocolHeader header;         // NOLINT(*non-private-member-variable*)
+            SerializedHandshakeMessage serialized;  // NOLINT(*non-private-member-variable*)
 
-            Message_Info(Handshake_Type t, std::vector<uint8_t> s) : type(t), serialized(std::move(s)) {}
-
-            explicit Message_Info(std::pair<Handshake_Type, std::vector<uint8_t>> p) :
-                  type(p.first), serialized(std::move(p.second)) {}
+            Message_Info(Handshake_Type type, SerializedHandshakeMessage serialized_message);
       };
 
    public:

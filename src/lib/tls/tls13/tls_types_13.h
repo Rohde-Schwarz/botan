@@ -36,6 +36,13 @@ struct RecordNumber {
       auto operator<=>(const RecordNumber&) const = default;
 };
 
+/// Holds the serialization of a single TLS 1.3 handshake message without the
+/// handshake protocol header.
+using SerializedHandshakeMessage = Strong<std::vector<uint8_t>, struct SerializedHandshakeMessage_>;
+
+/// Holds the serialization of a TLS 1.3 handshake protocol header.
+using HandshakeProtocolHeader = Strong<std::array<uint8_t, 4>, struct HandshakeProtocolHeader_>;
+
 /// Holds the serialization of a single TLS 1.3 handshake message along
 /// with the handshake protocol header.
 using MarshalledHandshakeMessage = Strong<std::vector<uint8_t>, struct MarshalledHandshakeMessage_>;

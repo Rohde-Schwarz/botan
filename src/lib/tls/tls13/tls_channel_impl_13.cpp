@@ -31,10 +31,6 @@ namespace Botan::TLS {
 
 namespace {
 
-MarshalledHandshakeMessage marshal_message_bytes(Handshake_Type type, std::span<const uint8_t> msg_bytes) {
-   return concat<MarshalledHandshakeMessage>(prepare_tls_handshake_header(type, msg_bytes), msg_bytes);
-}
-
 class TLS_Channel_IO final : public Channel_IO {
    public:
       TLS_Channel_IO(Connection_Side side, std::shared_ptr<const Policy> policy, std::shared_ptr<Callbacks> callbacks) :
@@ -50,10 +46,9 @@ class TLS_Channel_IO final : public Channel_IO {
          auto prepared = MarshalledHandshakeMessageFlight();
 
          for(const auto& msg_info : flight.messages()) {
-            auto msg = marshal_message_bytes(msg_info.type, msg_info.serialized);
-            const auto& v = msg.get();
             auto& flat = prepared.get();
-            flat.insert(flat.end(), v.begin(), v.end());
+            flat.insert(flat.end(), msg_info.header.begin(), msg_info.header.end());
+            flat.insert(flat.end(), msg_info.serialized.begin(), msg_info.serialized.end());
          }
 
          for(const auto& [record_to_write, _] :
@@ -63,7 +58,8 @@ class TLS_Channel_IO final : public Channel_IO {
       }
 
       void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) override {
-         auto msg_bytes = marshal_message_bytes(Handshake_Type::KeyUpdate, msg.serialize());
+         const auto msg_bytes = concat<MarshalledHandshakeMessage>(
+            prepare_tls_handshake_header(Handshake_Type::KeyUpdate, msg.serialize()), msg.serialize());
 
          const auto prepared_records = m_record_layer->prepare_records(Record_Type::Handshake, msg_bytes, cipher_state);
 
@@ -318,13 +314,21 @@ void Channel_Impl_13::handle(const Key_Update& key_update) {
    }
 }
 
+Flight::Message_Info::Message_Info(Handshake_Type type,
+                                   SerializedHandshakeMessage serialized_message /* NOLINT(*-value-param) */) :
+      type(type),
+      header(prepare_tls_handshake_header(type, serialized_message)),
+      serialized(std::move(serialized_message)) {}
+
 void Flight::add(const Handshake_Message_13_Ref message, Transcript_Hash_State& transcript_hash, Callbacks& callbacks) {
    std::visit(
       [&](const auto msg) {
          callbacks.tls_inspect_handshake_msg(msg.get());
-         const auto& serialized_msg = m_messages.emplace_back(msg.get().wire_type(), msg.get().serialize());
-         const auto header = prepare_tls_handshake_header(serialized_msg.type, serialized_msg.serialized);
-         transcript_hash.update(header, serialized_msg.serialized);
+
+         // TODO: Handshake_Message::serialize() should return the strong type
+         const auto& m =
+            m_messages.emplace_back(msg.get().wire_type(), SerializedHandshakeMessage(msg.get().serialize()));
+         transcript_hash.update(m.header, m.serialized);
       },
       message);
 }
@@ -333,7 +337,9 @@ void Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) 
    std::visit(
       [&](const auto& msg) {
          callbacks.tls_inspect_handshake_msg(msg);
-         m_messages.emplace_back(msg.wire_type(), msg.serialize());
+
+         // TODO: Handshake_Message::serialize() should return the strong type
+         m_messages.emplace_back(msg.wire_type(), SerializedHandshakeMessage(msg.serialize()));
       },
       message);
 }

@@ -141,8 +141,8 @@ class BOTAN_TEST_API Handshake_Layer {
 
       struct NextMessageResult {
             Handshake_Type type;
-            std::span<const uint8_t, 4> tls_header_bytes;
-            std::span<const uint8_t> message_bytes;
+            HandshakeProtocolHeader tls_header_bytes;
+            StrongSpan<const SerializedHandshakeMessage> message_bytes;
             size_t bytes_consumed;  // only includes the bytes processed by the last next_message_buffer() call
       };
 

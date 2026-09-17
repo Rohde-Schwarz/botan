@@ -111,7 +111,8 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
             //       for that in test_tls_dtls13_handshake_layer.cpp, called
             //       "parse ClientHello detects incoming garbage data with invalid message type".
             .epoch = epoch.value(),
-            .header = {header_bytes[0], header_bytes[1], header_bytes[2], header_bytes[3]},
+            .header =
+               HandshakeProtocolHeader(std::array{header_bytes[0], header_bytes[1], header_bytes[2], header_bytes[3]}),
             .payload = DTLSPayload(msg_len),
             .received_bytes = bitvector(msg_len),
             .complete = false,
@@ -124,7 +125,7 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
       }
 
       if(reassembled.payload.size() != msg_len || reassembled.received_bytes.size() != msg_len ||
-         load_be(header_bytes.first<4>()) != load_be(reassembled.header)) {
+         load_be(header_bytes.first<4>()) != load_be(reassembled.header.get())) {
          throw TLS_Exception(Alert::IllegalParameter, "Inconsistent values in fragmented DTLS handshake header");
       }
 

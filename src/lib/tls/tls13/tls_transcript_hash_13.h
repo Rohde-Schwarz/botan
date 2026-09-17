@@ -10,6 +10,7 @@
 #define BOTAN_TLS_TRANSCRIPT_HASH_13_H_
 
 #include <botan/tls_magic.h>
+#include <botan/internal/tls_types_13.h>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -60,8 +61,8 @@ class BOTAN_TEST_API Transcript_Hash_State {
        * @p tls_message_header is the 4-byte handshake message header and
        * @p serialized_message_s is the serialized handshake message.
        */
-      void update(std::span<const uint8_t, TLS_HANDSHAKE_HEADER_LENGTH> tls_message_header,
-                  std::span<const uint8_t> serialized_message_s);
+      void update(HandshakeProtocolHeader tls_message_header,
+                  StrongSpan<const SerializedHandshakeMessage> serialized_message);
 
       /**
        * returns the latest transcript hash
@@ -92,7 +93,7 @@ class BOTAN_TEST_API Transcript_Hash_State {
       Transcript_Hash_State clone() const;
 
    private:
-      void update(std::span<const uint8_t> tls_message_header_and_serialized_message);
+      void update(StrongSpan<const MarshalledHandshakeMessage> hdr_and_msg);
 
    private:
       // called by clone
@@ -104,7 +105,7 @@ class BOTAN_TEST_API Transcript_Hash_State {
 
       // This buffer is filled with the data that is passed into
       // `update()` before `set_algorithm()` was called.
-      std::vector<std::vector<uint8_t>> m_unprocessed_transcript;
+      std::vector<MarshalledHandshakeMessage> m_unprocessed_transcript;
 
       Transcript_Hash m_current;
       Transcript_Hash m_previous;

@@ -58,14 +58,15 @@ std::unique_ptr<Transcript_Hash_State> Transcript_Hash_State::recreate_after_hel
    //    [...], when the server responds to a ClientHello with a HelloRetryRequest,
    //    the value of ClientHello1 is replaced with a special synthetic handshake
    //    message of handshake type "message_hash" [(0xFE)] containing:
-   const auto message_hash_header = std::array{
+   const auto message_hash_header = HandshakeProtocolHeader({
       uint8_t(0xFE), /* message type 'message_hash' RFC 8446 4. */
       get_byte<1>(hash_length_32),
       get_byte<2>(hash_length_32),
       get_byte<3>(hash_length_32),
-   };
+   });
+   const auto message_hash_msg = SerializedHandshakeMessage(transcript_hash->m_hash->process(client_hello_1));
 
-   transcript_hash->update(message_hash_header, transcript_hash->m_hash->process(client_hello_1));
+   transcript_hash->update(message_hash_header, message_hash_msg);
    transcript_hash->update(hello_retry_request);
 
    return transcript_hash;
@@ -159,8 +160,8 @@ std::vector<uint8_t> read_hash_state(std::unique_ptr<HashFunction>& hash) {
 
 }  // namespace
 
-void Transcript_Hash_State::update(std::span<const uint8_t, TLS_HANDSHAKE_HEADER_LENGTH> tls_message_header,
-                                   std::span<const uint8_t> serialized_message_s) {
+void Transcript_Hash_State::update(HandshakeProtocolHeader tls_message_header,
+                                   StrongSpan<const SerializedHandshakeMessage> serialized_message_s) {
    const auto message_type = static_cast<Handshake_Type>(tls_message_header[0]);
    const auto* serialized_message = serialized_message_s.data();
    auto serialized_message_length = serialized_message_s.size();
@@ -185,15 +186,17 @@ void Transcript_Hash_State::update(std::span<const uint8_t, TLS_HANDSHAKE_HEADER
 
       m_previous = std::exchange(m_current, read_hash_state(m_hash));
    } else {
-      m_unprocessed_transcript.push_back(concat<std::vector<uint8_t>>(tls_message_header, serialized_message_s));
+      m_unprocessed_transcript.push_back(concat<MarshalledHandshakeMessage>(tls_message_header, serialized_message_s));
    }
 }
 
-void Transcript_Hash_State::update(std::span<const uint8_t> tls_message_header_and_serialized_message) {
-   BOTAN_ASSERT(tls_message_header_and_serialized_message.size() >= TLS_HANDSHAKE_HEADER_LENGTH,
+void Transcript_Hash_State::update(StrongSpan<const MarshalledHandshakeMessage> hdr_and_msg) {
+   BOTAN_ASSERT(hdr_and_msg.size() >= TLS_HANDSHAKE_HEADER_LENGTH,
                 "Message is at least as long as the Handshake Layer's header");
-   update(tls_message_header_and_serialized_message.first<TLS_HANDSHAKE_HEADER_LENGTH>(),
-          tls_message_header_and_serialized_message.subspan(TLS_HANDSHAKE_HEADER_LENGTH));
+   constexpr auto hdr_len = TLS_HANDSHAKE_HEADER_LENGTH;
+   const auto hdr = typecast_copy<HandshakeProtocolHeader>(hdr_and_msg.get().first<hdr_len>());
+   const auto msg = StrongSpan<const SerializedHandshakeMessage>(hdr_and_msg.get().subspan(hdr_len));
+   update(hdr, msg);
 }
 
 const Transcript_Hash& Transcript_Hash_State::current() const {

@@ -11,6 +11,7 @@
 
 #include <botan/internal/bitvector.h>
 #include <botan/internal/tls_handshake_layer_13.h>
+#include <botan/internal/tls_types_13.h>
 
 namespace Botan::TLS {
 
@@ -22,8 +23,8 @@ namespace Botan::TLS {
  */
 class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
    public:
-      using TLSHeader = std::array<uint8_t, 4>;
-      using DTLSPayload = std::vector<uint8_t>;
+      using TLSHeader = HandshakeProtocolHeader;
+      using DTLSPayload = SerializedHandshakeMessage;
 
       explicit DTLS_Handshake_Layer(Connection_Side side) : Handshake_Layer(side) {}
 
