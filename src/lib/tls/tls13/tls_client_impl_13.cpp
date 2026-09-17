@@ -441,17 +441,11 @@ void Client_Impl_13::handle(const Hello_Retry_Request& hrr) {
    BOTAN_ASSERT_NONNULL(m_transcript_hash);
 
    // We just received a TLS 1.3 HelloRetryRequest. Now, we can be sure that our
-   // peer uses TLS 1.3 and, thus, could handle lost packages using the DTLS 1.3
-   // ACK mechanism. Therefore, we have to clear our resend buffer, because it
-   // might still contain our initial ClientHello for retransmission to a DTLS
-   // 1.2 peer that would not have been able to rely on ACKs.
-   //
-   // We also clear our outstanding ACKs, because the HelloRetryRequest is the
-   // only message in the flight; by definition it is the "final" message of
-   // this flight.
-   m_channel_io->notify_protocol_version_committed();
-   m_channel_io->clear_outstanding_acknowledgements();
-   m_channel_io->maybe_clear_resend_buffer();
+   // peer uses TLS 1.3. The HRR also supersedes our previous flight.
+   m_channel_io->notify_protocol_version_committed_and_flight_superseded();
+
+   // by definition HRR is the "final" message of this flight.
+   m_channel_io->notify_received_complete_flight();
 
    auto& ch = m_handshake->state.client_hello();
 
@@ -704,8 +698,7 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    BOTAN_ASSERT_NONNULL(m_transcript_hash);
 
    // The Server's Finished message is the last handshake message in the flight.
-   // Therefore, we can clear our outstanding ACKs.
-   m_channel_io->clear_outstanding_acknowledgements();
+   m_channel_io->notify_received_complete_flight();
 
    // RFC 8446 4.4.4
    //    Recipients of Finished messages MUST verify that the contents are

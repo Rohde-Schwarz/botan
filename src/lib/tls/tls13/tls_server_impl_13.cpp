@@ -554,15 +554,13 @@ void Server_Impl_13::handle(const Client_Hello_13& client_hello) {
    const bool is_initial_client_hello = !m_handshake->state.has_hello_retry_request();
 
    // We received a TLS 1.3 ClientHello. Now, we can be sure that our peer uses
-   // TLS 1.3. We don't have to explicitly clear our resend buffer like on the
-   // client side, because the server never sends any flights before commiting
-   // the protocol version anyway.
-   //
-   // We do however clear our outstanding ACKs, because the ClientHello is the
-   // only message in the flight; by definition it is the "final" message of
-   // this flight.
+   // TLS 1.3. Note that for DTLS, we don't have to explicitly clear our resend
+   // buffer like on the client side, because the server never sends any flights
+   // before commiting the protocol version anyway.
    m_channel_io->notify_protocol_version_committed();
-   m_channel_io->clear_outstanding_acknowledgements();
+
+   // By definition, SH is the "final" message of this flight.
+   m_channel_io->notify_received_complete_flight();
 
    if(is_initial_client_hello) {
       const auto preferred_version = client_hello.highest_supported_version(policy());
@@ -765,19 +763,7 @@ void Server_Impl_13::handle(const Finished_13& finished_msg) {
 
    m_cipher_state->advance_with_client_finished(m_transcript_hash->current());
 
-   if(is_datagram()) {
-      // RFC 9147 5.7
-      //     When a handshake flight is sent without any expected response, as
-      //     is the case with the client's final flight [...], the flight must
-      //     be acknowledged with an ACK message.
-      //
-      // So here we always explicitly ack the Finished message.
-      m_channel_io->send_acknowledgements();
-
-      // TODO: This is the only call site of send_acknowledgements outside of DTLS-specific
-      //       code. Maybe there is a way to "silently" do this in channel_io, though
-      //       then it somehow needs to know that a final flight was received.
-   }
+   m_channel_io->notify_received_final_flight();
 
    // no more handshake messages expected
    m_handshake->transitions.set_expected_next({});
