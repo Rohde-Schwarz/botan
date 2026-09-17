@@ -74,7 +74,7 @@ std::shared_ptr<Client_Impl_13> Client_Impl_13::create(const std::shared_ptr<Cal
                       creds->find_preshared_keys(self->m_info.hostname(), Connection_Side::Client),
                       flavor));
    BOTAN_ASSERT_NONNULL(self->m_transcript_hash);
-   self->send_record(Flight::from_message(ch, *self->m_transcript_hash, self->callbacks()));
+   self->send(Flight::from_message(ch, *self->m_transcript_hash, self->callbacks()));
 
    self->maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingFirstClientHello);
 
@@ -479,7 +479,7 @@ void Client_Impl_13::handle(const Hello_Retry_Request& hrr) {
    callbacks().tls_examine_extensions(hrr.extensions(), Connection_Side::Server, Handshake_Type::HelloRetryRequest);
 
    maybe_handle_compatibility_mode(Compat_Mode_Situation::BeforeSendingSecondClientHello);
-   send_record(Flight::from_message(ch, *m_transcript_hash, callbacks()));
+   send(Flight::from_message(ch, *m_transcript_hash, callbacks()));
 
    // RFC 8446 4.1.4
    //    If a client receives a second HelloRetryRequest in the same connection [...],
@@ -737,7 +737,7 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    flight.add(finished, *m_transcript_hash, callbacks());
 
    maybe_handle_compatibility_mode(Compat_Mode_Situation::BeforeSendingEncryptedClientFlight);
-   send_record(std::move(flight));
+   send(std::move(flight));
 
    // derives the sending application traffic secrets
    m_cipher_state->advance_with_client_finished(m_transcript_hash->current());

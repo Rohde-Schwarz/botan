@@ -195,7 +195,7 @@ class Channel_Impl_13 : public Channel_Impl,
       bool is_datagram() const { return m_flavor == TLS_Flavor::DTLS; }
 
       void send_record(Record_Type record_type, std::span<const uint8_t> payload);
-      void send_record(Flight flight);
+      void send(Flight flight);
 
    private:
       void process_alert(const secure_vector<uint8_t>& record);
