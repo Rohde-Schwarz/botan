@@ -11,9 +11,9 @@
 
 #include <botan/assert.h>
 #include <botan/tls_exceptn.h>
-#include <chrono>
 #include <optional>
 
+#include <botan/internal/stl_util.h>
 #include <botan/internal/tls_flight_13.h>
 #include <botan/internal/tls_handshake_layer_13.h>
 #include <botan/internal/tls_record_layer_13.h>
@@ -24,9 +24,20 @@ class Secret_Logger;
 class Cipher_State;
 struct RecordNumber;
 
-class Channel_IO : public std::enable_shared_from_this<Channel_IO> {
+class Channel_IO {
+   public:
+      using ReceiveEvent = std::variant<BytesNeeded,  //
+                                        Handshake_Message_13,
+                                        Post_Handshake_Message_13,
+                                        Record_Content>;
+
    protected:
-      Channel_IO() = default;
+      Channel_IO(std::shared_ptr<Record_Layer> record_layer,
+                 std::shared_ptr<Handshake_Layer> handshake_layer,
+                 std::shared_ptr<const Policy> policy) :
+            m_record_layer(std::move(record_layer)),
+            m_handshake_layer(std::move(handshake_layer)),
+            m_policy(std::move(policy)) {}
 
    public:
       Channel_IO(const Channel_IO&) = delete;
@@ -44,54 +55,151 @@ class Channel_IO : public std::enable_shared_from_this<Channel_IO> {
       virtual void send_record(const Flight& flight, Cipher_State* cipher_state) = 0;
 
       virtual void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) = 0;
-      virtual void send_acknowledgements() = 0;
 
-      // TODO: Move all DTLS specifics to DTLS_Channel_IO, ideally no DTLS stuff should remain here.
+      void ingest_records(std::span<const uint8_t> data, bool has_cryptographic_association) {
+         // TODO: Get rid of has_cryptographic_association, this is only for DTLS
+         // and can probably now be handled in DTLS_Channel_IO::ingest
+         m_record_layer->copy_data(data, has_cryptographic_association);
+      }
+
+      virtual ReceiveEvent next_receive_event(Cipher_State* cipher_state,
+                                              Transcript_Hash_State* transcript_hash,
+                                              bool handshake_complete) = 0;
+
       /**
        * Notifies that the TLS state machine is sure that we're talking to a
-       * peer using DTLS 1.3. Typically that is the case after receiving and
-       * processing a HelloRetryRequest or ServerHello, or a ClientHello
-       * indicating support for DTLS 1.3.
+       * peer using (D)TLS 1.3. Typically that is the case after receiving and
+       * processing a ServerHello or a ClientHello indicating support for (D)TLS
+       * 1.3.
+       *
+       * This is relevant for DTLS: before this point, lost records must be
+       * recovered by retransmitting entire flights (1.2-style); only afterwards
+       * may the ACK mechanism (RFC 9147 7.) be relied upon.
+       *
+       * For the case of receiving a HelloRetryRequest, use
+       * notify_protocol_version_committed_and_flight_superseded().
        */
-      virtual void notify_protocol_version_committed() {}
-
-      virtual void notify_sent_handshake_flight() {}
-
-      virtual bool protocol_version_committed() const { return false; }
-
-      virtual void register_pending_key_update(const RecordNumber& record_number) { BOTAN_UNUSED(record_number); }
-
-      virtual bool has_pending_key_update() const { return false; }
-
-      virtual void maybe_clear_resend_buffer() {}
+      virtual void notify_protocol_version_committed() = 0;
 
       /**
-       * Notifies that a complete flight was received from the peer and
-       * therefore no lost records are expected anymore. Typically, this is
-       * called in the [Client/Server]_Impl_13::handle() methods of messages
-       * that appear as "last message in a flight" or in post-handshake
-       * messages.
+       * Like notify_protocol_version_committed(), but for the case where
+       * committing message additionally supersedes the flight currently held
+       * for retransmission. This is the case exactly for a HelloRetryRequest.
+       *
+       * This difference is only relevant for DTLS: Since the buffered flight
+       * (the initial ClientHello) is superseded by the response about to be
+       * sent, retransmitting it would be wrong. So in addition to commiting the
+       * protocol version, this method also clears the resend buffer and
+       * retransmission timer.
        */
-      virtual void clear_outstanding_acknowledgements() {}
+      virtual void notify_protocol_version_committed_and_flight_superseded() = 0;
 
-      virtual bool timeout_check(Cipher_State* cipher_state) {
-         BOTAN_UNUSED(cipher_state);
-         return false;
+      /**
+       * Notifies that the last message completing a flight was received.
+       *
+       * This is relevant for DTLS: At that point, everything we need
+       * was received and the ACK mechanism is no longer needed.
+       */
+      virtual void notify_received_complete_flight() = 0;
+
+      /**
+       * Notifies that a complete flight was received that expects no response,
+       * i.e., the final flight of the peer (the client's Finished).
+       *
+       * This is relevant for DTLS: since there is no response flight
+       * that would implicitly acknowledge it, the flight must be acknowledged
+       * explicitly with an ACK message.
+       */
+      virtual void notify_received_final_flight() = 0;
+
+   protected:
+      std::optional<ReceiveEvent> next_pending_handshake_message(Transcript_Hash_State* transcript_hash,
+                                                                 bool handshake_complete) {
+         if(!handshake_complete) {
+            BOTAN_ASSERT_NONNULL(transcript_hash);
+            auto handshake_msg = m_handshake_layer->next_message(*m_policy, *transcript_hash);
+            if(!handshake_msg.has_value()) {
+               return std::nullopt;
+            }
+
+            // RFC 8446 5.1
+            //    Handshake messages MUST NOT span key changes.  Implementations
+            //    MUST verify that all messages immediately preceding a key change
+            //    align with a record boundary; if not, then they MUST terminate the
+            //    connection with an "unexpected_message" alert.  Because the
+            //    ClientHello, EndOfEarlyData, ServerHello, Finished, and KeyUpdate
+            //    messages can immediately precede a key change, implementations
+            //    MUST send these messages in alignment with a record boundary.
+            //
+            // Note: Hello_Retry_Request was added to the list below although it cannot immediately precede a key change.
+            //       However, there cannot be any further sensible messages in the record after HRR.
+            //
+            // Note: Server_Hello_12 was deliberately not included in the check below because in TLS 1.2 Server Hello and
+            //       other handshake messages can be legally coalesced in a single record.
+            //
+            // TODO: This should be handled differently for DTLS
+            // Kimi: need per-record bookkeeping: copy_data should record
+            // whether the fragment completing a message was followed by
+            // more fragments in the same record, and attach that flag to
+            // the ReassembledMessage, rather than inferring it from
+            // global map state.
+            if(holds_any_of<Client_Hello_12_Shim,
+                            Client_Hello_13 /*, EndOfEarlyData,*/,
+                            Server_Hello_13,
+                            Hello_Verify_Request,  // DTLS 1.3 -> 1.2 downgrade
+                            Hello_Retry_Request,
+                            Finished_13>(handshake_msg.value()) &&
+               m_handshake_layer->has_pending_data()) {
+               throw Unexpected_Message("Unexpected additional handshake message data found in record");
+            }
+
+            // After the initial handshake message is received, the record
+            // layer must be more restrictive.
+            // See RFC 8446 5.1 regarding "legacy_record_version"
+            if(!m_first_message_delivered) {
+               // TODO: Consider always calling disable_receiving_compat_mode
+               // to get rid of m_first_message_delivered
+               m_record_layer->disable_receiving_compat_mode();
+               m_first_message_delivered = true;
+            }
+            return ReceiveEvent(std::move(handshake_msg.value()));
+         }
+
+         // if handshake_complete
+         auto post_handshake_msg = m_handshake_layer->next_post_handshake_message(*m_policy);
+         if(!post_handshake_msg.has_value()) {
+            return std::nullopt;
+         }
+         return ReceiveEvent(std::move(post_handshake_msg.value()));
       }
 
-      virtual std::optional<std::chrono::milliseconds> next_retransmission_timeout() const { return std::nullopt; }
+      Record_Layer::ReadResult<Record_Content> pull_record(Cipher_State* cipher_state) {
+         auto result = m_record_layer->next_record(cipher_state);
 
-      virtual std::vector<uint8_t> current_ack_record(size_t max_plaintext_length) const {
-         BOTAN_UNUSED(max_plaintext_length);
-         throw TLS_Exception(AlertType::InternalError, "Requested an ACK record despite not being DTLS");
+         if(std::holds_alternative<BytesNeeded>(result)) {
+            return std::get<BytesNeeded>(result);
+         }
+
+         const auto& record = std::get<Record_Content>(result);
+
+         // RFC 8446 5.1
+         //   Handshake messages MUST NOT be interleaved with other record types.
+         if(record.type != Record_Type::Handshake && m_handshake_layer->has_pending_data()) {
+            throw Unexpected_Message("Expected remainder of a handshake message");
+         }
+
+         return record;
       }
 
-      virtual void process_acknowledgements(Cipher_State* cipher_state,
-                                            std::span<const uint8_t> ack_record,
-                                            const Secret_Logger& secret_logger) {
-         BOTAN_UNUSED(cipher_state, ack_record, secret_logger);
-         throw TLS_Exception(AlertType::UnexpectedMessage, "Received ACKs despite not being DTLS");
+      bool feed_handshake_record(const Record_Content& record) {
+         return m_handshake_layer->copy_data(*m_policy, record.payload, record.epoch);
       }
+
+   protected:
+      std::shared_ptr<Record_Layer> m_record_layer;        // NOLINT(*non-private-member-variable*)
+      std::shared_ptr<Handshake_Layer> m_handshake_layer;  // NOLINT(*non-private-member-variable*)
+      std::shared_ptr<const Policy> m_policy;              // NOLINT(*non-private-member-variable*)
+      bool m_first_message_delivered = false;              // NOLINT(*non-private-member-variable*)
 };
 
 }  // namespace Botan::TLS

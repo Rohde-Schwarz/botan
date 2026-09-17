@@ -199,7 +199,6 @@ class Channel_Impl_13 : public Channel_Impl,
 
    private:
       void process_alert(const secure_vector<uint8_t>& record);
-      void process_acknowledgements(std::span<const uint8_t> record);
 
       /**
        * Terminate the connection (on sending or receiving an error alert) and
@@ -275,7 +274,6 @@ class Channel_Impl_13 : public Channel_Impl,
       bool m_key_update_requested;
 
       bool m_first_message_sent;
-      bool m_first_message_received;
 
       uint64_t m_last_key_update_ms = 0;
 };

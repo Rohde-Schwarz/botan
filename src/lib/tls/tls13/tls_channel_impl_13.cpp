@@ -41,10 +41,8 @@ class TLS_Channel_IO final : public Channel_IO {
                      std::shared_ptr<Callbacks> callbacks,
                      std::shared_ptr<Record_Layer> record_layer,
                      std::shared_ptr<Handshake_Layer> handshake_layer) :
-            m_policy(std::move(policy)),
-            m_callbacks(std::move(callbacks)),
-            m_record_layer(std::move(record_layer)),
-            m_handshake_layer(std::move(handshake_layer)) {}
+            Channel_IO(std::move(record_layer), std::move(handshake_layer), std::move(policy)),
+            m_callbacks(std::move(callbacks)) {}
 
       void send_record(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override {
          for(const auto& [record_to_write, _] : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
@@ -82,15 +80,52 @@ class TLS_Channel_IO final : public Channel_IO {
          cipher_state->update_write_keys(logger);
       }
 
-      void send_acknowledgements() override {
-         throw TLS_Exception(AlertType::InternalError, "DTLS ACK mechanism called from TLS");
+      ReceiveEvent next_receive_event(Cipher_State* cipher_state,
+                                      Transcript_Hash_State* transcript_hash,
+                                      bool handshake_complete) override {
+         while(true) {
+            if(auto event = next_pending_handshake_message(transcript_hash, handshake_complete)) {
+               // Handshake messages can be directly consumed by the channel
+               return std::move(event.value());
+            }
+
+            auto result = pull_record(cipher_state);
+            if(std::holds_alternative<BytesNeeded>(result)) {
+               return std::get<BytesNeeded>(result);
+            }
+
+            const auto& record = std::get<Record_Content>(result);
+            if(record.type == Record_Type::Handshake) {
+               // Handshake records need to be fed to the handshake layer before
+               // their messages can be consumed by the channel
+               feed_handshake_record(record);
+            } else if(record.type == Record_Type::ACK) {
+               throw Unexpected_Message("Received ACKs despite not being DTLS");
+            } else {
+               // CCS, AppData or alert can be directly consumed by the channel
+               return record;
+            }
+         }
+      }
+
+      void notify_protocol_version_committed() override {
+         // In TLS, we do not care about this.
+      }
+
+      void notify_protocol_version_committed_and_flight_superseded() override {
+         // In TLS, we do not care about this.
+      }
+
+      void notify_received_complete_flight() override {
+         // In TLS, we do not care about this.
+      }
+
+      void notify_received_final_flight() override {
+         // In TLS, we do not care about this.
       }
 
    private:
-      std::shared_ptr<const Policy> m_policy;
       std::shared_ptr<Callbacks> m_callbacks;
-      std::shared_ptr<Record_Layer> m_record_layer;
-      std::shared_ptr<Handshake_Layer> m_handshake_layer;
 };
 
 bool is_user_canceled_alert(const Botan::TLS::Alert& alert) {
@@ -106,6 +141,7 @@ bool is_error_alert(const Botan::TLS::Alert& alert) {
    // (RFC 8446 6.)
    return !is_close_notify_alert(alert) && !is_user_canceled_alert(alert);
 }
+
 }  // namespace
 
 Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
@@ -129,8 +165,7 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
       m_can_write(true),
       m_opportunistic_key_update(false),
       m_key_update_requested(false),
-      m_first_message_sent(false),
-      m_first_message_received(false) {
+      m_first_message_sent(false) {
    BOTAN_ASSERT_NONNULL(m_callbacks);
    BOTAN_ASSERT_NONNULL(m_session_manager);
    BOTAN_ASSERT_NONNULL(m_credentials_manager);
@@ -138,7 +173,9 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
    BOTAN_ASSERT_NONNULL(m_policy);
    if(is_datagram()) {
 #if defined(BOTAN_HAS_DTLS_13)
-      m_channel_io = std::make_unique<DTLS_Channel_IO>(*this, m_policy, m_callbacks, m_record_layer, m_handshake_layer);
+      const Secret_Logger& secret_logger = *this;
+      m_channel_io = std::make_unique<DTLS_Channel_IO>(
+         *this, secret_logger, m_policy, m_callbacks, m_record_layer, m_handshake_layer);
 #else
       throw TLS_Exception(AlertType::InternalError, "DTLS 1.3 is not supported in this build of Botan");
 #endif
@@ -165,9 +202,9 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
       }
 #endif
 
-      const bool has_cryptographic_association =
+      const auto has_cryptographic_association =
          m_cipher_state && m_cipher_state->current_read_epoch_number() > Epoch_Number::Unprotected;
-      m_record_layer->copy_data(data, has_cryptographic_association);
+      m_channel_io->ingest_records(data, has_cryptographic_association);
 
       while(true) {
          // RFC 8446 6.1
@@ -178,176 +215,80 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
             return 0;
          }
 
-         auto result = m_record_layer->next_record(m_cipher_state.get());
+         auto event =
+            m_channel_io->next_receive_event(m_cipher_state.get(), m_transcript_hash.get(), is_handshake_complete());
 
-         if(std::holds_alternative<BytesNeeded>(result)) {
-            return std::get<BytesNeeded>(result);
+         if(std::holds_alternative<BytesNeeded>(event)) {
+            return std::get<BytesNeeded>(event);
          }
 
-         const auto& record = std::get<Record_Content>(result);
-
-         // RFC 8446 5.1
-         //   Handshake messages MUST NOT be interleaved with other record types.
-         if(record.type != Record_Type::Handshake && m_handshake_layer->has_pending_data()) {
-            throw Unexpected_Message("Expected remainder of a handshake message");
-         }
-
-         if(record.type == Record_Type::Handshake) {
-            if(m_handshake_layer->copy_data(policy(), record.payload, record.epoch)) {
-               // RFC 9147 7.
-               //    During the handshake, ACKs only cover the current outstanding flight
-               //    (this is possible because DTLS is generally a lock-step protocol).
-               //    In particular, receiving a message from a handshake flight implicitly
-               //    acknowledges all messages from the previous flight(s).
-               //
-               // Handshake_Layer::copy_data() returns true if a handshake message fragment
-               // with a previously unprocessed sequence number was received. This indicates
-               // progress and therefore ACKs our previously sent flight implicitly. Note
-               // that this doesn't hold for post-handshake messages; for instance some
-               // NewSessionTicket message _does not_ acknowledge the Client's Finished!
-               //
-               // Note: This assumes that we only send our flight once we fully received
-               //       a flight from the peer. This is a hard requirement in TLS 1.3.
-               const bool is_post_handshake_traffic =
-                  record.epoch.has_value() && record.epoch.value() >= Epoch_Number::ApplicationTraffic_0;
-               if(!is_post_handshake_traffic) {
-                  m_channel_io->maybe_clear_resend_buffer();
-               }
-            }
-
-            if(is_datagram()) {
-               // RFC 9147 7.1
-               //    [...] it is RECOMMENDED that [an implementation] generats ACKs
-               //    under two circumstances:
-               //
-               //    - [...]
-               //    - When they have received part of a flight and do not
-               //      immediately receive the rest of the flight [...]. One
-               //      approach is to set a timer [...] and then send an ACK when
-               //      that timer expires.
-               //
-               // This opportunistically sets such a timer which gets cancelled
-               // when we successfully generate our next handshake flight in
-               // response to the incoming data. If we fail to generate such a
-               // flight, the timer will eventually emit ACKs to the peer.
-
-               // TODO: this dynamic cast is temporary, we will move large parts
-               // of from_peer to the channel_io.
-               auto* dtls_channel_io = dynamic_cast<DTLS_Channel_IO*>(m_channel_io.get());
-               dtls_channel_io->maybe_arm_dtls_acknowledgement_timer();
-            }
-
-            while(true) {
-               if(!is_handshake_complete()) {
-                  BOTAN_ASSERT_NONNULL(m_transcript_hash);
-                  auto handshake_msg = m_handshake_layer->next_message(policy(), *m_transcript_hash);
-                  if(!handshake_msg.has_value()) {
-                     break;
-                  }
-
-                  // RFC 8446 5.1
-                  //    Handshake messages MUST NOT span key changes.  Implementations
-                  //    MUST verify that all messages immediately preceding a key change
-                  //    align with a record boundary; if not, then they MUST terminate the
-                  //    connection with an "unexpected_message" alert.  Because the
-                  //    ClientHello, EndOfEarlyData, ServerHello, Finished, and KeyUpdate
-                  //    messages can immediately precede a key change, implementations
-                  //    MUST send these messages in alignment with a record boundary.
-                  //
-                  // Note: Hello_Retry_Request was added to the list below although it cannot immediately precede a key change.
-                  //       However, there cannot be any further sensible messages in the record after HRR.
-                  //
-                  // Note: Server_Hello_12 was deliberately not included in the check below because in TLS 1.2 Server Hello and
-                  //       other handshake messages can be legally coalesced in a single record.
-                  //
-                  // TODO: This should be handled differently for DTLS
-                  // Kimi: need per-record bookkeeping: copy_data should record
-                  // whether the fragment completing a message was followed by
-                  // more fragments in the same record, and attach that flag to
-                  // the ReassembledMessage, rather than inferring it from
-                  // global map state.
-                  if(holds_any_of<Client_Hello_12_Shim,
-                                  Client_Hello_13 /*, EndOfEarlyData,*/,
-                                  Server_Hello_13,
-                                  Hello_Verify_Request,  // DTLS 1.3 -> 1.2 downgrade
-                                  Hello_Retry_Request,
-                                  Finished_13>(handshake_msg.value()) &&
-                     m_handshake_layer->has_pending_data()) {
-                     throw Unexpected_Message("Unexpected additional handshake message data found in record");
-                  }
-
-                  process_handshake_msg(std::move(handshake_msg.value()));
+         if(auto* handshake_msg = std::get_if<Handshake_Message_13>(&event)) {
+            process_handshake_msg(std::move(*handshake_msg));
 
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
-                  if(is_downgrading()) {
-                     // Downgrade to TLS 1.2 was detected. Stop everything we do and await being replaced by a 1.2 implementation.
-                     return 0;
-                  } else if(m_downgrade_info != nullptr) {
-                     // We received a TLS 1.3 error alert that could have been a TLS 1.2 warning alert.
-                     // Now that we know that we are talking to a TLS 1.3 server, shut down.
-                     if(m_downgrade_info->received_tls_13_error_alert) {
-                        shutdown();
-                     }
+            if(is_downgrading()) {
+               // Downgrade to TLS 1.2 was detected. Stop everything we do and await being replaced by a 1.2 implementation.
+               return 0;
+            } else if(m_downgrade_info != nullptr) {
+               // We received a TLS 1.3 error alert that could have been a TLS 1.2 warning alert.
+               // Now that we know that we are talking to a TLS 1.3 server, shut down.
+               if(m_downgrade_info->received_tls_13_error_alert) {
+                  shutdown();
+               }
 
-                     // Downgrade can only be indicated in the first received peer message. This was not the case.
-                     m_downgrade_info.reset();
-                  }
+               // Downgrade can only be indicated in the first received peer message. This was not the case.
+               m_downgrade_info.reset();
+            }
 #endif
 
-                  // After the initial handshake message is received, the record
-                  // layer must be more restrictive.
-                  // See RFC 8446 5.1 regarding "legacy_record_version"
-                  if(!m_first_message_received) {
-                     m_record_layer->disable_receiving_compat_mode();
-                     m_first_message_received = true;
-                  }
-               } else /* is_handshake_complete() */ {
-                  auto post_handshake_msg = m_handshake_layer->next_post_handshake_message(policy());
-                  if(!post_handshake_msg.has_value()) {
-                     break;
-                  }
-
-                  process_post_handshake_msg(std::move(post_handshake_msg.value()));
-               }
-            }
-         } else if(record.type == Record_Type::ChangeCipherSpec) {
-            process_dummy_change_cipher_spec();
-         } else if(record.type == Record_Type::ApplicationData) {
-            BOTAN_ASSERT_NONNULL(m_cipher_state);
-            if(!m_cipher_state->can_decrypt_application_traffic()) {
-               throw Unexpected_Message("Application data received before handshake completion");
-            }
-            /*
-            The record sequence number is set in Record_Layer::next_record only when
-            the record contents are decrypted under the current set of traffic keys
-            for TLS or under any retained epoch for DTLS.
-            */
-            if(!record.sequence_number.has_value()) {
-               throw Unexpected_Message("Application data must have a sequence number");
-            }
-            callbacks().tls_record_received(record.sequence_number.value(), record.payload);
-         } else if(record.type == Record_Type::Alert) {
-            process_alert(record.payload);
-         } else if(record.type == Record_Type::ACK) {
-            process_acknowledgements(record.payload);
+         } else if(auto* post_handshake_msg = std::get_if<Post_Handshake_Message_13>(&event)) {
+            process_post_handshake_msg(std::move(*post_handshake_msg));
          } else {
-            throw Unexpected_Message("Unexpected record type " + std::to_string(static_cast<size_t>(record.type)) +
-                                     " from counterparty");
+            const auto& record = std::get<Record_Content>(event);
+
+            if(record.type == Record_Type::ChangeCipherSpec) {
+               process_dummy_change_cipher_spec();
+            } else if(record.type == Record_Type::ApplicationData) {
+               BOTAN_ASSERT_NONNULL(m_cipher_state);
+               if(!m_cipher_state->can_decrypt_application_traffic()) {
+                  throw Unexpected_Message("Application data received before handshake completion");
+               }
+               /*
+                     The record sequence number is set in Record_Layer::next_record only when
+                     the record contents are decrypted under the current set of traffic keys
+                     for TLS or under any retained epoch for DTLS.
+                     */
+               if(!record.sequence_number.has_value()) {
+                  throw Unexpected_Message("Application data must have a sequence number");
+               }
+               callbacks().tls_record_received(record.sequence_number.value(), record.payload);
+            } else if(record.type == Record_Type::Alert) {
+               process_alert(record.payload);
+            } else {
+               throw Unexpected_Message("Unexpected record type " + std::to_string(static_cast<size_t>(record.type)) +
+                                        " from counterparty");
+            }
          }
       }
    } catch(TLS_Exception& e) {
       send_fatal_alert(e.type());
       throw;
-   } catch(Invalid_Authentication_Tag&) {
+   }
+
+   catch(Invalid_Authentication_Tag&) {
       // RFC 8446 5.2
       //    If the decryption fails, the receiver MUST terminate the connection
       //    with a "bad_record_mac" alert.
       send_fatal_alert(Alert::BadRecordMac);
       throw;
-   } catch(Decoding_Error&) {
+   }
+
+   catch(Decoding_Error&) {
       send_fatal_alert(Alert::DecodeError);
       throw;
-   } catch(...) {
+   }
+
+   catch(...) {
       send_fatal_alert(Alert::InternalError);
       throw;
    }
@@ -543,8 +484,7 @@ SymmetricKey Channel_Impl_13::key_material_export(std::string_view label,
 }
 
 void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
-   BOTAN_STATE_CHECK(!is_downgrading() && is_handshake_complete() && is_active() &&
-                     !m_channel_io->has_pending_key_update());
+   BOTAN_STATE_CHECK(!is_downgrading() && is_handshake_complete() && is_active());
    BOTAN_ASSERT_NONNULL(m_cipher_state);
 
    // RFC 9147 8. (Errata-ID 8050)
@@ -665,10 +605,6 @@ void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
    if(is_close_notify_alert(alert) && callbacks().tls_peer_closed_connection()) {
       close();
    }
-}
-
-void Channel_Impl_13::process_acknowledgements(std::span<const uint8_t> record) {
-   m_channel_io->process_acknowledgements(m_cipher_state.get(), record, *this);
 }
 
 void Channel_Impl_13::shutdown() {

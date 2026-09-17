@@ -1,5 +1,5 @@
 /*
-* DTLS Channel Mix-in - adding DTLS-specific functionality on demand
+* DTLS Channel IO - handle DTLS IO specifics
 * (C) 2026 Jack Lloyd
 *     2026 Amos Treiber, René Meusel - Rohde & Schwarz Networks and Cybersecurity GmbH
 *
@@ -29,6 +29,7 @@ class DTLS_Channel_IO : public Channel_IO {
 
    public:
       DTLS_Channel_IO(Channel_Impl_13& channel,
+                      const Secret_Logger& secret_logger,
                       std::shared_ptr<const Policy> policy,
                       std::shared_ptr<Callbacks> callbacks,
                       std::shared_ptr<Record_Layer> record_layer,
@@ -41,21 +42,32 @@ class DTLS_Channel_IO : public Channel_IO {
 
       void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) override;
 
-      void send_acknowledgements() override;
+      void send_acknowledgements();
+
+      ReceiveEvent next_receive_event(Cipher_State* cipher_state,
+                                      Transcript_Hash_State* transcript_hash,
+                                      bool handshake_complete) override;
 
       void notify_protocol_version_committed() override { m_dtls_version_committed = true; }
 
-      void notify_sent_handshake_flight() override { m_retransmission_timer.flight_sent(); }
+      void notify_protocol_version_committed_and_flight_superseded() override;
 
-      bool protocol_version_committed() const override { return m_dtls_version_committed; }
+      void notify_received_complete_flight() override;
 
-      void register_pending_key_update(const RecordNumber& record_number) override {
+      void notify_received_final_flight() override;
+
+   private:
+      void notify_sent_handshake_flight() { m_retransmission_timer.flight_sent(); }
+
+      bool protocol_version_committed() const { return m_dtls_version_committed; }
+
+      void register_pending_key_update(const RecordNumber& record_number) {
          m_pending_key_update_record = record_number;
       }
 
-      bool has_pending_key_update() const override { return m_pending_key_update_record.has_value(); }
+      bool has_pending_key_update() const { return m_pending_key_update_record.has_value(); }
 
-      void maybe_clear_resend_buffer() override {
+      void maybe_clear_resend_buffer() {
          // If we're not sure that the peer is using DTLS 1.3, we must not clear
          // the resend buffer as soon as we received any fragment of the peer's
          // flight. If some fragment got lost, we can't ACK and therefore are
@@ -68,11 +80,11 @@ class DTLS_Channel_IO : public Channel_IO {
          }
       }
 
-      void clear_outstanding_acknowledgements() override { m_record_layer->clear_outstanding_acknowledgements(); }
+      void clear_outstanding_acknowledgements() { m_record_layer->clear_outstanding_acknowledgements(); }
 
-      bool timeout_check(Cipher_State* cipher_state) override;
+      bool timeout_check(Cipher_State* cipher_state);
 
-      std::optional<std::chrono::milliseconds> next_retransmission_timeout() const override {
+      std::optional<std::chrono::milliseconds> next_retransmission_timeout() const {
          if(!m_retransmission_timer.started()) {
             return std::nullopt;
          }
@@ -82,13 +94,13 @@ class DTLS_Channel_IO : public Channel_IO {
 
       void maybe_arm_dtls_acknowledgement_timer();
 
-      std::vector<uint8_t> current_ack_record(size_t max_plaintext_length) const override {
+      std::vector<uint8_t> current_ack_record(size_t max_plaintext_length) const {
          return m_record_layer->acknowledgements().serialize(max_plaintext_length);
       }
 
       void process_acknowledgements(Cipher_State* cipher_state,
                                     std::span<const uint8_t> ack_record,
-                                    const Secret_Logger& secret_logger) override {
+                                    const Secret_Logger& secret_logger) {
          // If we receive ACKs before we know for sure that the peer is using
          // DTLS 1.3, we ignore them. The peer might still pick DTLS 1.2, and as
          // a result would depend on a full flight retransmission.
@@ -137,13 +149,15 @@ class DTLS_Channel_IO : public Channel_IO {
       void maybe_cancel_dtls_acknowledgement_timer();
 
    private:
-      std::shared_ptr<const Policy> m_policy;
       std::shared_ptr<Callbacks> m_callbacks;
       std::shared_ptr<DTLS_Record_Layer> m_record_layer;
       std::shared_ptr<DTLS_Handshake_Layer> m_handshake_layer;
 
-      // This channel owns us and will therefore outlive us
+      // This channel owns us and will therefore outlive us. Its
+      // sole use is getting the cipher state at fire time in
+      // a deferred operation.
       Channel_Impl_13& m_channel;
+      const Secret_Logger& m_secret_logger;
 
       std::shared_ptr<TimerToken> m_ack_token;
 
