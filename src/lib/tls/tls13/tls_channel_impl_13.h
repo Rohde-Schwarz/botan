@@ -245,10 +245,6 @@ class Channel_Impl_13 : public Channel_Impl,
       void set_selected_certificate_type(Certificate_Type cert_type);
 
    protected:
-      // TODO: These should be able to only live in Channel_IO
-      std::shared_ptr<Record_Layer> m_record_layer;        // NOLINT(*-non-private-member-*)
-      std::shared_ptr<Handshake_Layer> m_handshake_layer;  // NOLINT(*-non-private-member-*)
-
       /* IO Handling */
       std::unique_ptr<Channel_IO> m_channel_io;  // NOLINT(*-non-private-member-*)
 
@@ -272,8 +268,6 @@ class Channel_Impl_13 : public Channel_Impl,
        * the peer has not yet replied with a KeyUpdate of its own.
        */
       bool m_key_update_requested;
-
-      bool m_first_message_sent;
 
       uint64_t m_last_key_update_ms = 0;
 };

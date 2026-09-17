@@ -46,7 +46,7 @@ class TLS_Record_Layer final : public Record_Layer {
    public:
       explicit TLS_Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy);
 
-      bool copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) override;
+      bool copy_data(std::span<const uint8_t> data_from_peer) override;
       ReadResult<Record_Content> next_record(Cipher_State* cipher_state = nullptr) override;
       std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
                                                              std::span<const uint8_t> payload,
@@ -56,8 +56,12 @@ class TLS_Record_Layer final : public Record_Layer {
 
       uint16_t record_payload_size_limit(const Policy& policy, Cipher_State* cipher_state = nullptr) const override;
 
+      bool sending_compat_mode() const { return m_sending_compat_mode; }
+
    private:
       std::deque<Record_TLS> m_incoming_records;
+
+      mutable bool m_sending_compat_mode = false;  // TODO: prepare_records becomes non-const
 };
 
 TLS_Record_Layer::TLS_Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy) :
@@ -82,13 +86,10 @@ TLS_Record_Layer::TLS_Record_Layer(Connection_Side side, std::shared_ptr<const P
                    // Once TLS 1.3 is negotiateed, the implementations will disable these
                    // compatibility modes accordingly or a protocol downgrade will transfer
                    // the marshalling responsibility to our TLS 1.2 implementation.
+                   /* receiving_compat_mode = */ true),
+      m_sending_compat_mode(side == Connection_Side::Client) {}
 
-                   /* sending_compat_mode = */ side == Connection_Side::Client,
-                   /* receiving_compat_mode = */ true) {}
-
-bool TLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) {
-   BOTAN_UNUSED(has_cryptographic_association);
-
+bool TLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer) {
    while(!data_from_peer.empty()) {
       auto& record = [&]() -> Record_TLS& {
          if(m_incoming_records.empty() || m_incoming_records.back().complete()) {
@@ -229,6 +230,10 @@ std::vector<MarshalledRecordAndNumber> TLS_Record_Layer::prepare_records(const R
    while(!bs.empty());
 
    BOTAN_ASSERT_NOMSG(output.size() == records);
+
+   // Set send compatibility mode in case this was the first record we sent
+   m_sending_compat_mode = false;
+
    return output;
 }
 
@@ -336,15 +341,11 @@ std::unique_ptr<Record_Layer> Record_Layer::create(Connection_Side side,
    }
 }
 
-Record_Layer::Record_Layer(Connection_Side side,
-                           std::shared_ptr<const Policy> policy,
-                           bool sending_compat_mode,
-                           bool receiving_compat_mode) :
+Record_Layer::Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy, bool receiving_compat_mode) :
       m_side(side),
       m_policy(std::move(policy)),
       m_outgoing_record_size_limit(MAX_PLAINTEXT_SIZE + 1 /* content type byte */),
       m_incoming_record_size_limit(MAX_PLAINTEXT_SIZE + 1 /* content type byte */),
-      m_sending_compat_mode(sending_compat_mode),
       m_receiving_compat_mode(receiving_compat_mode) {}
 
 void Record_Layer::set_record_size_limits(const uint16_t outgoing_limit, const uint16_t incoming_limit) {

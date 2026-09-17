@@ -22,6 +22,7 @@ namespace Botan::TLS {
 
 class Secret_Logger;
 class Cipher_State;
+class Channel_Impl_13;
 struct RecordNumber;
 
 class Channel_IO {
@@ -31,13 +32,22 @@ class Channel_IO {
                                         Post_Handshake_Message_13,
                                         Record_Content>;
 
+      static std::unique_ptr<Channel_IO> create(TLS_Flavor flavor,
+                                                Connection_Side side,
+                                                Channel_Impl_13& channel,
+                                                const Secret_Logger& secret_logger,
+                                                std::shared_ptr<const Policy> policy,
+                                                std::shared_ptr<Callbacks> callbacks);
+
    protected:
-      Channel_IO(std::shared_ptr<Record_Layer> record_layer,
-                 std::shared_ptr<Handshake_Layer> handshake_layer,
-                 std::shared_ptr<const Policy> policy) :
-            m_record_layer(std::move(record_layer)),
-            m_handshake_layer(std::move(handshake_layer)),
-            m_policy(std::move(policy)) {}
+      Channel_IO(TLS_Flavor flavor,
+                 Connection_Side side,
+                 std::shared_ptr<const Policy> policy,
+                 std::shared_ptr<Callbacks> callbacks) :
+            m_record_layer(Record_Layer::create(side, flavor, policy, callbacks)),
+            m_handshake_layer(Handshake_Layer::create(side, flavor)),
+            m_policy(std::move(policy)),
+            m_callbacks(std::move(callbacks)) {}
 
    public:
       Channel_IO(const Channel_IO&) = delete;
@@ -56,11 +66,7 @@ class Channel_IO {
 
       virtual void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) = 0;
 
-      void ingest_records(std::span<const uint8_t> data, bool has_cryptographic_association) {
-         // TODO: Get rid of has_cryptographic_association, this is only for DTLS
-         // and can probably now be handled in DTLS_Channel_IO::ingest
-         m_record_layer->copy_data(data, has_cryptographic_association);
-      }
+      virtual void ingest_records(std::span<const uint8_t> data) = 0;
 
       virtual ReceiveEvent next_receive_event(Cipher_State* cipher_state,
                                               Transcript_Hash_State* transcript_hash,
@@ -111,6 +117,21 @@ class Channel_IO {
        * explicitly with an ACK message.
        */
       virtual void notify_received_final_flight() = 0;
+
+      /**
+       * Notifies that the channel is closed for reading (close_notify received).
+       * The IO can discard any read-side state; no further data will be processed.
+       */
+      void notify_closed_for_reading() { m_record_layer->clear_read_buffer(); }
+
+      void set_record_size_limits(uint16_t out, uint16_t in) { m_record_layer->set_record_size_limits(out, in); }
+
+      void set_selected_certificate_type(Certificate_Type t) { m_handshake_layer->set_selected_certificate_type(t); }
+
+      std::optional<Epoch0_SequenceNumbers> epoch0_sequence_numbers() const {
+         // TODO: Remove optional, make this DTLS-only
+         return m_record_layer->epoch0_sequence_numbers();
+      }
 
    protected:
       std::optional<ReceiveEvent> next_pending_handshake_message(Transcript_Hash_State* transcript_hash,
@@ -170,6 +191,17 @@ class Channel_IO {
          if(!post_handshake_msg.has_value()) {
             return std::nullopt;
          }
+
+         // make sure Key_Update appears only at the end of a record; see RFC
+         // 8446 5.1 description above
+         //
+         // TODO: This doesn't work for DTLS, because the data may be delivered
+         //       out-of-order. This check assumes reliable stream semantics of
+         //       the underlying transport.
+         if(std::holds_alternative<Key_Update>(post_handshake_msg.value()) && m_handshake_layer->has_pending_data()) {
+            throw Unexpected_Message("Unexpected additional post-handshake message data found in record");
+         }
+
          return ReceiveEvent(std::move(post_handshake_msg.value()));
       }
 
@@ -196,9 +228,10 @@ class Channel_IO {
       }
 
    protected:
-      std::shared_ptr<Record_Layer> m_record_layer;        // NOLINT(*non-private-member-variable*)
-      std::shared_ptr<Handshake_Layer> m_handshake_layer;  // NOLINT(*non-private-member-variable*)
+      std::unique_ptr<Record_Layer> m_record_layer;        // NOLINT(*non-private-member-variable*)
+      std::unique_ptr<Handshake_Layer> m_handshake_layer;  // NOLINT(*non-private-member-variable*)
       std::shared_ptr<const Policy> m_policy;              // NOLINT(*non-private-member-variable*)
+      std::shared_ptr<Callbacks> m_callbacks;              // NOLINT(*non-private-member-variable*)
       bool m_first_message_delivered = false;              // NOLINT(*non-private-member-variable*)
 };
 

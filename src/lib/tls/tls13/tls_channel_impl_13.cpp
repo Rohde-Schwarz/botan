@@ -37,12 +37,8 @@ MarshalledHandshakeMessage marshal_message_bytes(Handshake_Type type, std::span<
 
 class TLS_Channel_IO final : public Channel_IO {
    public:
-      TLS_Channel_IO(std::shared_ptr<const Policy> policy,
-                     std::shared_ptr<Callbacks> callbacks,
-                     std::shared_ptr<Record_Layer> record_layer,
-                     std::shared_ptr<Handshake_Layer> handshake_layer) :
-            Channel_IO(std::move(record_layer), std::move(handshake_layer), std::move(policy)),
-            m_callbacks(std::move(callbacks)) {}
+      TLS_Channel_IO(Connection_Side side, std::shared_ptr<const Policy> policy, std::shared_ptr<Callbacks> callbacks) :
+            Channel_IO(TLS_Flavor::TLS, side, std::move(policy), std::move(callbacks)) {}
 
       void send_record(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override {
          for(const auto& [record_to_write, _] : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
@@ -79,6 +75,8 @@ class TLS_Channel_IO final : public Channel_IO {
          // reliable transport and know it went through).
          cipher_state->update_write_keys(logger);
       }
+
+      void ingest_records(std::span<const uint8_t> data) override { m_record_layer->copy_data(data); }
 
       ReceiveEvent next_receive_event(Cipher_State* cipher_state,
                                       Transcript_Hash_State* transcript_hash,
@@ -123,9 +121,6 @@ class TLS_Channel_IO final : public Channel_IO {
       void notify_received_final_flight() override {
          // In TLS, we do not care about this.
       }
-
-   private:
-      std::shared_ptr<Callbacks> m_callbacks;
 };
 
 bool is_user_canceled_alert(const Botan::TLS::Alert& alert) {
@@ -154,8 +149,6 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
       m_side(connection_side),
       m_transcript_hash(std::make_unique<Transcript_Hash_State>(flavor)),
       m_flavor(flavor),
-      m_record_layer(Record_Layer::create(m_side, flavor, policy, callbacks)),
-      m_handshake_layer(Handshake_Layer::create(m_side, flavor)),
       m_callbacks(callbacks),
       m_session_manager(session_manager),
       m_credentials_manager(credentials_manager),
@@ -164,24 +157,15 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
       m_can_read(true),
       m_can_write(true),
       m_opportunistic_key_update(false),
-      m_key_update_requested(false),
-      m_first_message_sent(false) {
+      m_key_update_requested(false) {
    BOTAN_ASSERT_NONNULL(m_callbacks);
    BOTAN_ASSERT_NONNULL(m_session_manager);
    BOTAN_ASSERT_NONNULL(m_credentials_manager);
    BOTAN_ASSERT_NONNULL(m_rng);
    BOTAN_ASSERT_NONNULL(m_policy);
-   if(is_datagram()) {
-#if defined(BOTAN_HAS_DTLS_13)
-      const Secret_Logger& secret_logger = *this;
-      m_channel_io = std::make_unique<DTLS_Channel_IO>(
-         *this, secret_logger, m_policy, m_callbacks, m_record_layer, m_handshake_layer);
-#else
-      throw TLS_Exception(AlertType::InternalError, "DTLS 1.3 is not supported in this build of Botan");
-#endif
-   } else {
-      m_channel_io = std::make_unique<TLS_Channel_IO>(m_policy, m_callbacks, m_record_layer, m_handshake_layer);
-   }
+
+   const Secret_Logger& secret_logger = *this;
+   m_channel_io = Channel_IO::create(flavor, m_side, *this, secret_logger, m_policy, m_callbacks);
 }
 
 Channel_Impl_13::~Channel_Impl_13() = default;
@@ -202,9 +186,7 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
       }
 #endif
 
-      const auto has_cryptographic_association =
-         m_cipher_state && m_cipher_state->current_read_epoch_number() > Epoch_Number::Unprotected;
-      m_channel_io->ingest_records(data, has_cryptographic_association);
+      m_channel_io->ingest_records(data);
 
       while(true) {
          // RFC 8446 6.1
@@ -295,15 +277,6 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
 }
 
 void Channel_Impl_13::handle(const Key_Update& key_update) {
-   // make sure Key_Update appears only at the end of a record; see description above
-   //
-   // TODO: This doesn't work for DTLS, because the data may be delivered
-   //       out-of-order. This check assumes reliable stream semantics of
-   //       the underlying transport.
-   if(m_handshake_layer->has_pending_data()) {
-      throw Unexpected_Message("Unexpected additional post-handshake message data found in record");
-   }
-
    // A non-requesting KeyUpdate received while our own request is outstanding
    // is the reciprocation we solicited. It is exempt from rate limiting (and
    // invisible to it), so that a peer whose own key update crossed ours in
@@ -550,15 +523,6 @@ void Channel_Impl_13::send_record(const Flight& flight) {
    BOTAN_STATE_CHECK(m_can_write);
 
    m_channel_io->send_record(flight, m_cipher_state.get());
-
-   // After the initial handshake message is sent, the record layer must
-   // adhere to a more strict record specification. Note that for the
-   // server case this is a NOOP.
-   // See (RFC 8446 5.1. regarding "legacy_record_version")
-   if(!m_first_message_sent) {
-      m_record_layer->disable_sending_compat_mode();
-      m_first_message_sent = true;
-   }
 }
 
 void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
@@ -569,7 +533,7 @@ void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
       if(m_cipher_state) {
          m_cipher_state->clear_read_keys();
       }
-      m_record_layer->clear_read_buffer();
+      m_channel_io->notify_closed_for_reading();
    }
 
    // user canceled alerts are ignored
@@ -644,11 +608,29 @@ void Channel_Impl_13::expect_downgrade(const Server_Information& server_info,
 #endif
 
 void Channel_Impl_13::set_record_size_limits(const uint16_t outgoing_limit, const uint16_t incoming_limit) {
-   m_record_layer->set_record_size_limits(outgoing_limit, incoming_limit);
+   m_channel_io->set_record_size_limits(outgoing_limit, incoming_limit);
 }
 
 void Channel_Impl_13::set_selected_certificate_type(const Certificate_Type cert_type) {
-   m_handshake_layer->set_selected_certificate_type(cert_type);
+   m_channel_io->set_selected_certificate_type(cert_type);
+}
+
+std::unique_ptr<Channel_IO> Channel_IO::create(TLS_Flavor flavor,
+                                               Connection_Side side,
+                                               Channel_Impl_13& channel,
+                                               const Secret_Logger& secret_logger,
+                                               std::shared_ptr<const Policy> policy,
+                                               std::shared_ptr<Callbacks> callbacks) {
+   if(flavor == TLS_Flavor::DTLS) {
+#if defined(BOTAN_HAS_DTLS_13)
+      return std::make_unique<DTLS_Channel_IO>(side, channel, secret_logger, std::move(policy), std::move(callbacks));
+#else
+      throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
+#endif
+   } else {
+      BOTAN_UNUSED(channel, secret_logger);
+      return std::make_unique<TLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
+   }
 }
 
 }  // namespace Botan::TLS

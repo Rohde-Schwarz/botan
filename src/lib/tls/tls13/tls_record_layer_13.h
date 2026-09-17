@@ -37,10 +37,7 @@ class Policy;
  */
 class BOTAN_TEST_API Record_Layer {
    protected:
-      Record_Layer(Connection_Side side,
-                   std::shared_ptr<const Policy> policy,
-                   bool sending_compat_mode,
-                   bool receiving_compat_mode);
+      Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy, bool receiving_compat_mode);
 
    public:
       static std::unique_ptr<Record_Layer> create(Connection_Side side,
@@ -62,14 +59,12 @@ class BOTAN_TEST_API Record_Layer {
        * processing during the invocation of `next_record()`.
        *
        * @param data_from_peer  The data to be parsed.
-       * @param has_cryptographic_association  Indicates whether the data was received
-       *                                       while the connection has key material.
        *
        * @returns true if the data was successfully ingested, false if something
        *          went wrong. Typically DTLS record layers will return false if
        *          the passed-in datagram was somehow invalid and got discarded.
        */
-      virtual bool copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) = 0;
+      virtual bool copy_data(std::span<const uint8_t> data_from_peer) = 0;
 
       /**
        * Parses one record off the internal buffer that is being filled using `ingest`.
@@ -131,11 +126,7 @@ class BOTAN_TEST_API Record_Layer {
        */
       virtual std::optional<Epoch0_SequenceNumbers> epoch0_sequence_numbers() const noexcept { return std::nullopt; }
 
-      void disable_sending_compat_mode() noexcept { m_sending_compat_mode = false; }
-
       void disable_receiving_compat_mode() noexcept { m_receiving_compat_mode = false; }
-
-      bool sending_compat_mode() const noexcept { return m_sending_compat_mode; }
 
       bool receiving_compat_mode() const noexcept { return m_receiving_compat_mode; }
 
@@ -158,8 +149,7 @@ class BOTAN_TEST_API Record_Layer {
       // Those status flags are required for version validation where the initial
       // records for sending and receiving is handled differently for backward
       // compatibility reasons. (RFC 8446 5.1 regarding "legacy_record_version")
-      bool m_sending_compat_mode;
-      bool m_receiving_compat_mode;
+      bool m_receiving_compat_mode;  // TODO: Possibly movable to TLS-only
 };
 
 }  // namespace Botan::TLS

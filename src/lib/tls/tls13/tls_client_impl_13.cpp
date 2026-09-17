@@ -238,7 +238,7 @@ void Client_Impl_13::handle(const Server_Hello_12_Shim& server_hello_msg) {
    }
 
    preserve_client_hello(m_handshake->state.take_client_hello());
-   preserve_sequence_numbers(m_record_layer->epoch0_sequence_numbers());
+   preserve_sequence_numbers(m_channel_io->epoch0_sequence_numbers());
    request_downgrade();
 
    // After this, no further messages are expected here because this instance will be replaced
@@ -264,7 +264,7 @@ void Client_Impl_13::handle(const Hello_Verify_Request& /*hello_verify_request*/
 
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
    preserve_client_hello(m_handshake->state.take_client_hello());
-   preserve_sequence_numbers(m_record_layer->epoch0_sequence_numbers());
+   preserve_sequence_numbers(m_channel_io->epoch0_sequence_numbers());
    request_downgrade();
 
    // After this, no further messages are expected here because this instance will be replaced

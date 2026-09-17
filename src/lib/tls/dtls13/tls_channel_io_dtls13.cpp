@@ -30,16 +30,12 @@ class DTLS_Channel_IO::TimerToken {
       DTLS_Channel_IO& m_channel_io;
 };
 
-DTLS_Channel_IO::DTLS_Channel_IO(Channel_Impl_13& channel,
+DTLS_Channel_IO::DTLS_Channel_IO(Connection_Side side,
+                                 Channel_Impl_13& channel,
                                  const Secret_Logger& secret_logger,
                                  std::shared_ptr<const Policy> policy,
-                                 std::shared_ptr<Callbacks> callbacks,
-                                 std::shared_ptr<Record_Layer> record_layer,
-                                 std::shared_ptr<Handshake_Layer> handshake_layer) :
-      Channel_IO(record_layer, handshake_layer, std::move(policy)),
-      m_callbacks(std::move(callbacks)),
-      m_record_layer(std::dynamic_pointer_cast<DTLS_Record_Layer>(std::move(record_layer))),
-      m_handshake_layer(std::dynamic_pointer_cast<DTLS_Handshake_Layer>(std::move(handshake_layer))),
+                                 std::shared_ptr<Callbacks> callbacks) :
+      Channel_IO(TLS_Flavor::DTLS, side, std::move(policy), std::move(callbacks)),
       m_channel(channel),
       m_secret_logger(secret_logger),
       m_retransmission_timer(*m_policy, m_callbacks) {
@@ -62,12 +58,12 @@ void DTLS_Channel_IO::send_record(const Flight& flight, Cipher_State* cipher_sta
    auto prepared = std::vector<MarshalledHandshakeMessageFragment>{};
 
    for(const auto& msg_info : flight.messages()) {
-      auto frags = m_handshake_layer->fragment_message(msg_info.type, msg_info.serialized, max_payload_size);
+      auto frags = handshake_layer().fragment_message(msg_info.type, msg_info.serialized, max_payload_size);
 
       prepared.insert(prepared.end(), std::make_move_iterator(frags.begin()), std::make_move_iterator(frags.end()));
    }
 
-   for(const auto& [record_to_write, _] : m_record_layer->prepare_records(prepared, cipher_state)) {
+   for(const auto& [record_to_write, _] : record_layer().prepare_records(prepared, cipher_state)) {
       m_callbacks->tls_emit_data(record_to_write);
    }
 
@@ -79,9 +75,9 @@ void DTLS_Channel_IO::send_record(const Flight& flight, Cipher_State* cipher_sta
 void DTLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) {
    BOTAN_UNUSED(logger);  // Actual key update is deferred to ACK receiving
    BOTAN_STATE_CHECK(!has_pending_key_update());
-   auto msg_bytes = m_handshake_layer->fragment_message(Handshake_Type::KeyUpdate, msg.serialize(), 13);
+   auto msg_bytes = handshake_layer().fragment_message(Handshake_Type::KeyUpdate, msg.serialize(), 13);
 
-   const auto prepared_records = m_record_layer->prepare_records(msg_bytes, cipher_state);
+   const auto prepared_records = record_layer().prepare_records(msg_bytes, cipher_state);
 
    BOTAN_ASSERT_NOMSG(prepared_records.size() == 1);  // KeyUpdate is small enough to fit into a single record
    m_callbacks->tls_emit_data(prepared_records.front().first);
@@ -107,8 +103,16 @@ void DTLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state
    arm_dtls_retransmission_timer();
 }
 
+void DTLS_Channel_IO::ingest_records(std::span<const uint8_t> data) {
+   const auto has_cryptographic_association =
+      (m_channel.cipher_state() != nullptr) &&
+      m_channel.cipher_state()->current_read_epoch_number() > Epoch_Number::Unprotected;
+
+   record_layer().copy_data(data, has_cryptographic_association);
+}
+
 void DTLS_Channel_IO::send_acknowledgements() {
-   const auto max_plaintext_length = m_record_layer->record_payload_size_limit(*m_policy, m_channel.cipher_state());
+   const auto max_plaintext_length = record_layer().record_payload_size_limit(*m_policy, m_channel.cipher_state());
    send_record(Record_Type::ACK, current_ack_record(max_plaintext_length), m_channel.cipher_state());
 }
 
@@ -183,7 +187,8 @@ void DTLS_Channel_IO::notify_protocol_version_committed_and_flight_superseded() 
 }
 
 void DTLS_Channel_IO::notify_received_complete_flight() {
-   clear_outstanding_acknowledgements();
+   // We have everything we needed, no reason to do any ACKing anymore
+   record_layer().clear_outstanding_acknowledgements();
 }
 
 void DTLS_Channel_IO::notify_received_final_flight() {
@@ -207,7 +212,7 @@ bool DTLS_Channel_IO::timeout_check(Cipher_State* cipher_state) {
       return false;  // timer has not yet expired
    }
 
-   for(const auto& record_to_write : m_record_layer->prepare_unacknowledged_records(cipher_state)) {
+   for(const auto& record_to_write : record_layer().prepare_unacknowledged_records(cipher_state)) {
       m_callbacks->tls_emit_data(record_to_write);
    }
    m_retransmission_timer.retransmitted();
@@ -282,6 +287,61 @@ void DTLS_Channel_IO::maybe_arm_dtls_acknowledgement_timer() {
 
 void DTLS_Channel_IO::maybe_cancel_dtls_acknowledgement_timer() {
    m_ack_token.reset();
+}
+
+void DTLS_Channel_IO::process_acknowledgements(Cipher_State* cipher_state,
+                                               std::span<const uint8_t> ack_record,
+                                               const Secret_Logger& secret_logger) {
+   // If we receive ACKs before we know for sure that the peer is using
+   // DTLS 1.3, we ignore them. The peer might still pick DTLS 1.2, and as
+   // a result would depend on a full flight retransmission.
+   //
+   // This mirrors the behavior of BoringSSL and is needed to pass
+   // relevant BoGo tests.
+   if(!m_dtls_version_committed) {
+      return;
+   }
+
+   const auto acks = ACKs(ack_record);
+   if(record_layer().handle_acknowledgements(acks)) {
+      // Nothing left to retransmit, stop the timer
+      m_retransmission_timer.stop();
+   }
+
+   if(has_pending_key_update() && !record_layer().has_unacknowledged_record(m_pending_key_update_record.value())) {
+      cipher_state->update_write_keys(secret_logger);
+      m_pending_key_update_record.reset();
+   }
+
+   // If there's nothing left to retransmit, we can safely discard any
+   // outdated write epochs.
+   if(!record_layer().has_unacknowledged_records()) {
+      cipher_state->prune_outdated_write_epochs();
+   }
+
+   // RFC 9147 7.2
+   //    Upon receipt of an ACK that leaves it with only some messages from
+   //    a flight having been acknowledged, an implementation SHOULD
+   //    retransmit the unacknowledged messages or fragments.
+   //
+   // TODO: In the future we might want to use this cipher_state to trigger
+   //       an immediate retransmission after receiving a partial ACK from
+   //       the peer. For now, we just wait until `timeout_check` is called.
+   //
+   // Not sending retransmissions immediately mirrors the current behavior
+   // of BoringSSL and is expected by BoGo tests.
+}
+
+DTLS_Record_Layer& DTLS_Channel_IO::record_layer() {
+   return dynamic_cast<DTLS_Record_Layer&>(*m_record_layer);
+}
+
+const DTLS_Record_Layer& DTLS_Channel_IO::record_layer() const {
+   return dynamic_cast<DTLS_Record_Layer&>(*m_record_layer);
+}
+
+DTLS_Handshake_Layer& DTLS_Channel_IO::handshake_layer() {
+   return dynamic_cast<DTLS_Handshake_Layer&>(*m_handshake_layer);
 }
 
 }  // namespace Botan::TLS
