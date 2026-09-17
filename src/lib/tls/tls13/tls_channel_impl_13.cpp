@@ -46,7 +46,7 @@ class TLS_Channel_IO final : public Channel_IO {
          }
       }
 
-      void send_record(const Flight& flight, Cipher_State* cipher_state) override {
+      void send_record(Flight flight, Cipher_State* cipher_state) override {
          auto prepared = MarshalledHandshakeMessageFlight();
 
          for(const auto& msg_info : flight.messages()) {
@@ -516,12 +516,12 @@ void Channel_Impl_13::send_record(Record_Type record_type, std::span<const uint8
    m_channel_io->send_record(record_type, payload, cipher_state);
 }
 
-void Channel_Impl_13::send_record(const Flight& flight) {
+void Channel_Impl_13::send_record(Flight flight) {
    BOTAN_STATE_CHECK(flight.contains_messages());
    BOTAN_STATE_CHECK(!is_downgrading());
    BOTAN_STATE_CHECK(m_can_write);
 
-   m_channel_io->send_record(flight, m_cipher_state.get());
+   m_channel_io->send_record(std::move(flight), m_cipher_state.get());
 }
 
 void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {

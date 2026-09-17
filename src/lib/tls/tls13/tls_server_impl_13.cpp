@@ -156,7 +156,7 @@ size_t Server_Impl_13::send_new_session_tickets(const size_t tickets) {
    }
 
    if(flight.contains_messages()) {
-      send_record(flight);
+      send_record(std::move(flight));
    }
 
    return tickets_created;
@@ -365,11 +365,10 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
    //       references to the Server Hello will need to consult the handshake
    //       state object!
    const auto sh = m_handshake->state.sending(std::move(server_hello));
-   Flight sh_flight;
-   sh_flight.add(sh, *m_transcript_hash, callbacks());
+
    // TODO: This can be added to the subsequent flight, only need to add a
    // "desired_epoch" to Message_Info.
-   send_record(sh_flight);
+   send_record(Flight::from_message(sh, *m_transcript_hash, callbacks()));
 
    if(!m_handshake->state.has_hello_retry_request()) {
       maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingFirstServerHello);
@@ -486,7 +485,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
       set_record_size_limits(outgoing_limit->limit(), incoming_limit->limit());
    }
 
-   send_record(flight);
+   send_record(std::move(flight));
 
    m_cipher_state->advance_with_server_finished(m_transcript_hash->current(), *this);
 
