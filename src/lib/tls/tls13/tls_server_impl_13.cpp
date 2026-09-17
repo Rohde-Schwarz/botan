@@ -156,7 +156,7 @@ size_t Server_Impl_13::send_new_session_tickets(const size_t tickets) {
    }
 
    if(flight.contains_messages()) {
-      send_record(std::move(flight));
+      send(std::move(flight));
    }
 
    return tickets_created;
@@ -368,7 +368,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
 
    // TODO: This can be added to the subsequent flight, only need to add a
    // "desired_epoch" to Message_Info.
-   send_record(Flight::from_message(sh, *m_transcript_hash, callbacks()));
+   send(Flight::from_message(sh, *m_transcript_hash, callbacks()));
 
    if(!m_handshake->state.has_hello_retry_request()) {
       maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingFirstServerHello);
@@ -485,7 +485,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
       set_record_size_limits(outgoing_limit->limit(), incoming_limit->limit());
    }
 
-   send_record(std::move(flight));
+   send(std::move(flight));
 
    m_cipher_state->advance_with_server_finished(m_transcript_hash->current(), *this);
 
@@ -509,7 +509,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Hello_Retry_Request hello_retr
    BOTAN_ASSERT_NOMSG(cipher.has_value());  // should work, since we chose that suite
 
    const auto hrr = m_handshake->state.sending(std::move(hello_retry_request));
-   send_record(Flight::from_message(hrr, *m_transcript_hash, callbacks()));
+   send(Flight::from_message(hrr, *m_transcript_hash, callbacks()));
    maybe_handle_compatibility_mode(Compat_Mode_Situation::AfterSendingHelloRetryRequest);
 
    m_transcript_hash =

@@ -52,7 +52,7 @@ void DTLS_Channel_IO::send_record(Record_Type record_type,
    }
 }
 
-void DTLS_Channel_IO::send_record(Flight flight, Cipher_State* cipher_state) {
+void DTLS_Channel_IO::send(Flight flight, Cipher_State* cipher_state) {
    const auto max_payload_size = m_record_layer->record_payload_size_limit(*m_policy, cipher_state);
 
    auto prepared = std::vector<MarshalledHandshakeMessageFragment>{};
