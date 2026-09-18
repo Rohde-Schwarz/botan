@@ -232,6 +232,40 @@ class Channel_IO {
       bool m_first_message_delivered = false;              // NOLINT(*non-private-member-variable*)
 };
 
+class TLS_Channel_IO final : public Channel_IO {
+   public:
+      TLS_Channel_IO(Connection_Side side, std::shared_ptr<const Policy> policy, std::shared_ptr<Callbacks> callbacks) :
+            Channel_IO(TLS_Flavor::TLS, side, std::move(policy), std::move(callbacks)) {}
+
+      void send_records(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override;
+
+      void send(Flight flight, Cipher_State* cipher_state) override;
+
+      void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) override;
+
+      void ingest_records(std::span<const uint8_t> data) override { m_record_layer->copy_data(data); }
+
+      ReceiveEvent next_receive_event(Cipher_State* cipher_state,
+                                      Transcript_Hash_State* transcript_hash,
+                                      bool handshake_complete) override;
+
+      void notify_protocol_version_committed() override {
+         // In TLS, we do not care about this.
+      }
+
+      void notify_protocol_version_committed_and_flight_superseded() override {
+         // In TLS, we do not care about this.
+      }
+
+      void notify_received_complete_flight() override {
+         // In TLS, we do not care about this.
+      }
+
+      void notify_received_final_flight() override {
+         // In TLS, we do not care about this.
+      }
+};
+
 }  // namespace Botan::TLS
 
 #endif
