@@ -60,12 +60,6 @@ class DTLS_Channel_IO : public Channel_IO {
    private:
       void notify_sent_handshake_flight() { m_retransmission_timer.flight_sent(); }
 
-      bool protocol_version_committed() const { return m_dtls_version_committed; }
-
-      void register_pending_key_update(const RecordNumber& record_number) {
-         m_pending_key_update_record = record_number;
-      }
-
       bool has_pending_key_update() const { return m_pending_key_update_record.has_value(); }
 
       void maybe_clear_resend_buffer() {

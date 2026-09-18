@@ -90,8 +90,7 @@ void DTLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state
    //
    // The actual call to cipher_state->update_write_keys() is
    // deferred to the handling of the respective acknowledgement.
-   const auto key_update_record_number = prepared_records.front().second;
-   register_pending_key_update(key_update_record_number);
+   m_pending_key_update_record = prepared_records.front().second;
 
    // TODO: BoGo is completely green if we forget to
    // arm the retransmission timer here -> add a regression test.
@@ -263,7 +262,7 @@ void DTLS_Channel_IO::on_retransmission_timer() {
 void DTLS_Channel_IO::maybe_arm_dtls_acknowledgement_timer() {
    const auto ack_time = m_policy->dtls_initial_timeout() / 4;
 
-   if(!m_ack_token && protocol_version_committed()) {
+   if(!m_ack_token && m_dtls_version_committed) {
       m_ack_token = std::make_shared<TimerToken>(*this);
 
       m_callbacks->tls_register_deferred_operation(ack_time, [token = std::weak_ptr(m_ack_token)] {

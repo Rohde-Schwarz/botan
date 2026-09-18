@@ -206,21 +206,18 @@ class Channel_IO {
       }
 
       Record_Layer::ReadResult<Record_Content> pull_record(Cipher_State* cipher_state) {
-         auto result = m_record_layer->next_record(cipher_state);
+         return std::visit(
+            overloaded{[](BytesNeeded bytes) -> Record_Layer::ReadResult<Record_Content> { return bytes; },
+                       [&](const Record_Content& record) -> Record_Layer::ReadResult<Record_Content> {
+                          // RFC 8446 5.1
+                          //   Handshake messages MUST NOT be interleaved with other record types.
+                          if(record.type != Record_Type::Handshake && m_handshake_layer->has_pending_data()) {
+                             throw Unexpected_Message("Expected remainder of a handshake message");
+                          }
 
-         if(std::holds_alternative<BytesNeeded>(result)) {
-            return std::get<BytesNeeded>(result);
-         }
-
-         const auto& record = std::get<Record_Content>(result);
-
-         // RFC 8446 5.1
-         //   Handshake messages MUST NOT be interleaved with other record types.
-         if(record.type != Record_Type::Handshake && m_handshake_layer->has_pending_data()) {
-            throw Unexpected_Message("Expected remainder of a handshake message");
-         }
-
-         return record;
+                          return record;
+                       }},
+            m_record_layer->next_record(cipher_state));
       }
 
       bool feed_handshake_record(const Record_Content& record) {
