@@ -41,10 +41,12 @@ void TLS_Channel_IO::send(Flight flight, Cipher_State* cipher_state) {
 }
 
 void TLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) {
-   const auto msg_bytes = concat<MarshalledHandshakeMessage>(
-      prepare_tls_handshake_header(Handshake_Type::KeyUpdate, msg.serialize()), msg.serialize());
+   const auto msg_serialized_bytes = msg.serialize();
+   const auto msg_marshalled_bytes = concat<MarshalledHandshakeMessage>(
+      prepare_tls_handshake_header(Handshake_Type::KeyUpdate, msg_serialized_bytes), msg_serialized_bytes);
 
-   const auto prepared_records = m_record_layer->prepare_records(Record_Type::Handshake, msg_bytes, cipher_state);
+   const auto prepared_records =
+      m_record_layer->prepare_records(Record_Type::Handshake, msg_marshalled_bytes, cipher_state);
 
    BOTAN_ASSERT_NOMSG(prepared_records.size() == 1);  // KeyUpdate is small enough to fit into a single record
    m_callbacks->tls_emit_data(prepared_records.front().first);
@@ -64,24 +66,31 @@ Channel_IO::ReceiveEvent TLS_Channel_IO::next_receive_event(Cipher_State* cipher
          return std::move(event.value());
       }
 
-      auto result = pull_record(cipher_state);
-      if(std::holds_alternative<BytesNeeded>(result)) {
-         return std::get<BytesNeeded>(result);
-      }
+      auto res =
+         std::visit(overloaded{[](BytesNeeded bytes) -> std::optional<Channel_IO::ReceiveEvent> { return bytes; },
+                               [&](Record_Content&& record) -> std::optional<Channel_IO::ReceiveEvent> {
+                                  switch(record.type) {
+                                     case Record_Type::Handshake:
+                                        // Handshake records need to be fed to the handshake layer before
+                                        // their messages can be consumed by the channel
+                                        feed_handshake_record(record);
+                                        return std::nullopt;
 
-      // TODO: double-check if we can do the record type validation fully here
-      //       (similarly as we do with ACK)
-      const auto& record = std::get<Record_Content>(result);
-      if(record.type == Record_Type::Handshake) {
-         // Handshake records need to be fed to the handshake layer before
-         // their messages can be consumed by the channel
-         feed_handshake_record(record);
-      } else if(record.type == Record_Type::ACK) {
-         throw Unexpected_Message("Received ACKs despite not being DTLS");
-      } else {
-         // CCS, AppData or alert can be directly consumed by the channel
-         return record;
-      }
+                                     case Record_Type::ChangeCipherSpec:
+                                     case Record_Type::ApplicationData:
+                                     case Record_Type::Alert:
+                                        // CCS, AppData or alert can be directly consumed by the channel
+                                        return std::move(record);
+
+                                     default:
+                                        throw Unexpected_Message("Unexpected record type received");
+                                  }
+                               }},
+                    pull_record(cipher_state));
+
+      if(res.has_value()) {
+         return std::move(res.value());
+      }  // else: continue loop
    }
 }
 
