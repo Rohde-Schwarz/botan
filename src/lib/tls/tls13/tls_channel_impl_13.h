@@ -142,15 +142,23 @@ class Channel_Impl_13 : public Channel_Impl,
       }
 
       /**
-      * Perform a handshake timeout check. This does nothing unless
-      * this is a DTLS channel with a pending handshake state, in
-      * which case we check for timeout and potentially retransmit
-      * handshake packets.
-      *
-      * In the TLS 1.3 implementation, this always returns false.
+      * Perform a handshake timeout check that the user can call. This is no
+      * longer relevant for DTLS 1.3.
+      * @throws for DTLS 1.3, since the callback mechanism
+      *         tls_register_deferred_operation() shall be used insead of
+      *         timeout_check.
+      * @returns false for TLS 1.3
       */
       bool timeout_check() override;
 
+      /**
+      * Tells the user when to call Channel::timeout_check() next. This is no
+      * longer relevant for DTLS 1.3.
+      * @throws for DTLS 1.3, since the callback mechanism
+      *         tls_register_deferred_operation() shall be used insead of
+      *         timeout_check.
+      * @returns std::nullopt for TLS 1.3
+      */
       std::optional<std::chrono::milliseconds> next_retransmission_timeout() const override;
 
       Cipher_State* cipher_state() { return m_cipher_state.get(); }
