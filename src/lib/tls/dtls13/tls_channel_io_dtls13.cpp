@@ -124,59 +124,74 @@ Channel_IO::ReceiveEvent DTLS_Channel_IO::next_receive_event(Cipher_State* ciphe
          return std::move(event.value());
       }
 
-      auto result = pull_record(cipher_state);
-      if(std::holds_alternative<BytesNeeded>(result)) {
-         return std::get<BytesNeeded>(result);
-      }
-
-      const auto& record = std::get<Record_Content>(result);
-      if(record.type == Record_Type::Handshake) {
-         // Handshake records need to be fed to the handshake layer before
-         // their messages can be consumed by the channel
-         const auto progress = feed_handshake_record(record);
-         if(progress) {
-            // RFC 9147 7.
-            //    During the handshake, ACKs only cover the current outstanding flight
-            //    (this is possible because DTLS is generally a lock-step protocol).
-            //    In particular, receiving a message from a handshake flight implicitly
-            //    acknowledges all messages from the previous flight(s).
-            //
-            // Handshake_Layer::copy_data() returns true if a handshake message fragment
-            // with a previously unprocessed sequence number was received. This indicates
-            // progress and therefore ACKs our previously sent flight implicitly. Note
-            // that this doesn't hold for post-handshake messages; for instance some
-            // NewSessionTicket message _does not_ acknowledge the Client's Finished!
-            //
-            // Note: This assumes that we only send our flight once we fully received
-            //       a flight from the peer. This is a hard requirement in TLS 1.3.
-            const bool is_post_handshake_traffic =
-               record.epoch.has_value() && record.epoch.value() >= Epoch_Number::ApplicationTraffic_0;
-            if(!is_post_handshake_traffic) {
-               maybe_clear_resend_buffer();
-            }
+      auto on_progress = [&](const Record_Content& record) {
+         // RFC 9147 7.
+         //    During the handshake, ACKs only cover the current outstanding flight
+         //    (this is possible because DTLS is generally a lock-step protocol).
+         //    In particular, receiving a message from a handshake flight implicitly
+         //    acknowledges all messages from the previous flight(s).
+         //
+         // Handshake_Layer::copy_data() returns true if a handshake message fragment
+         // with a previously unprocessed sequence number was received. This indicates
+         // progress and therefore ACKs our previously sent flight implicitly. Note
+         // that this doesn't hold for post-handshake messages; for instance some
+         // NewSessionTicket message _does not_ acknowledge the Client's Finished!
+         //
+         // Note: This assumes that we only send our flight once we fully received
+         //       a flight from the peer. This is a hard requirement in TLS 1.3.
+         const bool is_post_handshake_traffic =
+            record.epoch.has_value() && record.epoch.value() >= Epoch_Number::ApplicationTraffic_0;
+         if(!is_post_handshake_traffic) {
+            maybe_clear_resend_buffer();
          }
+      };
 
-         // RFC 9147 7.1
-         //    [...] it is RECOMMENDED that [an implementation] generats ACKs
-         //    under two circumstances:
-         //
-         //    - [...]
-         //    - When they have received part of a flight and do not
-         //      immediately receive the rest of the flight [...]. One
-         //      approach is to set a timer [...] and then send an ACK when
-         //      that timer expires.
-         //
-         // This opportunistically sets such a timer which gets cancelled
-         // when we successfully generate our next handshake flight in
-         // response to the incoming data. If we fail to generate such a
-         // flight, the timer will eventually emit ACKs to the peer.
-         maybe_arm_dtls_acknowledgement_timer();
-      } else if(record.type == Record_Type::ACK) {
-         process_acknowledgements(cipher_state, record.payload, m_secret_logger);
-      } else {
-         // CCS, AppData or alert can be directly consumed by the channel
-         return record;
-      }
+      auto res =
+         std::visit(overloaded{[](BytesNeeded bytes) -> std::optional<Channel_IO::ReceiveEvent> { return bytes; },
+                               [&](Record_Content&& record) -> std::optional<Channel_IO::ReceiveEvent> {
+                                  switch(record.type) {
+                                     case Record_Type::Handshake: {
+                                        // Handshake records need to be fed to the handshake layer before
+                                        // their messages can be consumed by the channel
+                                        const auto progress = feed_handshake_record(record);
+                                        if(progress) {
+                                           on_progress(record);
+                                        }
+
+                                        // RFC 9147 7.1
+                                        //    [...] it is RECOMMENDED that [an implementation] generats ACKs
+                                        //    under two circumstances:
+                                        //
+                                        //    - [...]
+                                        //    - When they have received part of a flight and do not
+                                        //      immediately receive the rest of the flight [...]. One
+                                        //      approach is to set a timer [...] and then send an ACK when
+                                        //      that timer expires.
+                                        //
+                                        // This opportunistically sets such a timer which gets cancelled
+                                        // when we successfully generate our next handshake flight in
+                                        // response to the incoming data. If we fail to generate such a
+                                        // flight, the timer will eventually emit ACKs to the peer.
+                                        maybe_arm_dtls_acknowledgement_timer();
+                                        return std::nullopt;
+                                     }
+                                     case Record_Type::ChangeCipherSpec:
+                                     case Record_Type::Alert:
+                                     case Record_Type::ApplicationData:
+                                        // CCS, AppData or alert can be directly consumed by the channel
+                                        return std::move(record);
+                                     case Record_Type::ACK:
+                                        process_acknowledgements(cipher_state, record.payload, m_secret_logger);
+                                        return std::nullopt;
+                                     default:
+                                        throw Unexpected_Message("Unexpected record type received");
+                                  }
+                               }},
+                    pull_record(cipher_state));
+
+      if(res.has_value()) {
+         return std::move(res.value());
+      }  // else: continue loop
    }
 }
 
