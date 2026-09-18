@@ -213,9 +213,9 @@ void DTLS_Channel_IO::notify_received_final_flight() {
    send_acknowledgements();
 }
 
-bool DTLS_Channel_IO::timeout_check(Cipher_State* cipher_state) {
+void DTLS_Channel_IO::maybe_retransmit(Cipher_State* cipher_state) {
    if(!m_retransmission_timer.started()) {
-      return false;
+      return;
    }
 
    if(m_retransmission_timer.retransmissions_exhausted()) {
@@ -223,14 +223,13 @@ bool DTLS_Channel_IO::timeout_check(Cipher_State* cipher_state) {
    }
 
    if(!m_retransmission_timer.expired()) {
-      return false;  // timer has not yet expired
+      return;  // timer has not yet expired
    }
 
    for(const auto& record_to_write : record_layer().prepare_unacknowledged_records(cipher_state)) {
       m_callbacks->tls_emit_data(record_to_write);
    }
    m_retransmission_timer.retransmitted();
-   return true;
 }
 
 void DTLS_Channel_IO::arm_dtls_retransmission_timer() {
@@ -267,7 +266,7 @@ void DTLS_Channel_IO::arm_dtls_retransmission_timer() {
 }
 
 void DTLS_Channel_IO::on_retransmission_timer() {
-   timeout_check(m_channel.cipher_state());
+   maybe_retransmit(m_channel.cipher_state());
 
    // Spawn the next timer generation for the next backoff interval in this
    // chain. This will be a no-op if the timer is no longer needed.
@@ -340,7 +339,7 @@ void DTLS_Channel_IO::process_acknowledgements(Cipher_State* cipher_state,
    //
    // TODO: In the future we might want to use this cipher_state to trigger
    //       an immediate retransmission after receiving a partial ACK from
-   //       the peer. For now, we just wait until `timeout_check` is called.
+   //       the peer. For now, we just wait until `maybe_retransmit` is called.
    //
    // Not sending retransmissions immediately mirrors the current behavior
    // of BoringSSL and is expected by BoGo tests.

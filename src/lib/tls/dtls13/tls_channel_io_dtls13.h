@@ -75,7 +75,7 @@ class DTLS_Channel_IO : public Channel_IO {
          }
       }
 
-      bool timeout_check(Cipher_State* cipher_state);
+      void maybe_retransmit(Cipher_State* cipher_state);
 
       std::optional<std::chrono::milliseconds> next_retransmission_timeout() const {
          if(!m_retransmission_timer.started()) {
