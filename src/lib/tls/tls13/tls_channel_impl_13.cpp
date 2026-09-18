@@ -21,16 +21,18 @@
 #include <botan/internal/tls_record_layer_13.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 
+#include <utility>
+
 #if defined(BOTAN_HAS_DTLS_13)
    #include <botan/internal/tls_channel_io_dtls13.h>
 
-   #include <utility>
 #endif
 
 namespace Botan::TLS {
 
 namespace {
 
+// TODO: move into its own *.cpp file
 class TLS_Channel_IO final : public Channel_IO {
    public:
       TLS_Channel_IO(Connection_Side side, std::shared_ptr<const Policy> policy, std::shared_ptr<Callbacks> callbacks) :
@@ -47,12 +49,14 @@ class TLS_Channel_IO final : public Channel_IO {
       void send(Flight flight, Cipher_State* cipher_state) override {
          auto prepared = MarshalledHandshakeMessageFlight();
 
+         // TODO: First figure out how much data we need to fully concatenate, then pre-allocate, then copy.
          for(const auto& msg_info : flight.messages()) {
             auto& flat = prepared.get();
             flat.insert(flat.end(), msg_info.header.begin(), msg_info.header.end());
             flat.insert(flat.end(), msg_info.serialized.begin(), msg_info.serialized.end());
          }
 
+         // TODO: Pass the Flight straight into the record layer to optimize the number of data copies
          for(const auto& [record_to_write, _] :
              m_record_layer->prepare_records(Record_Type::Handshake, prepared, cipher_state)) {
             m_callbacks->tls_emit_data(record_to_write);
@@ -90,6 +94,8 @@ class TLS_Channel_IO final : public Channel_IO {
                return std::get<BytesNeeded>(result);
             }
 
+            // TODO: double-check if we can do the record type validation fully here
+            //       (similarly as we do with ACK)
             const auto& record = std::get<Record_Content>(result);
             if(record.type == Record_Type::Handshake) {
                // Handshake records need to be fed to the handshake layer before
@@ -195,61 +201,19 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
             return 0;
          }
 
-         auto event =
-            m_channel_io->next_receive_event(m_cipher_state.get(), m_transcript_hash.get(), is_handshake_complete());
+         const auto bytes_needed = std::visit(
+            overloaded{[](BytesNeeded bytes) -> std::optional<size_t> { return bytes; },
+                       [&](auto&& receive_event) -> std::optional<size_t> {
+                          return process_event(std::forward<decltype(receive_event)>(receive_event));
+                       }},
+            m_channel_io->next_receive_event(m_cipher_state.get(), m_transcript_hash.get(), is_handshake_complete()));
 
-         if(std::holds_alternative<BytesNeeded>(event)) {
-            return std::get<BytesNeeded>(event);
+         if(bytes_needed.has_value()) {
+            return bytes_needed.value();
          }
-
-         if(auto* handshake_msg = std::get_if<Handshake_Message_13>(&event)) {
-            process_handshake_msg(std::move(*handshake_msg));
-
-#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
-            if(is_downgrading()) {
-               // Downgrade to TLS 1.2 was detected. Stop everything we do and await being replaced by a 1.2 implementation.
-               return 0;
-            } else if(m_downgrade_info != nullptr) {
-               // We received a TLS 1.3 error alert that could have been a TLS 1.2 warning alert.
-               // Now that we know that we are talking to a TLS 1.3 server, shut down.
-               if(m_downgrade_info->received_tls_13_error_alert) {
-                  shutdown();
-               }
-
-               // Downgrade can only be indicated in the first received peer message. This was not the case.
-               m_downgrade_info.reset();
-            }
-#endif
-
-         } else if(auto* post_handshake_msg = std::get_if<Post_Handshake_Message_13>(&event)) {
-            process_post_handshake_msg(std::move(*post_handshake_msg));
-         } else {
-            const auto& record = std::get<Record_Content>(event);
-
-            if(record.type == Record_Type::ChangeCipherSpec) {
-               process_dummy_change_cipher_spec();
-            } else if(record.type == Record_Type::ApplicationData) {
-               BOTAN_ASSERT_NONNULL(m_cipher_state);
-               if(!m_cipher_state->can_decrypt_application_traffic()) {
-                  throw Unexpected_Message("Application data received before handshake completion");
-               }
-               /*
-                     The record sequence number is set in Record_Layer::next_record only when
-                     the record contents are decrypted under the current set of traffic keys
-                     for TLS or under any retained epoch for DTLS.
-                     */
-               if(!record.sequence_number.has_value()) {
-                  throw Unexpected_Message("Application data must have a sequence number");
-               }
-               callbacks().tls_record_received(record.sequence_number.value(), record.payload);
-            } else if(record.type == Record_Type::Alert) {
-               process_alert(record.payload);
-            } else {
-               throw Unexpected_Message("Unexpected record type " + std::to_string(static_cast<size_t>(record.type)) +
-                                        " from counterparty");
-            }
-         }
+         // else: Continue loop
       }
+
    } catch(TLS_Exception& e) {
       send_fatal_alert(e.type());
       throw;
@@ -316,10 +280,10 @@ void Channel_Impl_13::handle(const Key_Update& key_update) {
    }
 }
 
-Flight::Message_Info::Message_Info(Handshake_Type type,
+Flight::Message_Info::Message_Info(Handshake_Type handshake_type,
                                    SerializedHandshakeMessage serialized_message /* NOLINT(*-value-param) */) :
-      type(type),
-      header(prepare_tls_handshake_header(type, serialized_message)),
+      type(handshake_type),
+      header(prepare_tls_handshake_header(handshake_type, serialized_message)),
       serialized(std::move(serialized_message)) {}
 
 void Flight::add(const Handshake_Message_13_Ref message, Transcript_Hash_State& transcript_hash, Callbacks& callbacks) {
@@ -576,6 +540,65 @@ void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
    if(is_close_notify_alert(alert) && callbacks().tls_peer_closed_connection()) {
       close();
    }
+}
+
+std::optional<size_t> Channel_Impl_13::process_event(Handshake_Message_13 handshake_msg) {
+   process_handshake_msg(std::move(handshake_msg));
+
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+   if(is_downgrading()) {
+      // Downgrade to TLS 1.2 was detected. Stop everything we do and await being replaced by a 1.2 implementation.
+      return 0;
+   }
+   if(m_downgrade_info != nullptr) {
+      // We received a TLS 1.3 error alert that could have been a TLS 1.2 warning alert.
+      // Now that we know that we are talking to a TLS 1.3 server, shut down.
+      if(m_downgrade_info->received_tls_13_error_alert) {
+         shutdown();
+      }
+
+      // Downgrade can only be indicated in the first received peer message. This was not the case.
+      m_downgrade_info.reset();
+   }
+#endif
+   return std::nullopt;
+}
+
+std::optional<size_t> Channel_Impl_13::process_event(Post_Handshake_Message_13 post_handshake_msg) {
+   process_post_handshake_msg(std::move(post_handshake_msg));
+   return std::nullopt;
+}
+
+std::optional<size_t> Channel_Impl_13::process_event(const Record_Content& record) {
+   switch(record.type) {
+      case Record_Type::ChangeCipherSpec:
+         process_dummy_change_cipher_spec();
+         break;
+      case Record_Type::ApplicationData:
+         BOTAN_ASSERT_NONNULL(m_cipher_state);
+         if(!m_cipher_state->can_decrypt_application_traffic()) {
+            throw Unexpected_Message("Application data received before handshake completion");
+         }
+         /*
+         The record sequence number is set in Record_Layer::next_record only when
+         the record contents are decrypted under the current set of traffic keys
+         for TLS or under any retained epoch for DTLS.
+         */
+         if(!record.sequence_number.has_value()) {
+            throw Unexpected_Message("Application data must have a sequence number");
+         }
+         callbacks().tls_record_received(record.sequence_number.value(), record.payload);
+
+         break;
+      case Record_Type::Alert:
+         process_alert(record.payload);
+         break;
+      default:
+         throw Unexpected_Message("Unexpected record type " + std::to_string(static_cast<size_t>(record.type)) +
+                                  " from counterparty");
+   }
+
+   return std::nullopt;
 }
 
 void Channel_Impl_13::shutdown() {

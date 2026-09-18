@@ -200,6 +200,10 @@ class Channel_Impl_13 : public Channel_Impl,
    private:
       void process_alert(const secure_vector<uint8_t>& record);
 
+      std::optional<size_t> process_event(Handshake_Message_13 handshake_msg);
+      std::optional<size_t> process_event(Post_Handshake_Message_13 post_handshake_msg);
+      std::optional<size_t> process_event(const Record_Content& record);
+
       /**
        * Terminate the connection (on sending or receiving an error alert) and
        * clear secrets
