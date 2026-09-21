@@ -39,6 +39,10 @@ class DTLS_Channel_IO : public Channel_IO {
 
       void send(Flight flight, Cipher_State* cipher_state) override;
 
+      void send_dummy_change_cipher_spec() override {
+         throw TLS_Exception(AlertType::InternalError, "Dummy CCS requested in DTLS");
+      }
+
       void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) override;
 
       void ingest_records(std::span<const uint8_t> data) override;

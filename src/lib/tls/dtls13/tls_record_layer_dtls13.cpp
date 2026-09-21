@@ -374,7 +374,9 @@ std::vector<MarshalledRecordAndNumber> DTLS_Record_Layer::prepare_records(Record
 }
 
 std::vector<MarshalledRecordAndNumber> DTLS_Record_Layer::prepare_records(
-   const std::vector<MarshalledHandshakeMessageFragment>& fragments, Cipher_State* cipher_state) const {
+   const std::vector<MarshalledHandshakeMessageFragment>& fragments,
+   Cipher_State* cipher_state,
+   std::optional<Epoch_Number> epoch) const {
    std::vector<MarshalledRecordAndNumber> prepared_records;
    prepared_records.reserve(fragments.size());
 
@@ -382,7 +384,7 @@ std::vector<MarshalledRecordAndNumber> DTLS_Record_Layer::prepare_records(
    // marshalled handshake messages so that each fragment fits into a single
    // DTLS record. Therefore, we simply prepare a record for each fragment.
    for(const auto& fragment : fragments) {
-      auto marshalled_record_and_number = prepare_record(Record_Type::Handshake, fragment, cipher_state);
+      auto marshalled_record_and_number = prepare_record(Record_Type::Handshake, fragment, cipher_state, epoch);
       m_unacked_outgoing_handshake_records.push_back({
          .record_numbers = {marshalled_record_and_number.second},
          .fragment = fragment,
