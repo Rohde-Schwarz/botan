@@ -60,38 +60,41 @@ void TLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state,
 Channel_IO::ReceiveEvent TLS_Channel_IO::next_receive_event(Cipher_State* cipher_state,
                                                             Transcript_Hash_State* transcript_hash,
                                                             bool handshake_complete) {
-   while(true) {
+   std::optional<Channel_IO::ReceiveEvent> res;
+
+   while(!res.has_value()) {
       if(auto event = next_pending_handshake_message(transcript_hash, handshake_complete)) {
          // Handshake messages can be directly consumed by the channel
-         return std::move(event.value());
+         res = std::move(event);
+         break;
       }
 
-      auto res =
-         std::visit(overloaded{[](BytesNeeded bytes) -> std::optional<Channel_IO::ReceiveEvent> { return bytes; },
-                               [&](Record_Content&& record) -> std::optional<Channel_IO::ReceiveEvent> {
-                                  switch(record.type) {
-                                     case Record_Type::Handshake:
-                                        // Handshake records need to be fed to the handshake layer before
-                                        // their messages can be consumed by the channel
-                                        feed_handshake_record(record);
-                                        return std::nullopt;
+      res = std::visit(  //
+         overloaded{
+            [](BytesNeeded bytes) -> std::optional<Channel_IO::ReceiveEvent> { return bytes; },
+            [&](Record_Content record) -> std::optional<Channel_IO::ReceiveEvent> {
+               switch(record.type) {
+                  case Record_Type::Handshake:
+                     // Handshake records need to be fed to the handshake layer before
+                     // their messages can be consumed by the channel
+                     feed_handshake_record(record);
+                     return std::nullopt;
 
-                                     case Record_Type::ChangeCipherSpec:
-                                     case Record_Type::ApplicationData:
-                                     case Record_Type::Alert:
-                                        // CCS, AppData or alert can be directly consumed by the channel
-                                        return std::move(record);
+                  case Record_Type::ChangeCipherSpec:
+                  case Record_Type::ApplicationData:
+                  case Record_Type::Alert:
+                     // CCS, AppData or alert can be directly consumed by the channel
+                     return record;
 
-                                     default:
-                                        throw Unexpected_Message("Unexpected record type received");
-                                  }
-                               }},
-                    pull_record(cipher_state));
-
-      if(res.has_value()) {
-         return std::move(res.value());
-      }  // else: continue loop
+                  default:
+                     throw Unexpected_Message("Unexpected record type received");
+               }
+            },
+         },
+         pull_record(cipher_state));
    }
+
+   return std::move(res).value();
 }
 
 }  // namespace Botan::TLS
