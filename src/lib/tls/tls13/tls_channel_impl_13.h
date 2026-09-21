@@ -168,16 +168,7 @@ class Channel_Impl_13 : public Channel_Impl,
       virtual void process_post_handshake_msg(Post_Handshake_Message_13 msg) = 0;
       virtual void process_dummy_change_cipher_spec() = 0;
 
-      enum class Compat_Mode_Situation : uint8_t {
-         BeforeSendingAlert,
-         AfterSendingFirstClientHello,
-         BeforeSendingSecondClientHello,
-         BeforeSendingEncryptedClientFlight,
-         AfterSendingFirstServerHello,
-         AfterSendingHelloRetryRequest,
-      };
-
-      virtual void maybe_handle_compatibility_mode(Compat_Mode_Situation situation) = 0;
+      virtual bool compat_mode_ccs_requested() const = 0;
 
       void handle(const Key_Update& key_update);
 
@@ -187,8 +178,6 @@ class Channel_Impl_13 : public Channel_Impl,
        * never request a reciprocal key update from the peer.
        */
       void opportunistically_update_traffic_keys() { m_opportunistic_key_update = true; }
-
-      void send_dummy_change_cipher_spec();
 
       Callbacks& callbacks() const { return *m_callbacks; }
 

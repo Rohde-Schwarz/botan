@@ -184,19 +184,25 @@ void Channel_Impl_13::handle(const Key_Update& key_update) {
 }
 
 Flight::Message_Info::Message_Info(Handshake_Type handshake_type,
-                                   SerializedHandshakeMessage serialized_message /* NOLINT(*-value-param) */) :
+                                   SerializedHandshakeMessage serialized_message /* NOLINT(*-value-param) */,
+                                   std::optional<Epoch_Number> epoch) :
       type(handshake_type),
       header(prepare_tls_handshake_header(handshake_type, serialized_message)),
-      serialized(std::move(serialized_message)) {}
+      serialized(std::move(serialized_message)),
+      desired_epoch(epoch) {}
 
-void Flight::add(const Handshake_Message_13_Ref message, Transcript_Hash_State& transcript_hash, Callbacks& callbacks) {
+void Flight::add(Epoch_Number desired_epoch,
+                 const Handshake_Message_13_Ref message,
+                 Transcript_Hash_State& transcript_hash,
+                 Callbacks& callbacks) {
+   BOTAN_STATE_CHECK(desired_epoch <= Epoch_Number::HandshakeTraffic);
    std::visit(
       [&](const auto msg) {
          callbacks.tls_inspect_handshake_msg(msg.get());
 
          // TODO: Handshake_Message::serialize() should return the strong type
-         const auto& m =
-            m_messages.emplace_back(msg.get().wire_type(), SerializedHandshakeMessage(msg.get().serialize()));
+         const auto& m = m_messages.emplace_back(
+            msg.get().wire_type(), SerializedHandshakeMessage(msg.get().serialize()), desired_epoch);
          transcript_hash.update(m.header, m.serialized);
       },
       message);
@@ -208,24 +214,9 @@ void Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) 
          callbacks.tls_inspect_handshake_msg(msg);
 
          // TODO: Handshake_Message::serialize() should return the strong type
-         m_messages.emplace_back(msg.wire_type(), SerializedHandshakeMessage(msg.serialize()));
+         m_messages.emplace_back(msg.wire_type(), SerializedHandshakeMessage(msg.serialize()), std::nullopt);
       },
       message);
-}
-
-void Channel_Impl_13::send_dummy_change_cipher_spec() {
-   // RFC 9846 5.
-   //    The change_cipher_spec record is used only for compatibility purposes
-   //    (see Appendix E.4).
-   //
-   //    An implementation may receive an unencrypted record of type
-   //    change_cipher_spec consisting of the single byte value 0x01 at any time
-   //    after the first ClientHello message has been sent or received and
-   //    before the peer's Finished message has been received.
-   BOTAN_STATE_CHECK(!is_handshake_complete());
-
-   constexpr auto ccs_content = std::array<uint8_t, 1>{0x01};
-   send_record(Record_Type::ChangeCipherSpec, ccs_content);
 }
 
 void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
@@ -293,7 +284,6 @@ void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
 void Channel_Impl_13::send_alert(const Alert& alert) {
    if(alert.is_valid() && m_can_write) {
       try {
-         maybe_handle_compatibility_mode(Compat_Mode_Situation::BeforeSendingAlert);
          send_record(Record_Type::Alert, alert.serialize());
       } catch(...) { /* swallow it */
       }

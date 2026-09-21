@@ -24,20 +24,73 @@ void TLS_Channel_IO::send_records(Record_Type record_type,
 }
 
 void TLS_Channel_IO::send(Flight flight, Cipher_State* cipher_state) {
-   auto prepared = MarshalledHandshakeMessageFlight();
+   // TODO: Pass the Flight straight into the record layer to optimize the number of data copies
+
+   // RFC 9846 E.4 placement:
+   //  - client: immediately before its second flight (second ClientHello
+   //    or the encrypted handshake flight).
+   //  - server: immediately after its first handshake message, i.e., at the
+   //    unprotected -> protected transition, or after an all-unprotected
+   //    flight (HelloRetryRequest).
+   const bool is_client = m_record_layer->side() == Connection_Side::Client;
+
+   if(flight.send_ccs() && is_client) {
+      send_dummy_change_cipher_spec();
+   }
+   bool ccs_pending = flight.send_ccs() && !is_client;
+
+   // Now, we go through all messages of the flight, grouping them into
+   // two runs, one for the unprotected messages and one for the
+   // protected messages.
+   auto current_prepared = MarshalledHandshakeMessageFlight();
+   bool protect_current_prepared = false;
+
+   auto prepare_and_flush_current_prepared = [&]() {
+      if(current_prepared.get().empty()) {
+         return;
+      }
+
+      // Messages with a desired_epoch Unprotected must go out in plaintext
+      // records, even if a cipher_state is provided by the caller.
+      auto* run_cipher_state = protect_current_prepared ? cipher_state : nullptr;
+      for(const auto& [record_to_write, _] :
+          m_record_layer->prepare_records(Record_Type::Handshake, current_prepared, run_cipher_state)) {
+         m_callbacks->tls_emit_data(record_to_write);
+      }
+      current_prepared.get().clear();
+   };
 
    // TODO: First figure out how much data we need to fully concatenate, then pre-allocate, then copy.
    for(const auto& msg_info : flight.messages()) {
-      auto& flat = prepared.get();
-      flat.insert(flat.end(), msg_info.header.begin(), msg_info.header.end());
-      flat.insert(flat.end(), msg_info.serialized.begin(), msg_info.serialized.end());
+      // For post-handshake messages, desired_epoch is nullopt
+      const bool protect = !msg_info.desired_epoch.has_value() || *msg_info.desired_epoch > Epoch_Number::Unprotected;
+      if(!current_prepared.get().empty() && protect != protect_current_prepared) {
+         prepare_and_flush_current_prepared();
+         if(ccs_pending) {
+            // Transition unprotected->protected, this is where we send the dummy CCS if still pending
+            send_dummy_change_cipher_spec();
+            ccs_pending = false;
+         }
+      }
+      protect_current_prepared = protect;
+
+      current_prepared.get().insert(current_prepared.get().end(), msg_info.header.begin(), msg_info.header.end());
+      current_prepared.get().insert(
+         current_prepared.get().end(), msg_info.serialized.begin(), msg_info.serialized.end());
    }
 
-   // TODO: Pass the Flight straight into the record layer to optimize the number of data copies
-   for(const auto& [record_to_write, _] :
-       m_record_layer->prepare_records(Record_Type::Handshake, prepared, cipher_state)) {
-      m_callbacks->tls_emit_data(record_to_write);
+   prepare_and_flush_current_prepared();
+
+   if(ccs_pending) {
+      // all-unprotected flight (HelloRetryRequest)
+      BOTAN_STATE_CHECK(cipher_state == nullptr);
+      send_dummy_change_cipher_spec();
    }
+}
+
+void TLS_Channel_IO::send_dummy_change_cipher_spec() {
+   static constexpr std::array<uint8_t, 1> dummy_ccs = {0x01};
+   send_records(Record_Type::ChangeCipherSpec, dummy_ccs, nullptr);
 }
 
 void TLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) {
