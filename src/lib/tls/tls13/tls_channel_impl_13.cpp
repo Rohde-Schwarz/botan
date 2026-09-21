@@ -96,7 +96,9 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
 
       m_channel_io->ingest_records(data);
 
-      while(true) {
+      std::optional<size_t> res;
+
+      while(!res.has_value()) {
          // RFC 8446 6.1
          //    Any data received after a closure alert has been received MUST be ignored.
          //
@@ -105,18 +107,15 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
             return 0;
          }
 
-         const auto bytes_needed = std::visit(
-            overloaded{[](BytesNeeded bytes) -> std::optional<size_t> { return bytes; },
-                       [&](auto&& receive_event) -> std::optional<size_t> {
-                          return process_event(std::forward<decltype(receive_event)>(receive_event));
-                       }},
+         res = std::visit(
+            overloaded{
+               [](BytesNeeded bytes) -> std::optional<size_t> { return bytes; },
+               [&]<typename T>(T&& event) -> std::optional<size_t> { return process_event(std::forward<T>(event)); },
+            },
             m_channel_io->next_receive_event(m_cipher_state.get(), m_transcript_hash.get(), is_handshake_complete()));
-
-         if(bytes_needed.has_value()) {
-            return bytes_needed.value();
-         }
-         // else: Continue loop
       }
+
+      return res.value();
 
    } catch(TLS_Exception& e) {
       send_fatal_alert(e.type());

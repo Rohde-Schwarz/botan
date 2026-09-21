@@ -101,6 +101,8 @@ class DTLS_Channel_IO : public Channel_IO {
 
       void maybe_cancel_dtls_acknowledgement_timer();
 
+      void process_handshake_record(Record_Content record);
+
       DTLS_Record_Layer& record_layer();
       const DTLS_Record_Layer& record_layer() const;
       DTLS_Handshake_Layer& handshake_layer();
