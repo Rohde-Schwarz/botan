@@ -101,6 +101,7 @@ class Client_Impl_13 final : public Channel_Impl_13 {
 
       void maybe_log_secret(std::string_view label, std::span<const uint8_t> secret) const override;
       bool compat_mode_ccs_requested() const override;
+      bool compat_mode_ccs_needed_before_alert() const override;
 
       using Channel_Impl_13::handle;
       void handle(const Server_Hello_12_Shim& server_hello_msg);
@@ -114,7 +115,7 @@ class Client_Impl_13 final : public Channel_Impl_13 {
       void handle(const Finished_13& finished_msg);
       void handle(const New_Session_Ticket_13& new_session_ticket);
 
-      Flight create_client_authentication_flight();
+      void create_client_authentication_flight(Flight& flight);
       std::optional<Session_with_Handle> find_session_for_resumption();
 
    private:
