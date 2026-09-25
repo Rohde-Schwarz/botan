@@ -126,7 +126,8 @@ size_t Server_Impl_13::send_new_session_tickets(const size_t tickets) {
    if(tickets == 0) {
       return 0;
    }
-   auto flight = Flight(Flight::PostHandshake::Yes);
+
+   PostHandshakeFlight flight;
    size_t tickets_created = 0;
 
    BOTAN_STATE_CHECK(m_active_state.has_value());

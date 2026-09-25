@@ -20,8 +20,10 @@ namespace Botan::TLS {
  * The class keeps score of the contained messages. It does not marshal
  * them.
  */
-class Flight final {
+class Flight {
    public:
+      enum class PostHandshake : bool { No = false, Yes = true };
+
       struct Dummy_ChangeCipherSpec {};
 
       struct Message_Info {
@@ -33,10 +35,11 @@ class Flight final {
 
       using Message = std::variant<Dummy_ChangeCipherSpec, Message_Info>;
 
-      enum class PostHandshake : bool { No = false, Yes = true };
+   protected:
+      explicit Flight(PostHandshake post_handshake) : m_post_handshake(post_handshake) {}
 
    public:
-      explicit Flight(PostHandshake post_handshake = PostHandshake::No) : m_post_handshake(post_handshake) {}
+      Flight() : Flight(PostHandshake::No) {}
 
       Flight(const Flight& other) = delete;
       Flight(Flight&& other) = default;
@@ -60,6 +63,29 @@ class Flight final {
       void add_dummy_change_cipher_spec();
 
       /**
+       * Extract the messages from the flight for sending. This invalidates the
+       * flight object and it cannot be used anymore.
+       */
+      std::vector<Message> commit();
+
+   protected:
+      PostHandshake m_post_handshake;   // NOLINT(*-non-private-member-variables-in-classes)
+      std::vector<Message> m_messages;  // NOLINT(*-non-private-member-variables-in-classes)
+};
+
+/**
+ * Helper class to coalesce post-handshake messages into a TLS flight.
+ */
+class PostHandshakeFlight final : public Flight {
+   public:
+      PostHandshakeFlight() : Flight(PostHandshake::Yes) {}
+
+   public:
+      void add(Handshake_Message_13_Ref msg, Transcript_Hash_State& transcript_hash, Callbacks& callbacks) = delete;
+      void add_dummy_change_cipher_spec() = delete;
+
+   public:
+      /**
        * Add @p msg to the flight, letting the user
        * inspect the message via @p callbacks. Use this variant of `add` to add
        * post-handshake messages. For handshake messages, the transcript hash
@@ -67,16 +93,6 @@ class Flight final {
        * used in that case.
        */
       void add(Post_Handshake_Message_13 msg, Callbacks& callbacks);
-
-      /**
-       * Extract the messages from the flight for sending. This invalidates the
-       * flight object and it cannot be used anymore.
-       */
-      std::vector<Message> commit();
-
-   private:
-      PostHandshake m_post_handshake;
-      std::vector<Message> m_messages;
 };
 
 }  // namespace Botan::TLS

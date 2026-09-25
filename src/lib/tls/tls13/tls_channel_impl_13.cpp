@@ -263,7 +263,12 @@ void Flight::add(const Handshake_Message_13_Ref message, Transcript_Hash_State& 
       message);
 }
 
-void Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) {
+void Flight::add_dummy_change_cipher_spec() {
+   BOTAN_STATE_CHECK(m_post_handshake == PostHandshake::No);
+   m_messages.push_back(Dummy_ChangeCipherSpec{});
+}
+
+void PostHandshakeFlight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) {
    BOTAN_STATE_CHECK(m_post_handshake == PostHandshake::Yes);
    std::visit(
       [&](const auto& msg) {
@@ -275,11 +280,6 @@ void Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) 
                                                 PostHandshake::Yes));
       },
       message);
-}
-
-void Flight::add_dummy_change_cipher_spec() {
-   BOTAN_STATE_CHECK(m_post_handshake == PostHandshake::No);
-   m_messages.push_back(Dummy_ChangeCipherSpec{});
 }
 
 namespace {
