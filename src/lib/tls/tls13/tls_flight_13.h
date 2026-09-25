@@ -12,8 +12,14 @@
 #include <botan/tls_magic.h>
 #include <botan/tls_messages_13.h>
 #include <botan/internal/tls_types_13.h>
+#include <optional>
+#include <variant>
+#include <vector>
 
 namespace Botan::TLS {
+
+class Callbacks;
+class Transcript_Hash_State;
 
 /**
  * Helper class to coalesce handshake messages into a TLS flight.
