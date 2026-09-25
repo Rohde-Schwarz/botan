@@ -402,7 +402,8 @@ void Channel_Impl_13::send_alert(const Alert& alert) {
          // handshake (e.g., from a failing certificate verification or a
          // throwing callback).
          if(compat_mode_ccs_requested() && compat_mode_ccs_needed_before_alert()) {
-            m_channel_io->send_dummy_change_cipher_spec();
+            static constexpr std::array<uint8_t, 1> dummy_ccs = {0x01};
+            send_record(Record_Type::ChangeCipherSpec, dummy_ccs);
          }
 
          send_record(Record_Type::Alert, alert.serialize());
