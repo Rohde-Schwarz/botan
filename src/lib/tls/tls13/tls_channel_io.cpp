@@ -23,7 +23,7 @@ void TLS_Channel_IO::send_records(Record_Type record_type,
    }
 }
 
-void TLS_Channel_IO::send(Flight flight, Cipher_State* cipher_state) {
+void TLS_Channel_IO::send_flight(std::vector<Flight::Message> flight, Cipher_State* cipher_state) {
    // TODO: Pass the Flight straight into the record layer to optimize the number of data copies
 
    // Now, we go through all messages of the flight, grouping them into
@@ -48,7 +48,7 @@ void TLS_Channel_IO::send(Flight flight, Cipher_State* cipher_state) {
       msgs.get().clear();
    };
 
-   for(const auto& msg_info : flight.messages()) {
+   for(const auto& msg_info : flight) {
       std::visit(  //
          overloaded{
             [&](const Flight::Dummy_ChangeCipherSpec&) {

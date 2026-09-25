@@ -52,12 +52,12 @@ void DTLS_Channel_IO::send_records(Record_Type record_type,
    }
 }
 
-void DTLS_Channel_IO::send(Flight flight, Cipher_State* cipher_state) {
+void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight, Cipher_State* cipher_state) {
    const auto max_payload_size = m_record_layer->record_payload_size_limit(*m_policy, cipher_state);
 
    auto prepared_records = std::vector<MarshalledRecordAndNumber>{};
 
-   for(const auto& msg_info : flight.messages()) {
+   for(const auto& msg_info : flight) {
       std::visit(  //
          overloaded{
             [&](const Flight::Message_Info& msg_info) {

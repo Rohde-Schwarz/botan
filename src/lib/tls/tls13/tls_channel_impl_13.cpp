@@ -282,15 +282,27 @@ void Flight::add_dummy_change_cipher_spec() {
    m_messages.push_back(Dummy_ChangeCipherSpec{});
 }
 
-bool Flight::valid_message_sequence() const {
+namespace {
+
+/**
+ * Ensures that the constructed flight sequence is legal. In a sense that,
+ * unprotected messages (if any) always come first and never after any
+ * protected message. Dummy cipher specs don't interleave with protected
+ * messages, and post-handshake flights never contain dummy cipher specs or
+ * statically pinned epochs.
+ *
+ * @throws Internal_Error if the flight message sequence is illegal
+ * @returns true if the flight message sequence is legal
+ */
+bool valid_message_sequence(std::span<const Flight::Message> flight, Flight::PostHandshake post_handshake) {
    bool in_protected_portion = false;
    bool change_cipher_spec_seen = false;
 
-   for(const auto& msg_info : m_messages) {
+   for(const auto& msg_info : flight) {
       std::visit(  //
          overloaded{
-            [&](const Dummy_ChangeCipherSpec&) {
-               if(m_post_handshake == PostHandshake::Yes) {
+            [&](const Flight::Dummy_ChangeCipherSpec&) {
+               if(post_handshake == Flight::PostHandshake::Yes) {
                   throw Internal_Error("Flight contains a dummy ChangeCipherSpec in a post-handshake flight");
                }
                if(change_cipher_spec_seen) {
@@ -302,12 +314,11 @@ bool Flight::valid_message_sequence() const {
 
                change_cipher_spec_seen = true;
             },
-            [&](const Message_Info& msg_info) {
-               const bool post_handshake = (m_post_handshake == PostHandshake::Yes);
+            [&](const Flight::Message_Info& msg_info) {
                const bool static_epoch = msg_info.epoch.has_value();
                const bool protected_message = static_epoch && msg_info.epoch != Epoch_Number::Unprotected;
 
-               if(post_handshake) {
+               if(post_handshake == Flight::PostHandshake::Yes) {
                   if(static_epoch) {
                      throw Internal_Error("Post-handshake flight contains a message with a pre-defined epoch");
                   }
@@ -327,6 +338,13 @@ bool Flight::valid_message_sequence() const {
    }
 
    return true;
+}
+
+}  // namespace
+
+std::vector<Flight::Message> Flight::commit() {
+   BOTAN_DEBUG_ASSERT(valid_message_sequence(m_messages, m_post_handshake));
+   return std::exchange(m_messages, {});
 }
 
 void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
@@ -503,13 +521,12 @@ void Channel_Impl_13::send_record(Record_Type record_type, std::span<const uint8
    m_channel_io->send_records(record_type, payload, cipher_state);
 }
 
-void Channel_Impl_13::send(Flight flight) {
+void Channel_Impl_13::send_flight(std::vector<Flight::Message> flight) {
    BOTAN_STATE_CHECK(!flight.empty());
    BOTAN_STATE_CHECK(!is_downgrading());
    BOTAN_STATE_CHECK(m_can_write);
-   BOTAN_DEBUG_ASSERT(flight.valid_message_sequence());
 
-   m_channel_io->send(std::move(flight), m_cipher_state.get());
+   m_channel_io->send_flight(std::move(flight), m_cipher_state.get());
 }
 
 void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
