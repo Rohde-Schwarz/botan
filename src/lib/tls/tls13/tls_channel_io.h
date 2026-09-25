@@ -64,8 +64,6 @@ class Channel_IO {
                                 Cipher_State* cipher_state) = 0;
       virtual void send(Flight flight, Cipher_State* cipher_state) = 0;
 
-      virtual void send_dummy_change_cipher_spec() = 0;
-
       virtual void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) = 0;
 
       virtual void ingest_records(std::span<const uint8_t> data) = 0;
@@ -244,8 +242,6 @@ class TLS_Channel_IO final : public Channel_IO {
       void send(Flight flight, Cipher_State* cipher_state) override;
 
       void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) override;
-
-      void send_dummy_change_cipher_spec() override;
 
       void ingest_records(std::span<const uint8_t> data) override { m_record_layer->copy_data(data); }
 

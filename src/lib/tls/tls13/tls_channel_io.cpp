@@ -58,7 +58,8 @@ void TLS_Channel_IO::send(Flight flight, Cipher_State* cipher_state) {
                prepare_and_flush_current_prepared(false /* no protection */);
 
                // Then send the dummy CCS record.
-               send_dummy_change_cipher_spec();
+               static constexpr std::array<uint8_t, 1> dummy_ccs = {0x01};
+               send_records(Record_Type::ChangeCipherSpec, dummy_ccs, nullptr);
             },
             [&](const Flight::Message_Info& msg_info) {
                const bool protect = !msg_info.epoch.has_value() || msg_info.epoch > Epoch_Number::Unprotected;
@@ -86,11 +87,6 @@ void TLS_Channel_IO::send(Flight flight, Cipher_State* cipher_state) {
    // After we have processed all messages of the given flight, flush the last
    // run of messages (if any).
    prepare_and_flush_current_prepared(protect_current_msgs);
-}
-
-void TLS_Channel_IO::send_dummy_change_cipher_spec() {
-   static constexpr std::array<uint8_t, 1> dummy_ccs = {0x01};
-   send_records(Record_Type::ChangeCipherSpec, dummy_ccs, nullptr);
 }
 
 void TLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) {
