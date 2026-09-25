@@ -64,6 +64,8 @@ class Server_Impl_13 final : public Channel_Impl_13 {
       void handle_reply_to_client_hello(Hello_Retry_Request hello_retry_request);
 
       bool compat_mode_ccs_requested() const override;
+      bool compat_mode_ccs_needed_before_alert() const override;
+
       void maybe_log_secret(std::string_view label, std::span<const uint8_t> secret) const override;
 
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)

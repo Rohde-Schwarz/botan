@@ -169,6 +169,7 @@ class Channel_Impl_13 : public Channel_Impl,
       virtual void process_dummy_change_cipher_spec() = 0;
 
       virtual bool compat_mode_ccs_requested() const = 0;
+      virtual bool compat_mode_ccs_needed_before_alert() const = 0;
 
       void handle(const Key_Update& key_update);
 

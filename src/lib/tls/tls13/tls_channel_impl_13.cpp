@@ -183,40 +183,150 @@ void Channel_Impl_13::handle(const Key_Update& key_update) {
    }
 }
 
-Flight::Message_Info::Message_Info(Handshake_Type handshake_type,
-                                   SerializedHandshakeMessage serialized_message /* NOLINT(*-value-param) */,
-                                   std::optional<Epoch_Number> epoch) :
-      type(handshake_type),
-      header(prepare_tls_handshake_header(handshake_type, serialized_message)),
-      serialized(std::move(serialized_message)),
-      desired_epoch(epoch) {}
+namespace {
 
-void Flight::add(Epoch_Number desired_epoch,
-                 const Handshake_Message_13_Ref message,
-                 Transcript_Hash_State& transcript_hash,
-                 Callbacks& callbacks) {
-   BOTAN_STATE_CHECK(desired_epoch <= Epoch_Number::HandshakeTraffic);
+std::optional<Epoch_Number> epoch_for_handshake_type(Handshake_Type handshake_type,
+                                                     const Flight::PostHandshake post_handshake) {
+   // Post-handshake messages are encrypted with whatever application traffic
+   // epoch that is currently active, we can't determine this statically.
+   if(post_handshake == Flight::PostHandshake::Yes) {
+      return std::nullopt;
+   }
+
+   // RFC 9846 2.  Figure 1 as well as RFC 9846 2.3 Figure 4
+   switch(handshake_type) {
+      using enum Handshake_Type;
+
+      case ClientHello:
+      case ServerHello:
+      case HelloRetryRequest:
+         return Epoch_Number::Unprotected;
+
+      case EncryptedExtensions:
+      case Certificate:
+      case CertificateRequest:
+      case CertificateVerify:
+      case Finished:
+         return Epoch_Number::HandshakeTraffic;
+
+      case EndOfEarlyData:
+         return Epoch_Number::EarlyTraffic;
+
+      case NewSessionTicket:
+      case KeyUpdate:
+         // KeyUpdate and NewSessionTicket are always post-handshake messages,
+         // so this function should never reach here (but return early with
+         // std::nullopt above).
+         BOTAN_ASSERT_UNREACHABLE();
+
+      case HelloRequest:
+      case HelloVerifyRequest:
+      case ServerKeyExchange:
+      case ServerHelloDone:
+      case ClientKeyExchange:
+      case CertificateUrl:
+      case CertificateStatus:
+      case HandshakeCCS:
+      case None:
+         // These messages are not used in TLS 1.3, hence, no TLS 1.3 flight
+         // should ever be constructed with one of these messages.
+         BOTAN_ASSERT_UNREACHABLE();
+   }
+}
+
+Flight::Message_Info make_message_info(Handshake_Type handshake_type,
+                                       SerializedHandshakeMessage serialized_message,
+                                       const Flight::PostHandshake post_handshake) {
+   return {
+      .type = handshake_type,
+      .epoch = epoch_for_handshake_type(handshake_type, post_handshake),
+      .header = prepare_tls_handshake_header(handshake_type, serialized_message),
+      .serialized = std::move(serialized_message),
+   };
+}
+
+}  // namespace
+
+void Flight::add(const Handshake_Message_13_Ref message, Transcript_Hash_State& transcript_hash, Callbacks& callbacks) {
+   BOTAN_STATE_CHECK(m_post_handshake == PostHandshake::No);
    std::visit(
       [&](const auto msg) {
          callbacks.tls_inspect_handshake_msg(msg.get());
 
-         // TODO: Handshake_Message::serialize() should return the strong type
-         const auto& m = m_messages.emplace_back(
-            msg.get().wire_type(), SerializedHandshakeMessage(msg.get().serialize()), desired_epoch);
-         transcript_hash.update(m.header, m.serialized);
+         auto msg_info = make_message_info(msg.get().wire_type(),
+                                           // TODO: Handshake_Message::serialize() should return the strong type
+                                           SerializedHandshakeMessage(msg.get().serialize()),
+                                           PostHandshake::No);
+         transcript_hash.update(msg_info.header, msg_info.serialized);
+         m_messages.push_back(std::move(msg_info));
       },
       message);
 }
 
 void Flight::add(const Post_Handshake_Message_13 message, Callbacks& callbacks) {
+   BOTAN_STATE_CHECK(m_post_handshake == PostHandshake::Yes);
    std::visit(
       [&](const auto& msg) {
          callbacks.tls_inspect_handshake_msg(msg);
 
-         // TODO: Handshake_Message::serialize() should return the strong type
-         m_messages.emplace_back(msg.wire_type(), SerializedHandshakeMessage(msg.serialize()), std::nullopt);
+         m_messages.push_back(make_message_info(msg.wire_type(),
+                                                // TODO: Handshake_Message::serialize() should return the strong type
+                                                SerializedHandshakeMessage(msg.serialize()),
+                                                PostHandshake::Yes));
       },
       message);
+}
+
+void Flight::add_dummy_change_cipher_spec() {
+   BOTAN_STATE_CHECK(m_post_handshake == PostHandshake::No);
+   m_messages.push_back(Dummy_ChangeCipherSpec{});
+}
+
+bool Flight::valid_message_sequence() const {
+   bool in_protected_portion = false;
+   bool change_cipher_spec_seen = false;
+
+   for(const auto& msg_info : m_messages) {
+      std::visit(  //
+         overloaded{
+            [&](const Dummy_ChangeCipherSpec&) {
+               if(m_post_handshake == PostHandshake::Yes) {
+                  throw Internal_Error("Flight contains a dummy ChangeCipherSpec in a post-handshake flight");
+               }
+               if(change_cipher_spec_seen) {
+                  throw Internal_Error("Flight contains multiple dummy ChangeCipherSpec messages");
+               }
+               if(in_protected_portion) {
+                  throw Internal_Error("Flight contains a dummy ChangeCipherSpec after a protected message");
+               }
+
+               change_cipher_spec_seen = true;
+            },
+            [&](const Message_Info& msg_info) {
+               const bool post_handshake = (m_post_handshake == PostHandshake::Yes);
+               const bool static_epoch = msg_info.epoch.has_value();
+               const bool protected_message = static_epoch && msg_info.epoch != Epoch_Number::Unprotected;
+
+               if(post_handshake) {
+                  if(static_epoch) {
+                     throw Internal_Error("Post-handshake flight contains a message with a pre-defined epoch");
+                  }
+               } else {
+                  if(!static_epoch) {
+                     throw Internal_Error("Handshake messages must have a pre-defined epoch");
+                  }
+                  if(protected_message) {
+                     in_protected_portion = true;
+                  } else if(in_protected_portion) {
+                     throw Internal_Error("Flight contains an unprotected message after a protected message");
+                  }
+               }
+            },
+         },
+         msg_info);
+   }
+
+   return true;
 }
 
 void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
@@ -284,6 +394,17 @@ void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
 void Channel_Impl_13::send_alert(const Alert& alert) {
    if(alert.is_valid() && m_can_write) {
       try {
+         // RFC 9846 E.4
+         //    [...] the client sends a dummy change_cipher_spec record [...]
+         //    immediately before its second flight.
+         //
+         // This is true also if the second flight is an alert aborting the
+         // handshake (e.g., from a failing certificate verification or a
+         // throwing callback).
+         if(compat_mode_ccs_requested() && compat_mode_ccs_needed_before_alert()) {
+            m_channel_io->send_dummy_change_cipher_spec();
+         }
+
          send_record(Record_Type::Alert, alert.serialize());
       } catch(...) { /* swallow it */
       }
@@ -382,9 +503,10 @@ void Channel_Impl_13::send_record(Record_Type record_type, std::span<const uint8
 }
 
 void Channel_Impl_13::send(Flight flight) {
-   BOTAN_STATE_CHECK(flight.contains_messages());
+   BOTAN_STATE_CHECK(!flight.empty());
    BOTAN_STATE_CHECK(!is_downgrading());
    BOTAN_STATE_CHECK(m_can_write);
+   BOTAN_DEBUG_ASSERT(flight.valid_message_sequence());
 
    m_channel_io->send(std::move(flight), m_cipher_state.get());
 }

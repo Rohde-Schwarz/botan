@@ -53,20 +53,27 @@ void DTLS_Channel_IO::send_records(Record_Type record_type,
 }
 
 void DTLS_Channel_IO::send(Flight flight, Cipher_State* cipher_state) {
-   // RFC 9147 5
-   //    DTLS implementations do not use the TLS 1.3 "compatibility mode" [...].
-   BOTAN_ASSERT_NOMSG(!flight.send_ccs());
-
    const auto max_payload_size = m_record_layer->record_payload_size_limit(*m_policy, cipher_state);
 
    auto prepared_records = std::vector<MarshalledRecordAndNumber>{};
 
    for(const auto& msg_info : flight.messages()) {
-      auto frags = handshake_layer().fragment_message(msg_info.type, msg_info.serialized, max_payload_size);
-
-      auto records = record_layer().prepare_records(frags, cipher_state, msg_info.desired_epoch);
-      prepared_records.insert(
-         prepared_records.end(), std::make_move_iterator(records.begin()), std::make_move_iterator(records.end()));
+      std::visit(  //
+         overloaded{
+            [&](const Flight::Message_Info& msg_info) {
+               auto frags = handshake_layer().fragment_message(msg_info.type, msg_info.serialized, max_payload_size);
+               auto records = record_layer().prepare_records(frags, cipher_state, msg_info.epoch);
+               prepared_records.insert(prepared_records.end(),
+                                       std::make_move_iterator(records.begin()),
+                                       std::make_move_iterator(records.end()));
+            },
+            [](const Flight::Dummy_ChangeCipherSpec&) {
+               // RFC 9147 5
+               //    DTLS implementations do not use the TLS 1.3 "compatibility mode" [...].
+               BOTAN_ASSERT_UNREACHABLE();
+            },
+         },
+         msg_info);
    }
 
    for(const auto& [record_to_write, _] : prepared_records) {

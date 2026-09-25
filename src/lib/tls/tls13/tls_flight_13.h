@@ -22,30 +22,21 @@ namespace Botan::TLS {
  */
 class Flight final {
    public:
+      struct Dummy_ChangeCipherSpec {};
+
       struct Message_Info {
-            Handshake_Type type;                    // NOLINT(*non-private-member-variable*)
-            HandshakeProtocolHeader header;         // NOLINT(*non-private-member-variable*)
-            SerializedHandshakeMessage serialized;  // NOLINT(*non-private-member-variable*)
-
-            /// Set for handshake messages to differentiate between Unprotected
-            /// and HandshakeTraffic, allowing one flight to contain messages
-            /// from different epochs. For post-handshake messages, this is
-            /// always std::nullopt.
-            std::optional<Epoch_Number> desired_epoch;  // NOLINT(*non-private-member-variable*)
-
-            Message_Info(Handshake_Type type,
-                         SerializedHandshakeMessage serialized_message,
-                         std::optional<Epoch_Number> desired_epoch);
+            Handshake_Type type;
+            std::optional<Epoch_Number> epoch;
+            HandshakeProtocolHeader header;
+            SerializedHandshakeMessage serialized;
       };
 
+      using Message = std::variant<Dummy_ChangeCipherSpec, Message_Info>;
+
+      enum class PostHandshake : bool { No = false, Yes = true };
+
    public:
-      /**
-       * Create an empty flight that can be filled with add().
-       * If @p send_ccs is true, a dummy ChangeCipherSpec record will
-       * also be put into the outgoing record stream for middlebox
-       * compatibility.
-       */
-      explicit Flight(bool send_ccs = false) : m_send_ccs(send_ccs) {}
+      explicit Flight(PostHandshake post_handshake = PostHandshake::No) : m_post_handshake(post_handshake) {}
 
       Flight(const Flight& other) = delete;
       Flight(Flight&& other) = default;
@@ -54,35 +45,19 @@ class Flight final {
       ~Flight() = default;
 
       /**
-       * Create a flight from a single handshake message  under
-       *  @p desired_epoch, updating @p transcript_hash in the process and
-       * letting the user inspect the message via @p callbacks.
-       * If @p send_ccs is true, a dummy ChangeCipherSpec record will
-       * also be put into the outgoing record stream for middlebox
-       * compatibility.
+       * Add @p msg to the flight, updating @p transcript_hash in the process and
+       * letting the user inspect the message via @p callbacks. Use this variant
+       * of `add` to add handshake messages where the transcript hash needs to be
+       * updated. For post-handshake messages, the corresponding `add()` variant
+       * without a transcript hash needs to be used.
        */
-      static Flight from_message(Epoch_Number desired_epoch,
-                                 Handshake_Message_13_Ref msg,
-                                 Transcript_Hash_State& transcript_hash,
-                                 Callbacks& callbacks,
-                                 bool send_ccs = false) {
-         Flight flight(send_ccs);
-         flight.add(desired_epoch, msg, transcript_hash, callbacks);
-         return flight;
-      }
+      void add(Handshake_Message_13_Ref msg, Transcript_Hash_State& transcript_hash, Callbacks& callbacks);
 
       /**
-       * Add @p msg to the flight under @p desired_epoch, updating @p
-       * transcript_hash in the process and letting the user inspect the message
-       * via @p callbacks. Use this variant of `add` to add handshake messages
-       * where the transcript hash needs to be updated. For post-handshake
-       * messages, the corresponding `add()` variant without a transcript hash
-       * needs to be used.
+       * Add a dummy ChangeCipherSpec message to the flight when following the
+       * compatibility mode for TLS 1.3. See RFC 9846 E.4 for details.
        */
-      void add(Epoch_Number desired_epoch,
-               Handshake_Message_13_Ref msg,
-               Transcript_Hash_State& transcript_hash,
-               Callbacks& callbacks);
+      void add_dummy_change_cipher_spec();
 
       /**
        * Add @p msg to the flight, letting the user
@@ -93,18 +68,25 @@ class Flight final {
        */
       void add(Post_Handshake_Message_13 msg, Callbacks& callbacks);
 
-      bool contains_messages() const { return !m_messages.empty(); }
+      bool empty() const { return m_messages.empty(); }
 
-      bool empty() const { return !contains_messages(); }
+      /**
+       * Ensures that the constructed flight sequence is legal. In a sense that,
+       * unprotected messages (if any) always come first and never after any
+       * protected message. Dummy cipher specs don't interleave with protected
+       * messages, and post-handshake flights never contain dummy cipher specs or
+       * statically pinned epochs.
+       *
+       * @throws Internal_Error if the flight message sequence is illegal
+       * @returns true if the flight message sequence is legal
+       */
+      bool valid_message_sequence() const;
 
-      const std::vector<Message_Info>& messages() const { return m_messages; }
-
-      bool send_ccs() const { return m_send_ccs; }
+      std::span<const Message> messages() const { return m_messages; }
 
    private:
-      std::vector<Message_Info> m_messages;
-
-      bool m_send_ccs;
+      PostHandshake m_post_handshake;
+      std::vector<Message> m_messages;
 };
 
 }  // namespace Botan::TLS

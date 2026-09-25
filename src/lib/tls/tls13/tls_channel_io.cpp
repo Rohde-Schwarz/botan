@@ -26,66 +26,66 @@ void TLS_Channel_IO::send_records(Record_Type record_type,
 void TLS_Channel_IO::send(Flight flight, Cipher_State* cipher_state) {
    // TODO: Pass the Flight straight into the record layer to optimize the number of data copies
 
-   // RFC 9846 E.4 placement:
-   //  - client: immediately before its second flight (second ClientHello
-   //    or the encrypted handshake flight).
-   //  - server: immediately after its first handshake message, i.e., at the
-   //    unprotected -> protected transition, or after an all-unprotected
-   //    flight (HelloRetryRequest).
-   const bool is_client = m_record_layer->side() == Connection_Side::Client;
-
-   if(flight.send_ccs() && is_client) {
-      send_dummy_change_cipher_spec();
-   }
-   bool ccs_pending = flight.send_ccs() && !is_client;
-
    // Now, we go through all messages of the flight, grouping them into
    // two runs, one for the unprotected messages and one for the
    // protected messages.
-   auto current_prepared = MarshalledHandshakeMessageFlight();
-   bool protect_current_prepared = false;
+   bool protect_current_msgs = false;
+   auto msgs = MarshalledHandshakeMessageFlight();
 
-   auto prepare_and_flush_current_prepared = [&]() {
-      if(current_prepared.get().empty()) {
+   auto prepare_and_flush_current_prepared = [&](bool protect) {
+      if(msgs.get().empty()) {
          return;
       }
 
-      // Messages with a desired_epoch Unprotected must go out in plaintext
-      // records, even if a cipher_state is provided by the caller.
-      auto* run_cipher_state = protect_current_prepared ? cipher_state : nullptr;
-      for(const auto& [record_to_write, _] :
-          m_record_layer->prepare_records(Record_Type::Handshake, current_prepared, run_cipher_state)) {
+      BOTAN_ASSERT_IMPLICATION(
+         protect, cipher_state != nullptr, "Cipher State is available when messages require protection");
+      auto* cs = protect ? cipher_state : nullptr;
+
+      for(const auto& [record_to_write, _] : m_record_layer->prepare_records(Record_Type::Handshake, msgs, cs)) {
          m_callbacks->tls_emit_data(record_to_write);
       }
-      current_prepared.get().clear();
+
+      msgs.get().clear();
    };
 
-   // TODO: First figure out how much data we need to fully concatenate, then pre-allocate, then copy.
    for(const auto& msg_info : flight.messages()) {
-      // For post-handshake messages, desired_epoch is nullopt
-      const bool protect = !msg_info.desired_epoch.has_value() || *msg_info.desired_epoch > Epoch_Number::Unprotected;
-      if(!current_prepared.get().empty() && protect != protect_current_prepared) {
-         prepare_and_flush_current_prepared();
-         if(ccs_pending) {
-            // Transition unprotected->protected, this is where we send the dummy CCS if still pending
-            send_dummy_change_cipher_spec();
-            ccs_pending = false;
-         }
-      }
-      protect_current_prepared = protect;
+      std::visit(  //
+         overloaded{
+            [&](const Flight::Dummy_ChangeCipherSpec&) {
+               // We reached a dummy CCS. Before that only unprotected
+               // messages were allowed. Flush those (if any).
+               BOTAN_STATE_CHECK(!protect_current_msgs);
+               prepare_and_flush_current_prepared(false /* no protection */);
 
-      current_prepared.get().insert(current_prepared.get().end(), msg_info.header.begin(), msg_info.header.end());
-      current_prepared.get().insert(
-         current_prepared.get().end(), msg_info.serialized.begin(), msg_info.serialized.end());
+               // Then send the dummy CCS record.
+               send_dummy_change_cipher_spec();
+            },
+            [&](const Flight::Message_Info& msg_info) {
+               const bool protect = !msg_info.epoch.has_value() || msg_info.epoch > Epoch_Number::Unprotected;
+
+               if(!protect) {
+                  // Once we have reached the first protected message, all
+                  // subsequent messages must be protected as well.
+                  BOTAN_ASSERT_NOMSG(!protect_current_msgs);
+               } else if(!protect_current_msgs) {
+                  // We reached the first protected message. Flush the
+                  // unprotected ones (if any).
+                  prepare_and_flush_current_prepared(false /* no protection */);
+                  BOTAN_DEBUG_ASSERT(msgs.empty());
+                  protect_current_msgs = true;
+               }
+
+               // Collect marshalled messages into the current run.
+               msgs.get().insert(msgs.get().end(), msg_info.header.begin(), msg_info.header.end());
+               msgs.get().insert(msgs.get().end(), msg_info.serialized.begin(), msg_info.serialized.end());
+            },
+         },
+         msg_info);
    }
 
-   prepare_and_flush_current_prepared();
-
-   if(ccs_pending) {
-      // all-unprotected flight (HelloRetryRequest)
-      BOTAN_STATE_CHECK(cipher_state == nullptr);
-      send_dummy_change_cipher_spec();
-   }
+   // After we have processed all messages of the given flight, flush the last
+   // run of messages (if any).
+   prepare_and_flush_current_prepared(protect_current_msgs);
 }
 
 void TLS_Channel_IO::send_dummy_change_cipher_spec() {
