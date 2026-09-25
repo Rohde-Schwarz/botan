@@ -14,6 +14,7 @@
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_channel_impl.h>
 #include <botan/internal/tls_connection_state_13.h>
+#include <botan/internal/tls_flight_13.h>
 #include <botan/internal/tls_handshake_layer_13.h>
 #include <botan/internal/tls_record_layer_13.h>
 
@@ -22,7 +23,6 @@ namespace Botan::TLS {
 class Cipher_State;
 class Transcript_Hash_State;
 class Channel_IO;
-class Flight;
 
 /**
  * Encapsulates the callbacks in the state machine described in RFC 8446 7.1,
@@ -193,7 +193,7 @@ class Channel_Impl_13 : public Channel_Impl,
       bool is_datagram() const { return m_flavor == TLS_Flavor::DTLS; }
 
       void send_record(Record_Type record_type, std::span<const uint8_t> payload);
-      void send(Flight flight);
+      void send_flight(std::vector<Flight::Message> flight);
 
    private:
       void process_alert(const secure_vector<uint8_t>& record);

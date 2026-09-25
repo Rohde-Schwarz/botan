@@ -154,8 +154,8 @@ size_t Server_Impl_13::send_new_session_tickets(const size_t tickets) {
       }
    }
 
-   if(!flight.empty()) {
-      send(std::move(flight));
+   if(tickets_created > 0) {
+      send_flight(flight.commit());
    }
 
    return tickets_created;
@@ -487,7 +487,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
    // Promote cipher state immediately before sending the flight (see comment
    // at declaration of new_cipher_state).
    m_cipher_state = std::move(new_cipher_state);
-   send(std::move(flight));
+   send_flight(flight.commit());
 
    m_cipher_state->advance_with_server_finished(m_transcript_hash->current(), *this);
 
@@ -510,21 +510,18 @@ void Server_Impl_13::handle_reply_to_client_hello(Hello_Retry_Request hello_retr
    auto cipher = Ciphersuite::by_id(hello_retry_request.ciphersuite());
    BOTAN_ASSERT_NOMSG(cipher.has_value());  // should work, since we chose that suite
 
-   auto make_flight = [&] {
-      Flight flight;
-      flight.add(m_handshake->state.sending(std::move(hello_retry_request)), *m_transcript_hash, callbacks());
+   Flight flight;
+   flight.add(m_handshake->state.sending(std::move(hello_retry_request)), *m_transcript_hash, callbacks());
 
-      // RFC 9846 E.4
-      //    The server sends a dummy change_cipher_spec record immediately after
-      //    its first handshake message. This may either be after a ServerHello or
-      //    a HelloRetryRequest.
-      if(compat_mode_ccs_requested()) {
-         flight.add_dummy_change_cipher_spec();
-      }
-      return flight;
-   };
+   // RFC 9846 E.4
+   //    The server sends a dummy change_cipher_spec record immediately after
+   //    its first handshake message. This may either be after a ServerHello or
+   //    a HelloRetryRequest.
+   if(compat_mode_ccs_requested()) {
+      flight.add_dummy_change_cipher_spec();
+   }
 
-   send(make_flight());
+   send_flight(flight.commit());
 
    m_transcript_hash =
       Transcript_Hash_State::recreate_after_hello_retry_request(cipher->prf_algo(), *m_transcript_hash);

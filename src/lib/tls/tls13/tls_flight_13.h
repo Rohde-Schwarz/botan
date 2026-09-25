@@ -68,21 +68,11 @@ class Flight final {
        */
       void add(Post_Handshake_Message_13 msg, Callbacks& callbacks);
 
-      bool empty() const { return m_messages.empty(); }
-
       /**
-       * Ensures that the constructed flight sequence is legal. In a sense that,
-       * unprotected messages (if any) always come first and never after any
-       * protected message. Dummy cipher specs don't interleave with protected
-       * messages, and post-handshake flights never contain dummy cipher specs or
-       * statically pinned epochs.
-       *
-       * @throws Internal_Error if the flight message sequence is illegal
-       * @returns true if the flight message sequence is legal
+       * Extract the messages from the flight for sending. This invalidates the
+       * flight object and it cannot be used anymore.
        */
-      bool valid_message_sequence() const;
-
-      std::span<const Message> messages() const { return m_messages; }
+      std::vector<Message> commit();
 
    private:
       PostHandshake m_post_handshake;
