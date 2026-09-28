@@ -51,15 +51,14 @@ void TLS_Channel_IO::send_flight(std::vector<Flight::Message> flight, Cipher_Sta
    for(const auto& msg_info : flight) {
       std::visit(  //
          overloaded{
-            [&](const Flight::Dummy_ChangeCipherSpec&) {
+            [&](const Flight::Dummy_ChangeCipherSpec& ccs) {
                // We reached a dummy CCS. Before that only unprotected
                // messages were allowed. Flush those (if any).
                BOTAN_STATE_CHECK(!protect_current_msgs);
                prepare_and_flush_current_prepared(false /* no protection */);
 
                // Then send the dummy CCS record.
-               static constexpr std::array<uint8_t, 1> dummy_ccs = {0x01};
-               send_records(Record_Type::ChangeCipherSpec, dummy_ccs, nullptr);
+               send_records(Record_Type::ChangeCipherSpec, ccs.serialized, nullptr);
             },
             [&](const Flight::Message_Info& msg_info) {
                const bool protect = !msg_info.epoch.has_value() || msg_info.epoch > Epoch_Number::Unprotected;

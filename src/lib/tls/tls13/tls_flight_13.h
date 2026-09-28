@@ -22,15 +22,19 @@ class Callbacks;
 class Transcript_Hash_State;
 
 /**
- * Helper class to coalesce handshake messages into a TLS flight.
- * The class keeps score of the contained messages. It does not marshal
- * them.
+ * Helper class to coalesce handshake messages into a TLS flight. The class
+ * keeps score of the contained messages. It does not marshal them.
+ *
+ * Note that this class takes references to transcript hash and callbacks
+ * objects. The caller is responsible for ensuring that these objects remain
+ * valid for the lifetime of the Flight object. The flight object is meant to be
+ * used in a single stack frame and not stored for later use.
  */
 class Flight {
    public:
-      enum class PostHandshake : bool { No = false, Yes = true };
-
-      struct Dummy_ChangeCipherSpec {};
+      struct Dummy_ChangeCipherSpec {
+            static constexpr std::array<uint8_t, 1> serialized = {0x01};
+      };
 
       struct Message_Info {
             Handshake_Type type;
@@ -42,25 +46,26 @@ class Flight {
       using Message = std::variant<Dummy_ChangeCipherSpec, Message_Info>;
 
    protected:
-      explicit Flight(PostHandshake post_handshake) : m_post_handshake(post_handshake) {}
+      Flight(Transcript_Hash_State* transcript_hash, Callbacks* callbacks) :
+            m_transcript_hash(transcript_hash), m_callbacks(callbacks) {}
 
    public:
-      Flight() : Flight(PostHandshake::No) {}
+      Flight(Transcript_Hash_State& transcript_hash, Callbacks& callbacks) : Flight(&transcript_hash, &callbacks) {}
 
       Flight(const Flight& other) = delete;
-      Flight(Flight&& other) = default;
+      Flight(Flight&& other) = delete;
       Flight& operator=(const Flight& other) = delete;
-      Flight& operator=(Flight&& other) = default;
+      Flight& operator=(Flight&& other) = delete;
       ~Flight() = default;
 
       /**
-       * Add @p msg to the flight, updating @p transcript_hash in the process and
-       * letting the user inspect the message via @p callbacks. Use this variant
-       * of `add` to add handshake messages where the transcript hash needs to be
-       * updated. For post-handshake messages, the corresponding `add()` variant
-       * without a transcript hash needs to be used.
+       * Add a @p msg to this flight, updating the transcript hash associated
+       * with this flight and letting the user inspect the message first via the
+       * callbacks.
+       *
+       * @param msg The handshake message to add to the flight
        */
-      void add(Handshake_Message_13_Ref msg, Transcript_Hash_State& transcript_hash, Callbacks& callbacks);
+      void add(Handshake_Message_13_Ref msg);
 
       /**
        * Add a dummy ChangeCipherSpec message to the flight when following the
@@ -75,7 +80,9 @@ class Flight {
       std::vector<Message> commit();
 
    protected:
-      PostHandshake m_post_handshake;   // NOLINT(*-non-private-member-variables-in-classes)
+      Transcript_Hash_State* m_transcript_hash;  // NOLINT(*-non-private-member-variables-in-classes)
+      Callbacks* m_callbacks;                    // NOLINT(*-non-private-member-variables-in-classes)
+
       std::vector<Message> m_messages;  // NOLINT(*-non-private-member-variables-in-classes)
 };
 
@@ -84,7 +91,7 @@ class Flight {
  */
 class PostHandshakeFlight final : public Flight {
    public:
-      PostHandshakeFlight() : Flight(PostHandshake::Yes) {}
+      explicit PostHandshakeFlight(Callbacks& callbacks) : Flight(nullptr, &callbacks) {}
 
    public:
       void add(Handshake_Message_13_Ref msg, Transcript_Hash_State& transcript_hash, Callbacks& callbacks) = delete;
@@ -92,13 +99,13 @@ class PostHandshakeFlight final : public Flight {
 
    public:
       /**
-       * Add @p msg to the flight, letting the user
-       * inspect the message via @p callbacks. Use this variant of `add` to add
-       * post-handshake messages. For handshake messages, the transcript hash
-       * needs to be updated, so the corresponding `add()` variant needs to be
-       * used in that case.
+       * Add a @p msg to this flight, letting the user inspect the message first
+       * via the callbacks. The transcript hash is unchanged for post-handshake
+       * messages.
+       *
+       * @param msg The post-handshake message to add to the flight
        */
-      void add(Post_Handshake_Message_13 msg, Callbacks& callbacks);
+      void add(Post_Handshake_Message_13 msg);
 };
 
 }  // namespace Botan::TLS

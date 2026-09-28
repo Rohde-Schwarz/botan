@@ -127,7 +127,7 @@ size_t Server_Impl_13::send_new_session_tickets(const size_t tickets) {
       return 0;
    }
 
-   PostHandshakeFlight flight;
+   auto flight = PostHandshakeFlight(callbacks());
    size_t tickets_created = 0;
 
    BOTAN_STATE_CHECK(m_active_state.has_value());
@@ -149,7 +149,7 @@ size_t Server_Impl_13::send_new_session_tickets(const size_t tickets) {
 
       if(callbacks().tls_should_persist_resumption_information(session)) {
          if(auto handle = session_manager().establish(session)) {
-            flight.add(New_Session_Ticket_13(std::move(nonce), session, handle.value(), callbacks()), callbacks());
+            flight.add(New_Session_Ticket_13(std::move(nonce), session, handle.value(), callbacks()));
             ++tickets_created;
          }
       }
@@ -345,15 +345,13 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
       //       validate this behaviour. Namely: TLS13-TicketAgeSkew-*
    }
 
-   Flight flight;
+   auto flight = Flight(*m_transcript_hash, callbacks());
 
    // This sends the server_hello to the peer.
    // NOTE: the server_hello variable is moved into the handshake state. Later
    //       references to the Server Hello will need to consult the handshake
    //       state object!
-   flight.add(m_handshake->state.sending(std::move(server_hello)),  //
-              *m_transcript_hash,
-              callbacks());
+   flight.add(m_handshake->state.sending(std::move(server_hello)));
 
    // RFC 9846 E.4
    //    The server sends a dummy change_cipher_spec record immediately after
@@ -400,9 +398,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
    const bool requesting_client_auth = certificate_request.has_value();
 
    flight.add(m_handshake->state.sending(
-                 Encrypted_Extensions(client_hello, policy(), callbacks(), is_resumption, requesting_client_auth)),
-              *m_transcript_hash,
-              callbacks());
+      Encrypted_Extensions(client_hello, policy(), callbacks(), is_resumption, requesting_client_auth)));
 
    if(!uses_psk) {
       // RFC 8446 4.3.2
@@ -410,9 +406,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
       //    request a certificate from the client. This message, if sent, MUST
       //    follow EncryptedExtensions.
       if(certificate_request.has_value()) {
-         flight.add(m_handshake->state.sending(std::move(certificate_request).value()),  //
-                    *m_transcript_hash,
-                    callbacks());
+         flight.add(m_handshake->state.sending(std::move(certificate_request).value()));
       }
 
       const auto& enc_exts = m_handshake->state.encrypted_extensions().extensions();
@@ -442,9 +436,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
       }();
 
       flight.add(
-         m_handshake->state.sending(Certificate_13(client_hello, credentials_manager(), callbacks(), cert_type)),
-         *m_transcript_hash,
-         callbacks());
+         m_handshake->state.sending(Certificate_13(client_hello, credentials_manager(), callbacks(), cert_type)));
 
       flight.add(m_handshake->state.sending(Certificate_Verify_13(m_handshake->state.server_certificate(),
                                                                   client_hello.signature_schemes(),
@@ -454,14 +446,10 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
                                                                   credentials_manager(),
                                                                   policy(),
                                                                   callbacks(),
-                                                                  rng())),
-                 *m_transcript_hash,
-                 callbacks());
+                                                                  rng())));
    }
 
-   flight.add(m_handshake->state.sending(Finished_13(new_cipher_state.get(), m_transcript_hash->current())),
-              *m_transcript_hash,
-              callbacks());
+   flight.add(m_handshake->state.sending(Finished_13(new_cipher_state.get(), m_transcript_hash->current())));
 
    if(client_hello.extensions().has<Record_Size_Limit>() &&
       m_handshake->state.encrypted_extensions().extensions().has<Record_Size_Limit>()) {
@@ -511,8 +499,8 @@ void Server_Impl_13::handle_reply_to_client_hello(Hello_Retry_Request hello_retr
    auto cipher = Ciphersuite::by_id(hello_retry_request.ciphersuite());
    BOTAN_ASSERT_NOMSG(cipher.has_value());  // should work, since we chose that suite
 
-   Flight flight;
-   flight.add(m_handshake->state.sending(std::move(hello_retry_request)), *m_transcript_hash, callbacks());
+   auto flight = Flight(*m_transcript_hash, callbacks());
+   flight.add(m_handshake->state.sending(std::move(hello_retry_request)));
 
    // RFC 9846 E.4
    //    The server sends a dummy change_cipher_spec record immediately after

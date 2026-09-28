@@ -66,19 +66,17 @@ std::shared_ptr<Client_Impl_13> Client_Impl_13::create(const std::shared_ptr<Cal
 
    BOTAN_ASSERT_NONNULL(self->m_transcript_hash);
 
-   Flight flight;
+   auto flight = Flight(*self->m_transcript_hash, self->callbacks());
 
    flight.add(self->m_handshake->state.sending(
-                 Client_Hello_13(*policy,
-                                 *callbacks,
-                                 *rng,
-                                 self->m_info.hostname(),
-                                 next_protocols,
-                                 self->m_handshake->resumed_session,
-                                 creds->find_preshared_keys(self->m_info.hostname(), Connection_Side::Client),
-                                 flavor)),
-              *self->m_transcript_hash,
-              self->callbacks());
+      Client_Hello_13(*policy,
+                      *callbacks,
+                      *rng,
+                      self->m_info.hostname(),
+                      next_protocols,
+                      self->m_handshake->resumed_session,
+                      creds->find_preshared_keys(self->m_info.hostname(), Connection_Side::Client),
+                      flavor)));
 
    // RFC 9846 E.4
    //    [...] If offering early data, the [dummy Change Cipher Spec record]
@@ -489,7 +487,7 @@ void Client_Impl_13::handle(const Hello_Retry_Request& hrr) {
 
    callbacks().tls_examine_extensions(hrr.extensions(), Connection_Side::Server, Handshake_Type::HelloRetryRequest);
 
-   Flight flight;
+   auto flight = Flight(*m_transcript_hash, callbacks());
 
    // RFC 9846 E.4
    //    If not offering early data, the client sends a dummy
@@ -502,7 +500,7 @@ void Client_Impl_13::handle(const Hello_Retry_Request& hrr) {
    if(compat_mode_ccs_requested()) {
       flight.add_dummy_change_cipher_spec();
    }
-   flight.add(ch, *m_transcript_hash, callbacks());
+   flight.add(ch);
 
    send_flight(flight.commit());
 
@@ -693,9 +691,7 @@ void Client_Impl_13::create_client_authentication_flight(Flight& flight) {
    //       CertificateRequest, the value of certificate_request_context in
    //       that message.
    flight.add(m_handshake->state.sending(
-                 Certificate_13(cert_request, m_info.hostname(), credentials_manager(), callbacks(), cert_type)),
-              *m_transcript_hash,
-              callbacks());
+      Certificate_13(cert_request, m_info.hostname(), credentials_manager(), callbacks(), cert_type)));
 
    // RFC 8446 4.4.2
    //    If the server requests client authentication but no suitable certificate
@@ -712,9 +708,7 @@ void Client_Impl_13::create_client_authentication_flight(Flight& flight) {
                                                                   credentials_manager(),
                                                                   policy(),
                                                                   callbacks(),
-                                                                  rng())),
-                 *m_transcript_hash,
-                 callbacks());
+                                                                  rng())));
    }
 }
 
@@ -750,7 +744,7 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    // the derivation of sending application data.
    m_cipher_state->advance_with_server_finished(m_transcript_hash->current(), *this);
 
-   Flight flight;
+   auto flight = Flight(*m_transcript_hash, callbacks());
 
    // RFC 9846 E.4
    //    If not offering early data, the client sends a dummy
@@ -773,9 +767,7 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    }
 
    // send client finished handshake message (still using handshake traffic secrets)
-   flight.add(m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash->current())),
-              *m_transcript_hash,
-              callbacks());
+   flight.add(m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash->current())));
 
    send_flight(flight.commit());
 
