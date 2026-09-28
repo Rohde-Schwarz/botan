@@ -1437,6 +1437,8 @@ class Shim_Policy final : public Botan::TLS::Policy {
          return m_args.get_int_opt_or_else("initial-timeout-duration-ms", 400);
       }
 
+      bool dtls_server_require_cookie_exchange() const override { return false; }
+
       bool abort_connection_on_undesired_renegotiation() const override {
          return !m_args.flag_set("renegotiate-ignore");
       }
