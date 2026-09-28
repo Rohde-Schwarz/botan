@@ -55,6 +55,10 @@ using MarshalledHandshakeMessageFlight = Strong<std::vector<uint8_t>, struct Mar
 /// with the handshake protocol header. This is used in DTLS' fragmentation.
 using MarshalledHandshakeMessageFragment = Strong<std::vector<uint8_t>, struct MarshalledHandshakeMessageFragment_>;
 
+/// Holds a bunch of marshalled handshake message fragments that are packed into
+/// a single record payload. This is used in DTLS' fragmentation.
+using PackedHandshakeMessageFragments = Strong<std::vector<uint8_t>, struct PackedHandshakeMessageFragments_>;
+
 /// Holds the serialization of a single TLS 1.3 record along with the record
 /// protocol header. Protected records hold the encrypted payload and AEAD tag.
 using MarshalledRecord = Strong<secure_vector<uint8_t>, struct MarshalledRecord_>;

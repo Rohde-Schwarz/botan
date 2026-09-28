@@ -42,7 +42,7 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
 
       struct HandshakeRecordInfo /* NOLINT(*-member-init) */ {
             std::vector<RecordNumber> record_numbers;  // Includes numbers of previous transmissions
-            MarshalledHandshakeMessageFragment fragment;
+            PackedHandshakeMessageFragments packed_fragments;
       };
 
    public:
@@ -68,10 +68,20 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
                                                              std::span<const uint8_t> fragment,
                                                              Cipher_State* cipher_state) const override;
 
-      std::vector<MarshalledRecordAndNumber> prepare_records(
-         const std::vector<MarshalledHandshakeMessageFragment>& fragments,
-         Cipher_State* cipher_state,
-         std::optional<Epoch_Number> epoch = std::nullopt) const;
+      /**
+       * Prepares a single handshake record from a payload containing one or
+       * more packed handshake message fragments and tracks the record for
+       * potential retransmission.
+       *
+       * @param packed_fragments  the marshalled handshake message fragments
+       *                          to be packed into the record
+       * @param cipher_state      the cipher state to protect the record with
+       * @param epoch             the epoch to send the record in; if not
+       *                          provided, the current write epoch is used
+       */
+      MarshalledRecordAndNumber prepare_handshake_record(PackedHandshakeMessageFragments packed_fragments,
+                                                         Cipher_State* cipher_state,
+                                                         std::optional<Epoch_Number> epoch = std::nullopt) const;
 
       /**
        * Re-prepares all records that are currently not acknowledged by the
@@ -85,7 +95,16 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
        */
       std::vector<MarshalledRecord> prepare_unacknowledged_records(Cipher_State* cipher_state) const;
 
-      uint16_t record_payload_size_limit(const Policy& policy, Cipher_State* cipher_state) const override;
+      /**
+       * Like the overload above, but determines the record overhead from the
+       * protection epoch the record will be sent in rather than from the mere
+       * presence of a cipher state. This matters when a flight contains both
+       * unprotected (epoch 0) and protected messages: the unprotected records
+       * may carry slightly more payload.
+       */
+      uint16_t record_payload_size_limit(const Policy& policy,
+                                         Cipher_State* cipher_state,
+                                         std::optional<Epoch_Number> epoch = std::nullopt) const override;
 
       void clear_read_buffer() override;
 

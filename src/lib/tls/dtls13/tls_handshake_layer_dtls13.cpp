@@ -37,8 +37,6 @@ struct PreparedHeader {
       std::array<uint8_t, 8> dtls_header_bytes = {};
 };
 
-constexpr size_t header_length = 12;
-
 struct DTLS_Handshake_Header {
       // NOLINTBEGIN(*-non-private-member-variables-in-classes)
 
@@ -50,7 +48,7 @@ struct DTLS_Handshake_Header {
 
       // NOLINTEND(*-non-private-member-variables-in-classes)
 
-      std::array<uint8_t, header_length> serialize() const {
+      std::array<uint8_t, DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH> serialize() const {
          return concat(store_be(to_underlying(msg_type)),
                        store_be24(message_length),
                        store_be(message_sequence_number),
@@ -68,11 +66,11 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
 
    BufferSlicer bs(bytes);
    while(!bs.empty()) {
-      if(bs.remaining() < header_length) {
+      if(bs.remaining() < DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH) {
          throw TLS_Exception(AlertType::DecodeError, "Bad lengths in DTLS header");
       }
 
-      const auto header_bytes = bs.take(header_length);
+      const auto header_bytes = bs.take(DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH);
 
       // TODO: Implement the parsing in DTLS_Handshake_Header
       const auto msg_len = make_uint32(0, header_bytes[1], header_bytes[2], header_bytes[3]);
@@ -237,19 +235,26 @@ std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handsha
 }
 
 std::vector<MarshalledHandshakeMessageFragment> DTLS_Handshake_Layer::fragment_message(
-   Handshake_Type type, std::span<const uint8_t> msg_bytes, uint16_t max_fragment_size) {
-   BOTAN_ARG_CHECK(max_fragment_size > header_length, "DTLS max fragment size must be larger than header length");
+   Handshake_Type type,
+   StrongSpan<const SerializedHandshakeMessage> msg_bytes,
+   uint16_t max_fragment_size,
+   std::optional<uint16_t> first_fragment_max_size) {
+   BOTAN_ARG_CHECK(max_fragment_size > DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH,
+                   "DTLS max fragment size must be larger than header length");
+   if(first_fragment_max_size.has_value()) {
+      BOTAN_ARG_CHECK(first_fragment_max_size > DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH,
+                      "DTLS first fragment max size must be larger than header length");
+      BOTAN_ARG_CHECK(first_fragment_max_size <= max_fragment_size,
+                      "DTLS first fragment max size must not exceed the general max fragment size");
+   }
 
    const uint16_t message_seq = m_send_message_seq++;
 
-   const auto max_bytes_per_fragment = max_fragment_size - header_length;
-   const auto number_of_fragments = ceil_division(msg_bytes.size(), max_bytes_per_fragment);
-   BOTAN_ASSERT_NOMSG(number_of_fragments > 0);
-
    std::vector<MarshalledHandshakeMessageFragment> fragments;
-   fragments.reserve(number_of_fragments);
 
    BufferSlicer bs(msg_bytes);
+   size_t max_bytes_per_fragment =
+      first_fragment_max_size.value_or(max_fragment_size) - DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH;
    while(!bs.empty()) {
       const auto bytes_in_this_fragment = std::min(bs.remaining(), max_bytes_per_fragment);
       const auto header = DTLS_Handshake_Header{
@@ -261,8 +266,11 @@ std::vector<MarshalledHandshakeMessageFragment> DTLS_Handshake_Layer::fragment_m
       };
       fragments.push_back(
          concat<MarshalledHandshakeMessageFragment>(header.serialize(), bs.take(bytes_in_this_fragment)));
+
+      // All fragments after the first may use the full fragment size budget.
+      max_bytes_per_fragment = max_fragment_size - DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH;
    }
-   BOTAN_ASSERT_NOMSG(fragments.size() == number_of_fragments);
+   BOTAN_ASSERT_NOMSG(!fragments.empty());
    return fragments;
 }
 

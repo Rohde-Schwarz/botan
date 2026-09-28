@@ -91,7 +91,9 @@ class BOTAN_TEST_API Record_Layer {
        * @p cipher_state, the size of the record overhead (e.g. MAC, padding,
        * record header, etc.) is also considered.
        */
-      virtual uint16_t record_payload_size_limit(const Policy& policy, Cipher_State* cipher_state = nullptr) const = 0;
+      virtual uint16_t record_payload_size_limit(const Policy& policy,
+                                                 Cipher_State* cipher_state = nullptr,
+                                                 std::optional<Epoch_Number> epoch = std::nullopt) const = 0;
 
       /**
        * Clears any data currently stored in the read buffer. This is typically

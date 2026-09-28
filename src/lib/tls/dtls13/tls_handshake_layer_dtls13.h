@@ -26,6 +26,9 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
       using TLSHeader = HandshakeProtocolHeader;
       using DTLSPayload = SerializedHandshakeMessage;
 
+      /// The byte length of a DTLS handshake fragment header (RFC 9147 Section 5.2)
+      static constexpr size_t FRAGMENT_HEADER_LENGTH = 12;
+
       explicit DTLS_Handshake_Layer(Connection_Side side) : Handshake_Layer(side) {}
 
       bool has_pending_data() const override {
@@ -37,9 +40,30 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
 
       NextMessageStep next_message_buffer(std::span<const uint8_t> bytes, const Policy& policy) override;
 
-      std::vector<MarshalledHandshakeMessageFragment> fragment_message(Handshake_Type type,
-                                                                       std::span<const uint8_t> msg_bytes,
-                                                                       uint16_t max_fragment_size);
+      /**
+       * Splits a handshake message into marshalled fragments, each prefixed
+       * with a DTLS handshake fragment header.
+       *
+       * When @p first_fragment_max_size is provided, the first fragment is
+       * capped accordingly. All further fragments are capped by
+       * @p max_fragment_size. This allows callers to fill up space remaining in
+       * a record that already holds fragments of previous messages. Otherwise,
+       * all fragments are capped by @p max_fragment_size.
+       *
+       * @param type The handshake message type
+       * @param msg_bytes The serialized handshake message to fragment
+       * @param max_fragment_size The maximum size of each fragment, including
+       *                          the DTLS handshake fragment header
+       * @param first_fragment_max_size Optional maximum size of the first
+       *                                fragment, including the header size.
+       *
+       * @returns A vector of marshalled handshake message fragments
+       */
+      std::vector<MarshalledHandshakeMessageFragment> fragment_message(
+         Handshake_Type type,
+         StrongSpan<const SerializedHandshakeMessage> msg_bytes,
+         uint16_t max_fragment_size,
+         std::optional<uint16_t> first_fragment_max_size = std::nullopt);
 
       std::optional<Handshake_Message_13> next_message(const Policy& policy,
                                                        Transcript_Hash_State& transcript_hash) override;

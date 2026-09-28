@@ -54,7 +54,9 @@ class TLS_Record_Layer final : public Record_Layer {
 
       void clear_read_buffer() override;
 
-      uint16_t record_payload_size_limit(const Policy& policy, Cipher_State* cipher_state = nullptr) const override;
+      uint16_t record_payload_size_limit(const Policy& policy,
+                                         Cipher_State* cipher_state = nullptr,
+                                         std::optional<Epoch_Number> epoch = std::nullopt) const override;
 
       bool sending_compat_mode() const { return m_sending_compat_mode; }
 
@@ -237,8 +239,10 @@ std::vector<MarshalledRecordAndNumber> TLS_Record_Layer::prepare_records(const R
    return output;
 }
 
-uint16_t TLS_Record_Layer::record_payload_size_limit(const Policy& policy, Cipher_State* cipher_state) const {
-   BOTAN_UNUSED(policy);  // not relevant for TLS
+uint16_t TLS_Record_Layer::record_payload_size_limit(const Policy& policy,
+                                                     Cipher_State* cipher_state,
+                                                     std::optional<Epoch_Number> epoch) const {
+   BOTAN_UNUSED(policy, epoch);  // not relevant for TLS
    constexpr uint16_t content_type_tag_length = 1;
 
    // RFC 8449 4.

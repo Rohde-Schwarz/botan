@@ -53,32 +53,96 @@ void DTLS_Channel_IO::send_records(Record_Type record_type,
 }
 
 void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight, Cipher_State* cipher_state) {
-   const auto max_payload_size = m_record_layer->record_payload_size_limit(*m_policy, cipher_state);
+   // RFC 9147 Section 4.3
+   //    DTLS messages MAY be fragmented into multiple DTLS records. Each DTLS
+   //    record MUST fit within a single datagram. [...] Multiple DTLS records
+   //    MAY be placed in a single datagram. Records are encoded consecutively.
+   //    [...] Records MUST NOT span datagrams.
+   //
+   // We make use of this and pack handshake message fragments into handshake
+   // records (even across message boundaries, as long as they share an epoch)
+   // and handshake records into datagrams, as tightly as the MTU configured in
+   // the policy allows.
 
-   auto prepared_records = std::vector<MarshalledRecordAndNumber>{};
+   // A fragment must contain at least one payload byte in addition to its
+   // handshake header to make progress.
+   constexpr size_t min_fragment_size = DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH + 1;
 
-   for(const auto& msg_info : flight) {
-      std::visit(  //
-         overloaded{
-            [&](const Flight::Message_Info& msg_info) {
-               auto frags = handshake_layer().fragment_message(msg_info.type, msg_info.serialized, max_payload_size);
-               auto records = record_layer().prepare_records(frags, cipher_state, msg_info.epoch);
-               prepared_records.insert(prepared_records.end(),
-                                       std::make_move_iterator(records.begin()),
-                                       std::make_move_iterator(records.end()));
-            },
-            [](const Flight::Dummy_ChangeCipherSpec&) {
-               // RFC 9147 5
-               //    DTLS implementations do not use the TLS 1.3 "compatibility mode" [...].
-               BOTAN_ASSERT_UNREACHABLE();
-            },
-         },
-         msg_info);
+   std::vector<uint8_t> current_datagram;                   // datagram currently being packed with records
+   PackedHandshakeMessageFragments current_record_payload;  // record currently being packed with fragments
+   std::optional<Epoch_Number> current_record_epoch;
+
+   // Seals the pending record and appends it to the pending datagram. The
+   // record layer tracks the sealed record for potential retransmission.
+   const auto flush_record = [&]() {
+      if(current_record_payload.empty()) {
+         return;
+      }
+
+      auto [record, _record_number] = record_layer().prepare_handshake_record(
+         std::exchange(current_record_payload, {}), cipher_state, current_record_epoch);
+      current_datagram.insert(current_datagram.end(), record.begin(), record.end());
+   };
+
+   // Seals the pending record and emits the pending datagram.
+   const auto flush_datagram = [&]() {
+      flush_record();
+      if(!current_datagram.empty()) {
+         m_callbacks->tls_emit_data(current_datagram);
+         current_datagram.clear();
+      }
+   };
+
+   for(const auto& msg : flight) {
+      const auto* msg_info = std::get_if<Flight::Message_Info>(&msg);
+      // RFC 9147 5
+      //    DTLS implementations do not use the TLS 1.3 "compatibility mode" [...].
+      //
+      // `msg` is either Flight::Message_Info or Flight::Dummy_ChangeCipherSpec.
+      BOTAN_ASSERT_NONNULL(msg_info);
+
+      // A record must not contain fragments of different protection epochs.
+      // Note that the sealed record may still share the pending datagram with
+      // records of other epochs (e.g. an unprotected ServerHello may be packed
+      // with a protected EncryptedExtensions record in the same datagram).
+      if(current_record_epoch != msg_info->epoch) {
+         flush_record();
+      }
+      current_record_epoch = msg_info->epoch;
+
+      // The payload limit of a record that occupies a datagram all by itself,
+      // given the record overhead of the current epoch.
+      const size_t record_payload_limit =
+         record_layer().record_payload_size_limit(*m_policy, cipher_state, msg_info->epoch);
+
+      // Space left for another fragment in the pending record, taking the
+      // records already packed into the pending datagram into account. If not
+      // even a minimal fragment fits, the pending record (and with it the
+      // pending datagram) is full.
+      const size_t packed_bytes = current_datagram.size() + current_record_payload.size();
+      if(packed_bytes + min_fragment_size > record_payload_limit) {
+         flush_datagram();
+      }
+
+      // The first fragment of this message may fill up the space that is left
+      // in the pending record; all further fragments may fill up entire
+      // records.
+      const auto first_fragment_size =
+         static_cast<uint16_t>(record_payload_limit - current_datagram.size() - current_record_payload.size());
+
+      const auto fragments = handshake_layer().fragment_message(
+         msg_info->type, msg_info->serialized, static_cast<uint16_t>(record_payload_limit), first_fragment_size);
+
+      for(const auto& fragment : fragments) {
+         if(current_datagram.size() + current_record_payload.size() + fragment.size() > record_payload_limit) {
+            // The pending record (and with it the pending datagram) is full.
+            flush_datagram();
+         }
+         current_record_payload.get().insert(current_record_payload.get().end(), fragment.begin(), fragment.end());
+      }
    }
 
-   for(const auto& [record_to_write, _] : prepared_records) {
-      m_callbacks->tls_emit_data(record_to_write);
-   }
+   flush_datagram();
 
    notify_sent_handshake_flight();
    arm_dtls_retransmission_timer();
@@ -88,12 +152,19 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight, Cipher_St
 void DTLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) {
    BOTAN_UNUSED(logger);  // Actual key update is deferred to ACK receiving
    BOTAN_STATE_CHECK(!has_pending_key_update());
-   auto msg_bytes = handshake_layer().fragment_message(Handshake_Type::KeyUpdate, msg.serialize(), 13);
 
-   const auto prepared_records = record_layer().prepare_records(msg_bytes, cipher_state);
+   // TODO: Let Handshake_Message::serialize() emit the strong type
+   const auto serialized_key_update = SerializedHandshakeMessage(msg.serialize());
+   auto msg_bytes =
+      handshake_layer().fragment_message(Handshake_Type::KeyUpdate,
+                                         serialized_key_update,
+                                         DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH + serialized_key_update.size());
 
-   BOTAN_ASSERT_NOMSG(prepared_records.size() == 1);  // KeyUpdate is small enough to fit into a single record
-   m_callbacks->tls_emit_data(prepared_records.front().first);
+   BOTAN_ASSERT_NOMSG(msg_bytes.size() == 1);  // KeyUpdate is small enough to always fit into a single fragment
+   const auto prepared_record = record_layer().prepare_handshake_record(
+      PackedHandshakeMessageFragments(std::move(msg_bytes.front())), cipher_state);
+
+   m_callbacks->tls_emit_data(prepared_record.first);
 
    // RFC 9147 8.
    //    [...]  KeyUpdates MUST be acknowledged. In order to facilitate epoch
@@ -103,7 +174,7 @@ void DTLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state
    //
    // The actual call to cipher_state->update_write_keys() is
    // deferred to the handling of the respective acknowledgement.
-   m_pending_key_update_record = prepared_records.front().second;
+   m_pending_key_update_record = prepared_record.second;
 
    // TODO: BoGo is completely green if we forget to
    // arm the retransmission timer here -> add a regression test.
@@ -206,9 +277,23 @@ void DTLS_Channel_IO::maybe_retransmit(Cipher_State* cipher_state) {
       return;  // timer has not yet expired
    }
 
+   // Pack the retransmitted records into datagrams up to the MTU, just like
+   // send_flight() did for the original transmission. This keeps the packing
+   // of a full retransmission identical to the original flight.
+   const size_t mtu = m_policy->dtls_default_mtu();
+
+   std::vector<uint8_t> datagram;
    for(const auto& record_to_write : record_layer().prepare_unacknowledged_records(cipher_state)) {
-      m_callbacks->tls_emit_data(record_to_write);
+      if(!datagram.empty() && datagram.size() + record_to_write.size() > mtu) {
+         m_callbacks->tls_emit_data(datagram);
+         datagram.clear();
+      }
+      datagram.insert(datagram.end(), record_to_write.begin(), record_to_write.end());
    }
+   if(!datagram.empty()) {
+      m_callbacks->tls_emit_data(datagram);
+   }
+
    m_retransmission_timer.retransmitted();
 }
 
