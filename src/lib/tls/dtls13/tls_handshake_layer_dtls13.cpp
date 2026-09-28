@@ -59,12 +59,14 @@ struct DTLS_Handshake_Header {
 
 }  // namespace
 
-bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
-                                     std::span<const uint8_t> bytes,
-                                     std::optional<Epoch_Number> epoch) {
+Handshake_Layer::CopyDataResult DTLS_Handshake_Layer::copy_data(const Policy& policy,
+                                                                std::span<const uint8_t> bytes,
+                                                                std::optional<Epoch_Number> epoch) {
    BOTAN_ARG_CHECK(epoch.has_value(), "Epoch number must be provided for DTLS handshake messages");
 
-   bool made_progress = false;
+   bool consumed_something = false;
+   bool skipped_fragment = false;
+   bool detected_duplicate = false;
 
    BufferSlicer bs(bytes);
    while(!bs.empty()) {
@@ -96,11 +98,13 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
       //   If the sequence number is less than next_receive_seq, the message
       //   MUST be discarded.
       //
-      // Note that the given `bytes` span might contain more fragments which we
-      // would then just drop as well. It seems highly unlikely that those would
-      // not be part of the same retransmission anyway.
+      // This is a retransmission of a message we have already consumed. The
+      // fragment counts as processed (recognized as a duplicate), so it does
+      // not prevent the containing record from being acknowledged.
       if(msg_seq < m_read_message_seq) {
-         return false;
+         bs.skip(frag_len);
+         detected_duplicate = true;
+         continue;
       }
 
       // RFC 9147 Section 5.2
@@ -110,8 +114,12 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
       // We queue fragments only within a certain window and discard anything
       // further in the future. Such fragments cannot be part of the flight we
       // are currently waiting for.
+      //
+      // Discarded fragments were neither processed nor buffered, hence the
+      // containing record must not be acknowledged (RFC 9147 Section 7).
       if(static_cast<uint32_t>(msg_seq) - m_read_message_seq > MAX_BUFFERED_FUTURE_MESSAGES) {
          bs.skip(frag_len);
+         skipped_fragment = true;
          continue;
       }
 
@@ -146,7 +154,6 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
       }
 
       // RFC 9147 5.5
-      //
       //    DTLS implementations MUST be able to handle overlapping fragment
       //    ranges. This allows senders to retransmit handshake messages with
       //    smaller fragment sizes if the PMTU estimate changes. Senders MUST
@@ -170,12 +177,32 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
          reassembled.complete = true;
       }
 
-      made_progress = true;
+      consumed_something = true;
    }
 
    BOTAN_ASSERT_NOMSG(bs.empty());
 
-   return made_progress;
+   // If we skipped a fragment without processing it, the entire record must not
+   // be acknowledged, even if we processed other fragments of the same record.
+   if(skipped_fragment) {
+      if(consumed_something) {
+         return CopyDataResult::ConsumedPartially;
+      } else {
+         return CopyDataResult::Discarded;
+      }
+   }
+
+   // If no fragment was skipped, and at least one fragment was considered new
+   // we can acknowledge the record.
+   if(consumed_something) {
+      return CopyDataResult::Consumed;
+   }
+
+   // If no fragments were skipped, and nothing was consumed either, then we
+   // rejected all contained fragments as duplicates. Such a record may be
+   // re-acknowledged.
+   BOTAN_ASSERT_NOMSG(detected_duplicate);
+   return CopyDataResult::DiscardedDuplicate;
 }
 
 Handshake_Layer::NextMessageStep DTLS_Handshake_Layer::next_message_buffer(std::span<const uint8_t> bytes,

@@ -53,7 +53,9 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
          return false;
       }
 
-      bool copy_data(const Policy& policy, std::span<const uint8_t> bytes, std::optional<Epoch_Number> epoch) override;
+      CopyDataResult copy_data(const Policy& policy,
+                               std::span<const uint8_t> bytes,
+                               std::optional<Epoch_Number> epoch) override;
 
       NextMessageStep next_message_buffer(std::span<const uint8_t> bytes, const Policy& policy) override;
 

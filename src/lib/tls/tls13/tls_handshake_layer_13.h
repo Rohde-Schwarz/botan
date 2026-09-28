@@ -54,6 +54,26 @@ class BOTAN_TEST_API Handshake_Layer {
 
    public:
       /**
+       * The outcome of ingesting handshake data via copy_data(). This
+       * information is relevant for DTLS, where handshake messages can be
+       * fragmented and fragments may be maliciously forged or arrive
+       * out of order.
+       */
+      enum class CopyDataResult : uint8_t {
+         /// The passed-in data was discarded without being processed or buffered
+         Discarded,
+
+         /// The passed-in data consisted solely of retransmitted fragments
+         DiscardedDuplicate,
+
+         /// Some of the passed-in data was discarded, but some was buffered
+         ConsumedPartially,
+
+         /// All of the passed-in data was successfully consumed
+         Consumed,
+      };
+
+      /**
        * Reads data that was received in handshake records and stores it internally for further
        * processing during the invocation of `next_message()`.
        *
@@ -64,14 +84,13 @@ class BOTAN_TEST_API Handshake_Layer {
        * @param epoch           The epoch in which the record containing the data was received.
        *                        This is only relevant for DTLS.
        *
-       * @returns true if the data was successfully ingested, false if something
-       *          went wrong. Typically DTLS handshake layers will return false
-       *          if the data was not a valid fragment of a handshake message
-       *          and got discarded.
+       * @returns a CopyDataResult indicating whether the data contained new
+       *          handshake information and/or fragments that had to be
+       *          discarded (relevant for DTLS only).
        */
-      virtual bool copy_data(const Policy& policy,
-                             std::span<const uint8_t> data_from_peer,
-                             std::optional<Epoch_Number> epoch) = 0;
+      virtual CopyDataResult copy_data(const Policy& policy,
+                                       std::span<const uint8_t> data_from_peer,
+                                       std::optional<Epoch_Number> epoch) = 0;
 
       /**
        * Parses one handshake message off the internal buffer that is being filled using `copy_data`.

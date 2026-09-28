@@ -220,7 +220,7 @@ class Channel_IO {
             m_record_layer->next_record(cipher_state));
       }
 
-      bool feed_handshake_record(const Record_Content& record) {
+      Handshake_Layer::CopyDataResult feed_handshake_record(const Record_Content& record) {
          return m_handshake_layer->copy_data(*m_policy, record.payload, record.epoch);
       }
 

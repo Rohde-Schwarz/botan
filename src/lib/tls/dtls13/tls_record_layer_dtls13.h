@@ -109,6 +109,30 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       void clear_read_buffer() override;
 
       /**
+       * Queues an acknowledgement for a handshake record received from the
+       * peer, to be emitted with the next outgoing ACK record.
+       *
+       * RFC 9147 Section 7
+       *    The ACK message is used by an endpoint to indicate which handshake
+       *    records it has received and processed from the other side. [...]
+       *    Implementations MUST NOT acknowledge records containing handshake
+       *    messages or fragments which have not been processed or buffered.
+       *    Otherwise, deadlock can ensue.
+       *
+       * Hence, this must be called only after the record's content was
+       * successfully passed to and accepted by the handshake layer. Records
+       * that don't carry handshake messages (most notably application data)
+       * are never acknowledged.
+       */
+      void acknowledge_handshake_record(RecordNumber record_number);
+
+      /**
+       * @returns true if at least one received handshake record is currently
+       *          queued for acknowledgement
+       */
+      bool has_outstanding_acknowledgements() const;
+
+      /**
       * Generates a serialized ACK message containing all records that were
       * successfully received and processed by the record layer. This list is
       * cleared whenever progress is made in the handshake state machine, see
