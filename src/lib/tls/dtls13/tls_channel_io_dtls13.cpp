@@ -379,8 +379,10 @@ void DTLS_Channel_IO::process_handshake_record(Record_Content record) {
       //    acknowledges all messages from the previous flight(s).
       //
       // Handshake_Layer::copy_data() returns true if a handshake message fragment
-      // with a previously unprocessed sequence number was received. This indicates
-      // progress and therefore ACKs our previously sent flight implicitly. Note
+      // with a previously unprocessed sequence number was queued for reassembly.
+      // This indicates progress and therefore ACKs our previously sent flight
+      // implicitly. Discarded fragments (retransmissions of consumed messages or
+      // messages beyond the buffering window) do not count as progress. Note
       // that this doesn't hold for post-handshake messages; for instance some
       // NewSessionTicket message _does not_ acknowledge the Client's Finished!
       //

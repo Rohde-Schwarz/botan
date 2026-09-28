@@ -29,6 +29,23 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
       /// The byte length of a DTLS handshake fragment header (RFC 9147 Section 5.2)
       static constexpr size_t FRAGMENT_HEADER_LENGTH = 12;
 
+      /**
+       * RFC 9147 Section 5.2
+       *    If the sequence number is greater than next_receive_seq, the
+       *    implementation SHOULD queue the message but MAY discard it.
+       *
+       * The maximum number of handshake messages beyond the next expected one
+       * whose fragments are buffered for reassembly. Fragments of messages
+       * further in the future are discarded. This bounds the memory a peer can
+       * make us allocate for reassembly and prevents stale reassembly state
+       * from lingering until the message sequence space eventually reaches it.
+       *
+       * The value covers the longest possible flight (ServerHello..Finished
+       * including client authentication, 6 messages) plus some slack for
+       * multiple post-handshake messages (e.g. NewSessionTicket)
+       */
+      static constexpr uint16_t MAX_BUFFERED_FUTURE_MESSAGES = 8;
+
       explicit DTLS_Handshake_Layer(Connection_Side side) : Handshake_Layer(side) {}
 
       bool has_pending_data() const override {

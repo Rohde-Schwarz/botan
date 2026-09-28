@@ -64,6 +64,8 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
                                      std::optional<Epoch_Number> epoch) {
    BOTAN_ARG_CHECK(epoch.has_value(), "Epoch number must be provided for DTLS handshake messages");
 
+   bool made_progress = false;
+
    BufferSlicer bs(bytes);
    while(!bs.empty()) {
       if(bs.remaining() < DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH) {
@@ -86,6 +88,10 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
          throw TLS_Exception(Alert::IllegalParameter, "Invalid DTLS handshake fragment received");
       }
 
+      if(bs.remaining() < frag_len) {
+         throw TLS_Exception(AlertType::DecodeError, "Truncated DTLS handshake fragment received");
+      }
+
       // RFC 9147 Section 5.2
       //   If the sequence number is less than next_receive_seq, the message
       //   MUST be discarded.
@@ -95,6 +101,18 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
       // not be part of the same retransmission anyway.
       if(msg_seq < m_read_message_seq) {
          return false;
+      }
+
+      // RFC 9147 Section 5.2
+      //   If the sequence number is greater than next_receive_seq, the
+      //   implementation SHOULD queue the message but MAY discard it.
+      //
+      // We queue fragments only within a certain window and discard anything
+      // further in the future. Such fragments cannot be part of the flight we
+      // are currently waiting for.
+      if(static_cast<uint32_t>(msg_seq) - m_read_message_seq > MAX_BUFFERED_FUTURE_MESSAGES) {
+         bs.skip(frag_len);
+         continue;
       }
 
       // TODO: iterative allocation of the reassembled message to avoid DoS attacks with large messages
@@ -142,9 +160,6 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
       // in the transcript hash check.
 
       // Advance bs and copy the fragment into the reassembled message
-      if(bs.remaining() < frag_len) {
-         throw TLS_Exception(AlertType::DecodeError, "Truncated DTLS handshake fragment received");
-      }
       copy_mem(std::span(reassembled.payload).subspan(frag_offset, frag_len), bs.take(frag_len));
 
       for(size_t i = frag_offset; i < frag_offset + frag_len; ++i) {
@@ -154,11 +169,13 @@ bool DTLS_Handshake_Layer::copy_data(const Policy& policy,
       if(reassembled.received_bytes.all_vartime()) {
          reassembled.complete = true;
       }
+
+      made_progress = true;
    }
 
    BOTAN_ASSERT_NOMSG(bs.empty());
 
-   return true;
+   return made_progress;
 }
 
 Handshake_Layer::NextMessageStep DTLS_Handshake_Layer::next_message_buffer(std::span<const uint8_t> bytes,
