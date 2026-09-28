@@ -1385,7 +1385,7 @@ class Shim_Policy final : public Botan::TLS::Policy {
       //std::chrono::seconds session_ticket_lifetime() const override;
 
       size_t new_session_tickets_upon_handshake_success() const override {
-         return m_args.flag_set("no-ticket") ? 0 : 1;
+         return m_args.flag_set("no-ticket") ? 0 : 2;  // BoGo expects 2 tickets to be issued on handshake success
       }
 
       std::vector<uint16_t> srtp_profiles() const override {
@@ -2189,6 +2189,8 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
       // ACK, never from this callback (also not for a zero delay).
       void tls_register_deferred_operation(uint64_t monotonic_delay_ms, std::function<void()> op) override {
          const uint64_t deadline_ms = tls_current_monotonic_clock_ms() + monotonic_delay_ms;
+         shim_log("Registered a deferred operation in " + std::to_string(monotonic_delay_ms) + "ms (deadline " +
+                  std::to_string(deadline_ms) + "ms)");
          m_deferred_operations.emplace_back(Deferred_Operation{deadline_ms, std::move(op)});
       }
 
@@ -2211,6 +2213,8 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
             // which must happen only after m_deferred_operations got updated.
             auto op = std::move(m_deferred_operations.front().op);
             m_deferred_operations.erase(m_deferred_operations.begin());
+            shim_log("Fired a deferred operation scheduled with deadline: " +
+                     std::to_string(m_deferred_operations.front().deadline_ms) + "ms");
             op();
          }
       }

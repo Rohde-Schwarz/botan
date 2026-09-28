@@ -430,13 +430,14 @@ void DTLS_Channel_IO::process_acknowledgements(Cipher_State* cipher_state,
    }
 
    if(has_pending_key_update() && !record_layer().has_unacknowledged_record(m_pending_key_update_record.value())) {
+      BOTAN_ASSERT_NONNULL(cipher_state);
       cipher_state->update_write_keys(secret_logger);
       m_pending_key_update_record.reset();
    }
 
    // If there's nothing left to retransmit, we can safely discard any
    // outdated write epochs.
-   if(!record_layer().has_unacknowledged_records()) {
+   if(cipher_state != nullptr && !record_layer().has_unacknowledged_records()) {
       cipher_state->prune_outdated_write_epochs();
    }
 
