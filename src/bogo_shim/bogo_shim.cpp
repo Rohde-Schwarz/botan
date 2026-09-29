@@ -262,6 +262,7 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"Server replied with an invalid version", ":UNSUPPORTED_PROTOCOL:"},
       {"server changed its chosen ciphersuite", ":WRONG_CIPHER_RETURNED:"},
       {"Server replied with DTLS-SRTP alg we did not send", ":BAD_SRTP_PROTECTION_PROFILE_LIST:"},
+      {"Server replied with DTLS-SRTP profile we did not offer", ":BAD_SRTP_PROTECTION_PROFILE_LIST:"},
       {"Server replied with ciphersuite we didn't send", ":WRONG_CIPHER_RETURNED:"},
       {"Server replied with an invalid version", ":UNSUPPORTED_PROTOCOL:"},  // bogus version from "ServerBogusVersion"
       {"Server version SSL v3 is unacceptable by policy", ":UNSUPPORTED_PROTOCOL:"},  // "NoSSL3-Client-Unsolicited"

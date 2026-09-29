@@ -145,6 +145,7 @@ size_t Server_Impl_13::send_new_session_tickets(const size_t tickets) {
                             peer_cert_chain(),
                             peer_raw_public_key(),
                             Server_Information(m_active_state->sni_hostname()),
+                            m_active_state->srtp_profile(),
                             callbacks().tls_current_timestamp());
 
       if(callbacks().tls_should_persist_resumption_information(session)) {
@@ -398,7 +399,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
    const bool requesting_client_auth = certificate_request.has_value();
 
    flight.add(m_handshake->state.sending(
-      Encrypted_Extensions(client_hello, policy(), callbacks(), is_resumption, requesting_client_auth)));
+      Encrypted_Extensions(client_hello, policy(), callbacks(), is_resumption, requesting_client_auth, m_flavor)));
 
    if(!uses_psk) {
       // RFC 8446 4.3.2

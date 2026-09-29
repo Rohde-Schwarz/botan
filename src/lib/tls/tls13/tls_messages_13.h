@@ -164,7 +164,8 @@ class BOTAN_UNSTABLE_API Encrypted_Extensions final : public Handshake_Message {
                            const Policy& policy,
                            Callbacks& cb,
                            bool is_resumption,
-                           bool requesting_client_auth);
+                           bool requesting_client_auth,
+                           TLS_Flavor flavor);
 
       Handshake_Type type() const override { return Handshake_Type::EncryptedExtensions; }
 

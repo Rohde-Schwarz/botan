@@ -545,6 +545,17 @@ void Client_Impl_13::handle(const Encrypted_Extensions& encrypted_extensions_msg
       }
    }
 
+   if(exts.has<SRTP_Protection_Profiles>()) {
+      // RFC 5764 4.1.1
+      //    The server MUST NOT select a value that the client has not offered.
+      const auto* server_srtp = exts.get<SRTP_Protection_Profiles>();
+      const auto* client_srtp = m_handshake->state.client_hello().extensions().get<SRTP_Protection_Profiles>();
+      BOTAN_ASSERT_NONNULL(client_srtp);
+      if(!value_exists(client_srtp->profiles(), server_srtp->profiles().front())) {
+         throw TLS_Exception(Alert::HandshakeFailure, "Server replied with DTLS-SRTP profile we did not offer");
+      }
+   }
+
    if(exts.has<Record_Size_Limit>() && m_handshake->state.client_hello().extensions().has<Record_Size_Limit>()) {
       // RFC 8449 4.
       //     The record size limit only applies to records sent toward the
@@ -844,6 +855,7 @@ void TLS::Client_Impl_13::handle(const New_Session_Ticket_13& new_session_ticket
                          peer_cert_chain(),
                          peer_raw_public_key(),
                          m_info,
+                         m_active_state->srtp_profile(),
                          callbacks().tls_current_timestamp());
 
    if(callbacks().tls_should_persist_resumption_information(session)) {
