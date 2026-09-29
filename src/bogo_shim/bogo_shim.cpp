@@ -133,6 +133,7 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
       {"Certificate usage constraints do not allow signing", ":KEY_USAGE_BIT_INCORRECT:"},
       {"Can't agree on a ciphersuite with client", ":NO_SHARED_CIPHER:"},
       {"Can't interleave application and handshake data", ":UNEXPECTED_RECORD:"},
+      {"Cannot update keys: maximum DTLS epoch number reached", ":TOO_MANY_KEY_UPDATES:"},
       {"Unexpected new DTLS handshake message", ":UNEXPECTED_RECORD:"},
       {"Certificate chain exceeds policy specified maximum size", ":EXCESSIVE_MESSAGE_SIZE:"},
       {"Certificate key type did not match ciphersuite", ":WRONG_CERTIFICATE_TYPE:"},
@@ -911,6 +912,7 @@ std::unique_ptr<Shim_Arguments> parse_options(char* argv[]) {
       "is-handshaker-supported",
       //"jdk11-workaround",
       "key-update",
+      "key-update-before-read",
       "no-key-shares",
       "new-psk-credential",
       "new-rpk-credential",
@@ -1822,6 +1824,7 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
             m_sessions_established(0),
             m_got_close(false),
             m_hello_retry_request(false),
+            m_key_update_before_read(args.flag_set("key-update-before-read") ? std::make_optional(true) : std::nullopt),
             m_clock_skew(0) {}
 
       size_t sessions_established() const { return m_sessions_established; }
@@ -1831,6 +1834,13 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
       void set_clock_skew(std::chrono::seconds clock_skew) { m_clock_skew = clock_skew; }
 
       bool saw_close_notify() const { return m_got_close; }
+
+      bool key_update_before_read_pending() const { return m_key_update_before_read.value_or(false); }
+
+      void key_update_before_read_sent() {
+         BOTAN_STATE_CHECK(m_key_update_before_read.has_value());
+         m_key_update_before_read = false;
+      }
 
       void tls_emit_data(std::span<const uint8_t> data) override {
          shim_log("sending record of len " + std::to_string(data.size()));
@@ -1890,6 +1900,11 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
          }
 
          m_channel->send(buf);
+
+         // The next read must be preceded by another KeyUpdate
+         if(m_key_update_before_read.has_value()) {
+            m_key_update_before_read = true;
+         }
       }
 
       bool tls_verify_message(const Botan::Public_Key& key,
@@ -2249,6 +2264,7 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
       size_t m_sessions_established;
       bool m_got_close;
       bool m_hello_retry_request;
+      std::optional<bool> m_key_update_before_read;
       std::chrono::seconds m_clock_skew;
       // Virtual clock for the DTLS retransmit timer. Tracked in nanoseconds
       // (BoGo's wire unit) to avoid rounding errors
@@ -2338,6 +2354,12 @@ int main(int /*argc*/, char* argv[]) {
             std::vector<uint8_t> buf(buf_size);
 
             for(;;) {
+               if(callbacks->key_update_before_read_pending() && chan->is_handshake_complete()) {
+                  shim_log("Updating traffic keys before read");
+                  chan->update_traffic_keys(false /* don't request reciprocal update */);
+                  callbacks->key_update_before_read_sent();
+               }
+
                if(is_datagram) {
                   uint8_t opcode = 0;
                   const size_t got = socket.read(&opcode, 1);

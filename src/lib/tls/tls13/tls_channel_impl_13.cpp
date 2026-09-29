@@ -296,6 +296,16 @@ void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
    BOTAN_STATE_CHECK(!is_downgrading() && is_handshake_complete() && is_active());
    BOTAN_ASSERT_NONNULL(m_cipher_state);
 
+   // RFC 9147 8.
+   //    [...] implementations MUST NOT send [...] a new KeyUpdate until the
+   //    previous KeyUpdate has been acknowledged [...].
+   //
+   // In DTLS a previously sent KeyUpdate might still await acknowledgement.
+   // In that case we silently drop this request.
+   if(m_channel_io->has_pending_key_update()) {
+      return;
+   }
+
    // RFC 9147 8. (Errata-ID 8050)
    //    After the handshake, each epoch change consumes a message_seq value,
    //    which is limited to 2^16-1. [...] In this case, the implementation MUST

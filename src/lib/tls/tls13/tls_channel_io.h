@@ -66,6 +66,12 @@ class Channel_IO {
 
       virtual void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) = 0;
 
+      /**
+       * Whether a previously sent KeyUpdate is still awaiting acknowledgement
+       * by the peer. This can only happen via DTLS, TLS always returns false.
+       */
+      virtual bool has_pending_key_update() const { return false; }
+
       virtual void ingest_records(std::span<const uint8_t> data) = 0;
 
       virtual ReceiveEvent next_receive_event(Cipher_State* cipher_state,

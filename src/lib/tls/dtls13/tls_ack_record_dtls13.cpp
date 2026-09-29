@@ -94,11 +94,19 @@ bool ACKs::validate(Epoch_Number recv_epoch_of_ack_record) const {
    //    If any element of record_numbers in the ACK references an epoch that is
    //    higher than the epoch in which the ACK was received, the implementation
    //    MUST terminate the connection with an "illegal_parameter" alert.
-   for(const auto& ack : m_record_numbers) {
-      if(ack.epoch > recv_epoch_of_ack_record) {
-         return false;
+   //
+   // Note that this rule is scoped to the handshake. Post-handshake, the
+   // receiver of a KeyUpdate does not advance its write epoch, so it
+   // legitimately acknowledges records from epoch N with an ACK sent at an
+   // epoch < N.
+   if(recv_epoch_of_ack_record < Epoch_Number::ApplicationTraffic_0) {
+      for(const auto& ack : m_record_numbers) {
+         if(ack.epoch > recv_epoch_of_ack_record) {
+            return false;
+         }
       }
    }
+
    return true;
 }
 

@@ -57,10 +57,10 @@ class DTLS_Channel_IO : public Channel_IO {
 
       void notify_received_final_flight() override;
 
+      bool has_pending_key_update() const override { return m_pending_key_update_record.has_value(); }
+
    private:
       void notify_sent_handshake_flight() { m_retransmission_timer.flight_sent(); }
-
-      bool has_pending_key_update() const { return m_pending_key_update_record.has_value(); }
 
       void maybe_clear_resend_buffer() {
          // If we're not sure that the peer is using DTLS 1.3, we must not clear
