@@ -85,4 +85,21 @@ std::vector<uint8_t> ACKs::serialize(size_t max_plaintext_length) const {
    return result;
 }
 
+bool ACKs::validate(Epoch_Number recv_epoch_of_ack_record) const {
+   // RFC 9147 Section 7
+   //    During the handshake, ACK records MUST be sent with an epoch which is
+   //    equal to or higher than the record which is being acknowledged.
+   //
+   // RFC 9147 Section 7.2 Errata 8108
+   //    If any element of record_numbers in the ACK references an epoch that is
+   //    higher than the epoch in which the ACK was received, the implementation
+   //    MUST terminate the connection with an "illegal_parameter" alert.
+   for(const auto& ack : m_record_numbers) {
+      if(ack.epoch > recv_epoch_of_ack_record) {
+         return false;
+      }
+   }
+   return true;
+}
+
 }  // namespace Botan::TLS

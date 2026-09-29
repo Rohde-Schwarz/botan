@@ -92,7 +92,7 @@ class DTLS_Channel_IO : public Channel_IO {
       }
 
       void process_acknowledgements(Cipher_State* cipher_state,
-                                    std::span<const uint8_t> ack_record,
+                                    const Record_Content& ack_record,
                                     const Secret_Logger& secret_logger);
 
    private:

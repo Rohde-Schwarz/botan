@@ -20,7 +20,11 @@ class ACKs {
 
       std::vector<uint8_t> serialize(size_t max_plaintext_length) const;
 
-      const std::vector<RecordNumber>& record_numbers() const { return m_record_numbers; }
+      std::span<const RecordNumber> record_numbers() const { return m_record_numbers; }
+
+      /// @returns true if all ACKed record numbers are sound given the
+      ///          epoch this ACK was originally received in
+      bool validate(Epoch_Number recv_epoch_of_ack_record) const;
 
    private:
       std::vector<RecordNumber> m_record_numbers;

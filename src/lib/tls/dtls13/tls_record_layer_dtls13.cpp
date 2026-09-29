@@ -233,39 +233,59 @@ Replay_Window_13& DTLS_Record_Layer::replay_window_for_epoch(Epoch_Number epoch)
 
 Record_Layer::ReadResult<Record_Content> DTLS_Record_Layer::next_record(Cipher_State* cipher_state) {
    while(!m_incoming_records.empty()) {
+      const auto current_read_epoch = cipher_state != nullptr  //
+                                         ? cipher_state->current_read_epoch_number()
+                                         : Epoch_Number::Unprotected;
+
       auto maybe_next_record = std::visit(
          overloaded{
             [&](PlaintextRecord_DTLS record) -> std::optional<Record_Content> {
-               if(cipher_state == nullptr || cipher_state->current_read_epoch_number() == Epoch_Number::Unprotected) {
-                  return Record_Content{
-                     .type = record.header.type,
-                     .sequence_number = record.header.sequence_number,
-                     .payload = std::move(record.payload),
-                     .epoch = Epoch_Number::Unprotected,  // ossified (RFC 9147 Section 4 Figure 2)
-                  };
-               } else {
-                  // RFC 9147 Section 4.2.1
-                  //     Implementations SHOULD discard records from
-                  //     earlier epochs [...].
-                  //
-                  // Here, we received an unprotected record while we
-                  // already hold key material for record protection.
+               // RFC 9147 4.2.1
+               //    Implementations SHOULD discard records from earlier epochs
+               //    [...].
+               //
+               // RFC 9147 7.
+               //    During the handshake, ACK records MUST be sent with an
+               //    epoch which is equal to or higher than the record which is
+               //    being acknowledged.
+               //
+               // Hence, we reject all plaintext records after establishing a
+               // cryptographic association. However, we do allow ACK records
+               // in plaintext (epoch 0) until we established a post-handshake
+               // cryptographic association (epoch 3). This allows the peer to
+               // ACK any unprotected records we might have retransmitted.
+               const bool should_discard_plaintext_record = [&] {
+                  if(record.header.type == Record_Type::ACK) {
+                     return current_read_epoch >= Epoch_Number::ApplicationTraffic_0;
+                  } else {
+                     return current_read_epoch > Epoch_Number::Unprotected;
+                  }
+               }();
+
+               if(should_discard_plaintext_record) {
                   return std::nullopt;
                }
+
+               return Record_Content{
+                  .type = record.header.type,
+                  .sequence_number = record.header.sequence_number,
+                  .payload = std::move(record.payload),
+                  .epoch = Epoch_Number::Unprotected,  // ossified (RFC 9147 Section 4 Figure 2)
+               };
             },
             [&](ProtectedRecord_DTLS record) -> std::optional<Record_Content> {
-               if(cipher_state != nullptr) {
-                  return cipher_state->deprotect_record(
-                     std::move(record), incoming_record_size_limit(), m_callbacks->tls_current_monotonic_clock_ms());
-               } else {
-                  // RFC 9147 Section 4.5.2
-                  //     In general, invalid records SHOULD be silently
-                  //     discarded [...].
-                  //
-                  // If we received a protected record but don't have a
-                  // cipher state to decrypt it, we silently discard it.
+               // RFC 9147 Section 4.5.2
+               //     In general, invalid records SHOULD be silently discarded
+               //     [...].
+               //
+               // We received a protected record but don't have a cryptographic
+               // association yet, so we can't deprotect it.
+               if(current_read_epoch == Epoch_Number::Unprotected) {
                   return std::nullopt;
                }
+
+               return cipher_state->deprotect_record(
+                  std::move(record), incoming_record_size_limit(), m_callbacks->tls_current_monotonic_clock_ms());
             },
          },
          next_incoming_record());

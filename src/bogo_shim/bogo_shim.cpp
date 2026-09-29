@@ -111,6 +111,7 @@ std::string map_to_bogo_error(const std::string& e) noexcept {
    shim_log("Original error " + e);
 
    static const std::unordered_map<std::string, std::string> err_map{
+      {"ACK record refers to an invalid record number", ":DECODE_ERROR:"},
       {"Application data before handshake done", ":APPLICATION_DATA_INSTEAD_OF_HANDSHAKE:"},
       {"Bad Hello_Request, has non-zero size", ":BAD_HELLO_REQUEST:"},
       {"Bad code for TLS alert level", ":UNKNOWN_ALERT_TYPE:"},

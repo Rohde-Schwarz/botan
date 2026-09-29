@@ -238,7 +238,7 @@ Channel_IO::ReceiveEvent DTLS_Channel_IO::next_receive_event(Cipher_State* ciphe
                      // CCS, AppData or alert can be directly consumed by the channel
                      return record;
                   case Record_Type::ACK:
-                     process_acknowledgements(cipher_state, record.payload, m_secret_logger);
+                     process_acknowledgements(cipher_state, record, m_secret_logger);
                      return std::nullopt;
                   case Record_Type::Invalid:
                   case Record_Type::Heartbeat:
@@ -435,7 +435,7 @@ void DTLS_Channel_IO::process_handshake_record(Record_Content record) {
 }
 
 void DTLS_Channel_IO::process_acknowledgements(Cipher_State* cipher_state,
-                                               std::span<const uint8_t> ack_record,
+                                               const Record_Content& ack_record,
                                                const Secret_Logger& secret_logger) {
    // If we receive ACKs before we know for sure that the peer is using
    // DTLS 1.3, we ignore them. The peer might still pick DTLS 1.2, and as
@@ -447,7 +447,17 @@ void DTLS_Channel_IO::process_acknowledgements(Cipher_State* cipher_state,
       return;
    }
 
-   const auto acks = ACKs(ack_record);
+   const auto acks = ACKs(ack_record.payload);
+
+   // RFC 9147 Section 7.2 Errata 8108
+   //    If any element of record_numbers in the ACK references an epoch that is
+   //    higher than the epoch in which the ACK was received, the implementation
+   //    MUST terminate the connection with an "illegal_parameter" alert.
+   BOTAN_ASSERT_NOMSG(ack_record.epoch.has_value());
+   if(!acks.validate(*ack_record.epoch)) {
+      throw TLS_Exception(Alert::IllegalParameter, "ACK record refers to an invalid record number");
+   }
+
    if(record_layer().handle_acknowledgements(acks)) {
       // Nothing left to retransmit, stop the timer
       m_retransmission_timer.stop();
