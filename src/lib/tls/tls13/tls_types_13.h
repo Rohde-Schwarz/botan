@@ -15,6 +15,8 @@
 
 namespace Botan::TLS {
 
+using BytesNeeded = size_t;
+
 enum class Epoch_Number /* NOLINT(*-enum-size) */ : uint64_t {
    Unprotected = 0,
    EarlyTraffic = 1,

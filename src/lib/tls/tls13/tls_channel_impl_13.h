@@ -51,7 +51,7 @@ class Secret_Logger /* NOLINT(*-special-member-functions) */ {
 */
 class Channel_Impl_13 : public Channel_Impl,
                         protected Secret_Logger {
-   public:
+   protected:
       /**
       * Set up a new (D)TLS 1.3 session
       *
@@ -72,6 +72,7 @@ class Channel_Impl_13 : public Channel_Impl,
                                Connection_Side connection_side,
                                TLS_Flavor flavor);
 
+   public:
       Channel_Impl_13(const Channel_Impl_13& other) = delete;
       Channel_Impl_13(Channel_Impl_13&& other) = delete;
       Channel_Impl_13& operator=(const Channel_Impl_13& other) = delete;
@@ -163,7 +164,19 @@ class Channel_Impl_13 : public Channel_Impl,
 
       Cipher_State* cipher_state() { return m_cipher_state.get(); }
 
+      const Secret_Logger& secret_logger() const { return *this; }
+
    protected:
+      /**
+       * Set up the internal Channel I/O object. This can't be done in the
+       * constructor, because it requires shared_from_this() to be valid,
+       * which is not the case before the constructor has finished and the
+       * object is wrapped into a shared_ptr.
+       *
+       * See {Client/Server}_Impl_13::create() for usage
+       */
+      void setup_io();
+
       virtual void process_handshake_msg(Handshake_Message_13 msg) = 0;
       virtual void process_post_handshake_msg(Post_Handshake_Message_13 msg) = 0;
       virtual void process_dummy_change_cipher_spec() = 0;
@@ -192,15 +205,14 @@ class Channel_Impl_13 : public Channel_Impl,
 
       bool is_datagram() const { return m_flavor == TLS_Flavor::DTLS; }
 
-      void send_record(Record_Type record_type, std::span<const uint8_t> payload);
       void send_flight(std::vector<Flight::Message> flight);
 
    private:
-      void process_alert(const secure_vector<uint8_t>& record);
-
-      std::optional<size_t> process_event(Handshake_Message_13 handshake_msg);
-      std::optional<size_t> process_event(Post_Handshake_Message_13 post_handshake_msg);
-      std::optional<size_t> process_event(const Record_Content& record);
+      std::optional<BytesNeeded> process(Handshake_Message_13 handshake_msg);
+      void process(Post_Handshake_Message_13 post_handshake_msg);
+      void process(const Alert_Record& alert_record);
+      void process(const ChangeCipherSpec_Record& ccs_record);
+      void process(const ApplicationData_Record& app_data_record);
 
       /**
        * Terminate the connection (on sending or receiving an error alert) and

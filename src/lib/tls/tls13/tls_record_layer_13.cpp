@@ -9,10 +9,6 @@
 
 #include <botan/internal/tls_record_layer_13.h>
 
-#if defined(BOTAN_HAS_DTLS_13)
-   #include <botan/internal/tls_record_layer_dtls13.h>
-#endif
-
 #include <botan/tls_alert.h>
 #include <botan/tls_exceptn.h>
 #include <botan/tls_policy.h>
@@ -24,11 +20,8 @@
 #include <botan/internal/loadstor.h>
 #include <botan/internal/tls_cipher_state.h>
 #include <algorithm>
-#include <deque>
 
 namespace Botan::TLS {
-
-namespace {
 
 bool verify_change_cipher_spec(std::span<const uint8_t> data) {
    // RFC 8446 5.
@@ -42,29 +35,25 @@ bool verify_change_cipher_spec(std::span<const uint8_t> data) {
    return (data.size() == expected_fragment_length && data.front() == expected_fragment_byte);
 }
 
-class TLS_Record_Layer final : public Record_Layer {
-   public:
-      explicit TLS_Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy);
+Record_Layer::Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy, bool receiving_compat_mode) :
+      m_side(side),
+      m_policy(std::move(policy)),
+      m_outgoing_record_size_limit(MAX_PLAINTEXT_SIZE + 1 /* content type byte */),
+      m_incoming_record_size_limit(MAX_PLAINTEXT_SIZE + 1 /* content type byte */),
+      m_receiving_compat_mode(receiving_compat_mode) {}
 
-      bool copy_data(std::span<const uint8_t> data_from_peer) override;
-      ReadResult<Record_Content> next_record(Cipher_State* cipher_state = nullptr) override;
-      std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
-                                                             std::span<const uint8_t> payload,
-                                                             Cipher_State* cipher_state) const override;
+void Record_Layer::set_record_size_limits(const uint16_t outgoing_limit, const uint16_t incoming_limit) {
+   BOTAN_ARG_CHECK(outgoing_limit >= 64, "Invalid outgoing record size limit");
+   BOTAN_ARG_CHECK(incoming_limit >= 64 && incoming_limit <= MAX_PLAINTEXT_SIZE + 1,
+                   "Invalid incoming record size limit");
 
-      void clear_read_buffer() override;
-
-      uint16_t record_payload_size_limit(const Policy& policy,
-                                         Cipher_State* cipher_state = nullptr,
-                                         std::optional<Epoch_Number> epoch = std::nullopt) const override;
-
-      bool sending_compat_mode() const { return m_sending_compat_mode; }
-
-   private:
-      std::deque<Record_TLS> m_incoming_records;
-
-      mutable bool m_sending_compat_mode = false;  // TODO: prepare_records becomes non-const
-};
+   // RFC 8449 4.
+   //    Even if a larger record size limit is provided by a peer, an endpoint
+   //    MUST NOT send records larger than the protocol-defined limit, unless
+   //    explicitly allowed by a future TLS version or extension.
+   m_outgoing_record_size_limit = std::min(outgoing_limit, static_cast<uint16_t>(MAX_PLAINTEXT_SIZE + 1));
+   m_incoming_record_size_limit = incoming_limit;
+}
 
 TLS_Record_Layer::TLS_Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy) :
       Record_Layer(side,
@@ -254,7 +243,7 @@ uint16_t TLS_Record_Layer::record_payload_size_limit(const Policy& policy,
                                     : static_cast<uint16_t>(MAX_PLAINTEXT_SIZE);
 }
 
-Record_Layer::ReadResult<Record_Content> TLS_Record_Layer::next_record(Cipher_State* cipher_state) {
+Record_Layer::ReadResult TLS_Record_Layer::next_record(Cipher_State* cipher_state) {
    // Special case: on the record boundary we don't actually need any more data
    // and we also don't want to be the know-it-all that now demands exactly
    // enough bytes to start parsing the next record header.
@@ -305,12 +294,12 @@ Record_Layer::ReadResult<Record_Content> TLS_Record_Layer::next_record(Cipher_St
    }
 
    if(record.type() != Record_Type::ApplicationData) {
-      return Record_Content{
+      return generalize_to<ReadResult>(annotate_record_type({
          .type = record.type(),
          .sequence_number = std::nullopt,
          .payload = record.take_payload(),
          .epoch = std::nullopt,
-      };
+      }));
    } else {
       if(cipher_state == nullptr) {
          // This could also mean a misuse of the interface, i.e. failing to
@@ -319,50 +308,12 @@ Record_Layer::ReadResult<Record_Content> TLS_Record_Layer::next_record(Cipher_St
          throw TLS_Exception(Alert::UnexpectedMessage, "premature Application Data received");
       }
 
-      return cipher_state->deprotect_record(std::move(record), incoming_record_size_limit());
+      return generalize_to<ReadResult>(cipher_state->deprotect_record(std::move(record), incoming_record_size_limit()));
    }
 }
 
 void TLS_Record_Layer::clear_read_buffer() {
    m_incoming_records.clear();
-}
-
-}  // namespace
-
-std::unique_ptr<Record_Layer> Record_Layer::create(Connection_Side side,
-                                                   TLS_Flavor flavor,
-                                                   std::shared_ptr<const Policy> policy,
-                                                   std::shared_ptr<Callbacks> callbacks) {
-   if(flavor == TLS_Flavor::DTLS) {
-#if defined(BOTAN_HAS_DTLS_13)
-      return std::make_unique<DTLS_Record_Layer>(side, std::move(policy), std::move(callbacks));
-#else
-      throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
-#endif
-   } else {
-      BOTAN_UNUSED(callbacks);
-      return std::make_unique<TLS_Record_Layer>(side, std::move(policy));
-   }
-}
-
-Record_Layer::Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy, bool receiving_compat_mode) :
-      m_side(side),
-      m_policy(std::move(policy)),
-      m_outgoing_record_size_limit(MAX_PLAINTEXT_SIZE + 1 /* content type byte */),
-      m_incoming_record_size_limit(MAX_PLAINTEXT_SIZE + 1 /* content type byte */),
-      m_receiving_compat_mode(receiving_compat_mode) {}
-
-void Record_Layer::set_record_size_limits(const uint16_t outgoing_limit, const uint16_t incoming_limit) {
-   BOTAN_ARG_CHECK(outgoing_limit >= 64, "Invalid outgoing record size limit");
-   BOTAN_ARG_CHECK(incoming_limit >= 64 && incoming_limit <= MAX_PLAINTEXT_SIZE + 1,
-                   "Invalid incoming record size limit");
-
-   // RFC 8449 4.
-   //    Even if a larger record size limit is provided by a peer, an endpoint
-   //    MUST NOT send records larger than the protocol-defined limit, unless
-   //    explicitly allowed by a future TLS version or extension.
-   m_outgoing_record_size_limit = std::min(outgoing_limit, static_cast<uint16_t>(MAX_PLAINTEXT_SIZE + 1));
-   m_incoming_record_size_limit = incoming_limit;
 }
 
 }  // namespace Botan::TLS

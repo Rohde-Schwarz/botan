@@ -43,8 +43,6 @@ class BOTAN_TEST_API Handshake_Layer {
             m_certificate_type(Certificate_Type::X509) {}
 
    public:
-      static std::unique_ptr<Handshake_Layer> create(Connection_Side whoami, TLS_Flavor flavor);
-
       Handshake_Layer(const Handshake_Layer&) = delete;
       Handshake_Layer(Handshake_Layer&&) = delete;
       Handshake_Layer& operator=(const Handshake_Layer&) = delete;
@@ -59,7 +57,7 @@ class BOTAN_TEST_API Handshake_Layer {
        * fragmented and fragments may be maliciously forged or arrive
        * out of order.
        */
-      enum class CopyDataResult : uint8_t {
+      enum class [[nodiscard]] CopyDataResult : uint8_t {
          /// The passed-in data was discarded without being processed or buffered
          Discarded,
 
@@ -80,17 +78,13 @@ class BOTAN_TEST_API Handshake_Layer {
        * @param policy          The TLS policy
        * @param data_from_peer  The data to be parsed. In DTLS this is assumed to be one or
        *                        more full handshake message fragments. In TLS it might be a
-       *                        an in-order portion of any size.
-       * @param epoch           The epoch in which the record containing the data was received.
-       *                        This is only relevant for DTLS.
+       *                        an in-order portion of any size
        *
        * @returns a CopyDataResult indicating whether the data contained new
        *          handshake information and/or fragments that had to be
        *          discarded (relevant for DTLS only).
        */
-      virtual CopyDataResult copy_data(const Policy& policy,
-                                       std::span<const uint8_t> data_from_peer,
-                                       std::optional<Epoch_Number> epoch) = 0;
+      virtual CopyDataResult copy_data(const Policy& policy, const Handshake_Record& data_from_peer) = 0;
 
       /**
        * Parses one handshake message off the internal buffer that is being filled using `copy_data`.
@@ -184,6 +178,29 @@ class BOTAN_TEST_API Handshake_Layer {
    private:
       Connection_Side m_peer;
       Certificate_Type m_certificate_type;
+};
+
+class TLS_Handshake_Layer final : public Handshake_Layer {
+   public:
+      explicit TLS_Handshake_Layer(Connection_Side whoami) : Handshake_Layer(whoami) {}
+
+      bool has_pending_data() const override { return m_read_offset < m_read_buffer.size(); }
+
+      CopyDataResult copy_data(const Policy& policy, const Handshake_Record& data_from_peer) override;
+
+      NextMessageStep next_message_buffer(std::span<const uint8_t> bytes, const Policy& policy) override;
+
+      std::optional<Handshake_Message_13> next_message(const Policy& policy,
+                                                       Transcript_Hash_State& transcript_hash) override;
+
+      std::optional<Post_Handshake_Message_13> next_post_handshake_message(const Policy& policy) override;
+
+   protected:
+      TLS_Flavor tls_flavor() const override { return TLS_Flavor::TLS; }
+
+   private:
+      std::vector<uint8_t> m_read_buffer;
+      size_t m_read_offset = 0;
 };
 
 }  // namespace Botan::TLS

@@ -342,7 +342,7 @@ MarshalledRecordAndNumber Cipher_State::protect_record(Record_Type type,
                          });
 }
 
-Record_Content Cipher_State::deprotect_record(Record_TLS record, size_t incoming_record_size_limit) {
+Record Cipher_State::deprotect_record(Record_TLS record, size_t incoming_record_size_limit) {
    BOTAN_STATE_CHECK(current_read_epoch_number() > Epoch_Number::Unprotected);
    BOTAN_ARG_CHECK(record.type() == Record_Type::ApplicationData, "Record type must be ApplicationData");
 
@@ -455,7 +455,7 @@ Record_Content Cipher_State::deprotect_record(Record_TLS record, size_t incoming
       throw TLS_Exception(Alert::UnexpectedMessage, "Received a protected record with empty TLSInnerPlaintext content");
    }
 
-   return result;
+   return annotate_record_type(std::move(result));
 }
 
 size_t Cipher_State::encrypt_output_length(const size_t input_length) const {
@@ -987,9 +987,9 @@ SequenceNumberHint xor_record_sequence_number(const Cipher_State::Epoch& epoch,
 
 #endif
 
-std::optional<Record_Content> Cipher_State::deprotect_record(ProtectedRecord_DTLS record,
-                                                             size_t incoming_record_size_limit,
-                                                             uint64_t current_time_ms) {
+std::optional<Record> Cipher_State::deprotect_record(ProtectedRecord_DTLS record,
+                                                     size_t incoming_record_size_limit,
+                                                     uint64_t current_time_ms) {
    BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
    BOTAN_STATE_CHECK(current_read_epoch_number() > Epoch_Number::Unprotected);
 
@@ -1135,7 +1135,7 @@ std::optional<Record_Content> Cipher_State::deprotect_record(ProtectedRecord_DTL
       throw TLS_Exception(Alert::UnexpectedMessage, "Can't interleave application and handshake data");
    }
 
-   return result;
+   return annotate_record_type(std::move(result));
 }
 
 std::pair<MarshalledRecord, RecordNumber> Cipher_State::protect_record_dtls(Record_Type type,

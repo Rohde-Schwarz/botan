@@ -172,7 +172,7 @@ class BOTAN_TEST_API Cipher_State {
        *
        * @returns the record payload and deprotected content type
        */
-      [[nodiscard]] Record_Content deprotect_record(Record_TLS record, size_t incoming_record_size_limit);
+      [[nodiscard]] Record deprotect_record(Record_TLS record, size_t incoming_record_size_limit);
 
       /**
        * @returns number of bytes needed to encrypt \p input_length bytes
@@ -332,9 +332,9 @@ class BOTAN_TEST_API Cipher_State {
                                         std::span<const uint8_t> header,
                                         secure_vector<uint8_t>& fragment);
 
-      std::optional<Record_Content> deprotect_record(ProtectedRecord_DTLS record,
-                                                     size_t incoming_record_size_limit,
-                                                     uint64_t current_time_ms);
+      std::optional<Record> deprotect_record(ProtectedRecord_DTLS record,
+                                             size_t incoming_record_size_limit,
+                                             uint64_t current_time_ms);
 
       /**
        * Protect a DTLS record using the currently available traffic secret keys

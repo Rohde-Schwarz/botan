@@ -23,31 +23,30 @@ namespace Botan::TLS {
 
 class Channel_Impl_13;
 
-class DTLS_Channel_IO : public Channel_IO {
+class DTLS_Channel_IO final : public Channel_IO {
    private:
       class TimerToken;
 
    public:
       DTLS_Channel_IO(Connection_Side side,
-                      Channel_Impl_13& channel,
-                      const Secret_Logger& secret_logger,
-                      std::shared_ptr<const Policy> policy,
+                      std::weak_ptr<Channel_Impl_13> channel,
+                      std::shared_ptr<const Policy> policy_ptr,
                       std::shared_ptr<Callbacks> callbacks);
 
    public:
+      void copy_data(std::span<const uint8_t> data) override;
+
+      void process(const Handshake_Record& record) override;
+
+      void process(const ACK_Record& ack_record) override;
+
       void send_records(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override;
 
-      void send_flight(std::vector<Flight::Message> flight, Cipher_State* cipher_state) override;
+      void send_flight(std::vector<Flight::Message> flight) override;
 
-      void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) override;
-
-      void ingest_records(std::span<const uint8_t> data) override;
+      void send_key_update(Key_Update msg) override;
 
       void send_acknowledgements();
-
-      ReceiveEvent next_receive_event(Cipher_State* cipher_state,
-                                      Transcript_Hash_State* transcript_hash,
-                                      bool handshake_complete) override;
 
       void notify_protocol_version_committed() override { m_dtls_version_committed = true; }
 
@@ -91,28 +90,23 @@ class DTLS_Channel_IO : public Channel_IO {
          return record_layer().acknowledgements().serialize(max_plaintext_length);
       }
 
-      void process_acknowledgements(Cipher_State* cipher_state,
-                                    const Record_Content& ack_record,
-                                    const Secret_Logger& secret_logger);
-
    private:
       void arm_dtls_retransmission_timer();
       void on_retransmission_timer();
 
       void maybe_cancel_dtls_acknowledgement_timer();
 
-      void process_handshake_record(Record_Content record);
+      DTLS_Record_Layer& record_layer() override { return m_record_layer; }
 
-      DTLS_Record_Layer& record_layer();
-      const DTLS_Record_Layer& record_layer() const;
-      DTLS_Handshake_Layer& handshake_layer();
+      const DTLS_Record_Layer& record_layer() const override { return m_record_layer; }
+
+      DTLS_Handshake_Layer& handshake_layer() override { return m_handshake_layer; }
+
+      const DTLS_Handshake_Layer& handshake_layer() const override { return m_handshake_layer; }
 
    private:
-      // This channel owns us and will therefore outlive us. Its
-      // sole use is getting the cipher state at fire time in
-      // a deferred operation.
-      Channel_Impl_13& m_channel;
-      const Secret_Logger& m_secret_logger;
+      DTLS_Record_Layer m_record_layer;
+      DTLS_Handshake_Layer m_handshake_layer;
 
       std::shared_ptr<TimerToken> m_ack_token;
 

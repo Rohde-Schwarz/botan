@@ -30,6 +30,7 @@ std::shared_ptr<Server_Impl_13> Server_Impl_13::create(const std::shared_ptr<Cal
                                                        TLS_Flavor flavor) {
    auto self =
       std::make_shared<Server_Impl_13>(Private{}, callbacks, session_manager, credentials_manager, policy, rng, flavor);
+   self->setup_io();
 
 #if defined(BOTAN_HAS_TLS_12)
    if((flavor == TLS_Flavor::TLS) ? policy->allow_tls12() : policy->allow_dtls12()) {

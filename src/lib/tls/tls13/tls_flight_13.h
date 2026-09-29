@@ -32,9 +32,7 @@ class Transcript_Hash_State;
  */
 class Flight {
    public:
-      struct Dummy_ChangeCipherSpec {
-            static constexpr std::array<uint8_t, 1> serialized = {0x01};
-      };
+      struct Dummy_ChangeCipherSpec {};
 
       struct Message_Info {
             Handshake_Type type;

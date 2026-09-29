@@ -1,5 +1,5 @@
 /*
-* DTLS 1.3 Channel IO
+* DTLS 1.3 Channel I/O
 * (C) 2026 Jack Lloyd
 *     2026 Amos Treiber, René Meusel - Rohde & Schwarz Networks and Cybersecurity GmbH
 *
@@ -31,28 +31,25 @@ class DTLS_Channel_IO::TimerToken {
 };
 
 DTLS_Channel_IO::DTLS_Channel_IO(Connection_Side side,
-                                 Channel_Impl_13& channel,
-                                 const Secret_Logger& secret_logger,
-                                 std::shared_ptr<const Policy> policy,
+                                 std::weak_ptr<Channel_Impl_13> channel,
+                                 std::shared_ptr<const Policy> policy_ptr,
                                  std::shared_ptr<Callbacks> callbacks) :
-      Channel_IO(TLS_Flavor::DTLS, side, std::move(policy), std::move(callbacks)),
-      m_channel(channel),
-      m_secret_logger(secret_logger),
-      m_retransmission_timer(*m_policy, m_callbacks) {
-   BOTAN_ASSERT_NONNULL(m_callbacks);
-   BOTAN_ASSERT_NONNULL(m_record_layer);
-   BOTAN_ASSERT_NONNULL(m_handshake_layer);
-}
+      Channel_IO(std::move(channel), policy_ptr, callbacks),
+      m_record_layer(side, std::move(policy_ptr), callbacks),
+      m_handshake_layer(side),
+      m_retransmission_timer(policy(), std::move(callbacks)) {}
 
 void DTLS_Channel_IO::send_records(Record_Type record_type,
                                    std::span<const uint8_t> payload,
                                    Cipher_State* cipher_state) {
-   for(const auto& [record_to_write, _] : m_record_layer->prepare_records(record_type, payload, cipher_state)) {
-      m_callbacks->tls_emit_data(record_to_write);
+   for(const auto& [record_to_write, _] : m_record_layer.prepare_records(record_type, payload, cipher_state)) {
+      callbacks().tls_emit_data(record_to_write);
    }
 }
 
-void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight, Cipher_State* cipher_state) {
+void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
+   auto* cipher_state = channel()->cipher_state();
+
    // RFC 9147 Section 4.3
    //    DTLS messages MAY be fragmented into multiple DTLS records. Each DTLS
    //    record MUST fit within a single datagram. [...] Multiple DTLS records
@@ -88,7 +85,7 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight, Cipher_St
    const auto flush_datagram = [&]() {
       flush_record();
       if(!current_datagram.empty()) {
-         m_callbacks->tls_emit_data(current_datagram);
+         callbacks().tls_emit_data(current_datagram);
          current_datagram.clear();
       }
    };
@@ -113,7 +110,7 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight, Cipher_St
       // The payload limit of a record that occupies a datagram all by itself,
       // given the record overhead of the current epoch.
       const size_t record_payload_limit =
-         record_layer().record_payload_size_limit(*m_policy, cipher_state, msg_info->epoch);
+         record_layer().record_payload_size_limit(policy(), cipher_state, msg_info->epoch);
 
       // Space left for another fragment in the pending record, taking the
       // records already packed into the pending datagram into account. If not
@@ -149,8 +146,9 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight, Cipher_St
    maybe_cancel_dtls_acknowledgement_timer();
 }
 
-void DTLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) {
-   BOTAN_UNUSED(logger);  // Actual key update is deferred to ACK receiving
+void DTLS_Channel_IO::send_key_update(Key_Update msg) {
+   auto* cipher_state = channel()->cipher_state();
+
    BOTAN_STATE_CHECK(!has_pending_key_update());
 
    // TODO: Let Handshake_Message::serialize() emit the strong type
@@ -164,7 +162,7 @@ void DTLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state
    const auto prepared_record = record_layer().prepare_handshake_record(
       PackedHandshakeMessageFragments(std::move(msg_bytes.front())), cipher_state);
 
-   m_callbacks->tls_emit_data(prepared_record.first);
+   callbacks().tls_emit_data(prepared_record.first);
 
    // RFC 9147 8.
    //    [...]  KeyUpdates MUST be acknowledged. In order to facilitate epoch
@@ -191,10 +189,10 @@ void DTLS_Channel_IO::send_key_update(Key_Update msg, Cipher_State* cipher_state
    // to avoid this.
 }
 
-void DTLS_Channel_IO::ingest_records(std::span<const uint8_t> data) {
+void DTLS_Channel_IO::copy_data(std::span<const uint8_t> data) {
+   auto* cipher_state = channel()->cipher_state();
    const auto has_cryptographic_association =
-      (m_channel.cipher_state() != nullptr) &&
-      m_channel.cipher_state()->current_read_epoch_number() > Epoch_Number::Unprotected;
+      (cipher_state != nullptr) && cipher_state->current_read_epoch_number() > Epoch_Number::Unprotected;
 
    record_layer().copy_data(data, has_cryptographic_association);
 }
@@ -207,50 +205,9 @@ void DTLS_Channel_IO::send_acknowledgements() {
       return;
    }
 
-   const auto max_plaintext_length = record_layer().record_payload_size_limit(*m_policy, m_channel.cipher_state());
-   send_records(Record_Type::ACK, current_ack_record(max_plaintext_length), m_channel.cipher_state());
-}
-
-Channel_IO::ReceiveEvent DTLS_Channel_IO::next_receive_event(Cipher_State* cipher_state,
-                                                             Transcript_Hash_State* transcript_hash,
-                                                             bool handshake_complete) {
-   std::optional<Channel_IO::ReceiveEvent> res;
-
-   while(!res.has_value()) {
-      if(auto event = next_pending_handshake_message(transcript_hash, handshake_complete)) {
-         // Handshake messages can be directly consumed by the channel
-         res = std::move(event);
-         break;
-      }
-
-      res = std::visit(  //
-         overloaded{
-            [](BytesNeeded bytes) -> std::optional<Channel_IO::ReceiveEvent> { return bytes; },
-            [&](Record_Content record) -> std::optional<Channel_IO::ReceiveEvent> {
-               switch(record.type) {
-                  case Record_Type::Handshake: {
-                     process_handshake_record(record);
-                     return std::nullopt;
-                  }
-                  case Record_Type::ChangeCipherSpec:
-                  case Record_Type::Alert:
-                  case Record_Type::ApplicationData:
-                     // CCS, AppData or alert can be directly consumed by the channel
-                     return record;
-                  case Record_Type::ACK:
-                     process_acknowledgements(cipher_state, record, m_secret_logger);
-                     return std::nullopt;
-                  case Record_Type::Invalid:
-                  case Record_Type::Heartbeat:
-                     break;
-               }
-               throw Unexpected_Message("Unexpected record type received");
-            },
-         },
-         pull_record(cipher_state));
-   }
-
-   return std::move(res).value();
+   auto* cipher_state = channel()->cipher_state();
+   const auto max_plaintext_length = record_layer().record_payload_size_limit(policy(), cipher_state);
+   send_records(Record_Type::ACK, current_ack_record(max_plaintext_length), cipher_state);
 }
 
 void DTLS_Channel_IO::notify_protocol_version_committed_and_flight_superseded() {
@@ -287,18 +244,18 @@ void DTLS_Channel_IO::maybe_retransmit(Cipher_State* cipher_state) {
    // Pack the retransmitted records into datagrams up to the MTU, just like
    // send_flight() did for the original transmission. This keeps the packing
    // of a full retransmission identical to the original flight.
-   const size_t mtu = m_policy->dtls_default_mtu();
+   const size_t mtu = policy().dtls_default_mtu();
 
    std::vector<uint8_t> datagram;
    for(const auto& record_to_write : record_layer().prepare_unacknowledged_records(cipher_state)) {
       if(!datagram.empty() && datagram.size() + record_to_write.size() > mtu) {
-         m_callbacks->tls_emit_data(datagram);
+         callbacks().tls_emit_data(datagram);
          datagram.clear();
       }
       datagram.insert(datagram.end(), record_to_write.begin(), record_to_write.end());
    }
    if(!datagram.empty()) {
-      m_callbacks->tls_emit_data(datagram);
+      callbacks().tls_emit_data(datagram);
    }
 
    m_retransmission_timer.retransmitted();
@@ -334,11 +291,11 @@ void DTLS_Channel_IO::arm_dtls_retransmission_timer() {
       io.on_retransmission_timer();
    };
 
-   m_callbacks->tls_register_deferred_operation(next_timeout->count(), on_timer);
+   callbacks().tls_register_deferred_operation(next_timeout->count(), on_timer);
 }
 
 void DTLS_Channel_IO::on_retransmission_timer() {
-   maybe_retransmit(m_channel.cipher_state());
+   maybe_retransmit(channel()->cipher_state());
 
    // Spawn the next timer generation for the next backoff interval in this
    // chain. This will be a no-op if the timer is no longer needed.
@@ -346,12 +303,12 @@ void DTLS_Channel_IO::on_retransmission_timer() {
 }
 
 void DTLS_Channel_IO::maybe_arm_dtls_acknowledgement_timer() {
-   const auto ack_time = m_policy->dtls_initial_timeout() / 4;
+   const auto ack_time = policy().dtls_initial_timeout() / 4;
 
    if(!m_ack_token && m_dtls_version_committed) {
       m_ack_token = std::make_shared<TimerToken>(*this);
 
-      m_callbacks->tls_register_deferred_operation(ack_time, [token = std::weak_ptr(m_ack_token)] {
+      callbacks().tls_register_deferred_operation(ack_time, [token = std::weak_ptr(m_ack_token)] {
          auto handle = token.lock();
          if(!handle) {
             return;
@@ -374,10 +331,10 @@ void DTLS_Channel_IO::maybe_cancel_dtls_acknowledgement_timer() {
    m_ack_token.reset();
 }
 
-void DTLS_Channel_IO::process_handshake_record(Record_Content record) {
+void DTLS_Channel_IO::process(const Handshake_Record& record) {
    // Handshake records need to be fed to the handshake layer before
    // their messages can be consumed by the channel
-   const auto result = feed_handshake_record(record);
+   const auto result = handshake_layer().copy_data(policy(), record);
 
    // RFC 9147 7.
    //    During the handshake, ACKs only cover the current outstanding flight
@@ -434,9 +391,9 @@ void DTLS_Channel_IO::process_handshake_record(Record_Content record) {
    }
 }
 
-void DTLS_Channel_IO::process_acknowledgements(Cipher_State* cipher_state,
-                                               const Record_Content& ack_record,
-                                               const Secret_Logger& secret_logger) {
+void DTLS_Channel_IO::process(const ACK_Record& ack_record) {
+   auto* cipher_state = channel()->cipher_state();
+
    // If we receive ACKs before we know for sure that the peer is using
    // DTLS 1.3, we ignore them. The peer might still pick DTLS 1.2, and as
    // a result would depend on a full flight retransmission.
@@ -465,7 +422,7 @@ void DTLS_Channel_IO::process_acknowledgements(Cipher_State* cipher_state,
 
    if(has_pending_key_update() && !record_layer().has_unacknowledged_record(m_pending_key_update_record.value())) {
       BOTAN_ASSERT_NONNULL(cipher_state);
-      cipher_state->update_write_keys(secret_logger);
+      cipher_state->update_write_keys(channel()->secret_logger());
       m_pending_key_update_record.reset();
    }
 
@@ -486,18 +443,6 @@ void DTLS_Channel_IO::process_acknowledgements(Cipher_State* cipher_state,
    //
    // Not sending retransmissions immediately mirrors the current behavior
    // of BoringSSL and is expected by BoGo tests.
-}
-
-DTLS_Record_Layer& DTLS_Channel_IO::record_layer() {
-   return dynamic_cast<DTLS_Record_Layer&>(*m_record_layer);
-}
-
-const DTLS_Record_Layer& DTLS_Channel_IO::record_layer() const {
-   return dynamic_cast<DTLS_Record_Layer&>(*m_record_layer);
-}
-
-DTLS_Handshake_Layer& DTLS_Channel_IO::handshake_layer() {
-   return dynamic_cast<DTLS_Handshake_Layer&>(*m_handshake_layer);
 }
 
 }  // namespace Botan::TLS

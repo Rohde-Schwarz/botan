@@ -18,10 +18,6 @@
 #include <botan/internal/tls_reader.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 
-#if defined(BOTAN_HAS_DTLS_13)
-   #include <botan/internal/tls_handshake_layer_dtls13.h>
-#endif
-
 namespace Botan::TLS {
 
 namespace {
@@ -65,130 +61,116 @@ void verify_handshake_message_size(size_t msg_len, size_t max_size) {
    }
 }
 
-class TLS_Handshake_Layer final : public Handshake_Layer {
-   public:
-      explicit TLS_Handshake_Layer(Connection_Side whoami) : Handshake_Layer(whoami) {}
-
-      bool has_pending_data() const override { return m_read_offset < m_read_buffer.size(); }
-
-      CopyDataResult copy_data(const Policy& policy,
-                               std::span<const uint8_t> data_from_peer,
-                               std::optional<Epoch_Number> epoch) override {
-         BOTAN_UNUSED(policy, epoch);
-
-         // Compact consumed data before appending new data
-         BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
-         if(m_read_offset > 0) {
-            m_read_buffer.erase(m_read_buffer.begin(), m_read_buffer.begin() + m_read_offset);
-            m_read_offset = 0;
-         }
-
-         m_read_buffer.insert(m_read_buffer.end(), data_from_peer.begin(), data_from_peer.end());
-         return CopyDataResult::Consumed;
-      }
-
-      NextMessageStep next_message_buffer(std::span<const uint8_t> bytes, const Policy& policy) override {
-         // read the message header
-         if(bytes.size() < HEADER_LENGTH) {
-            return IncompleteNotProcessed{};
-         }
-
-         const auto type = read_handshake_message_type(bytes[0]);
-         const auto msg_len = make_uint32(0, bytes[1], bytes[2], bytes[3]);
-
-         // TODO(Botan4) this is split out due to a GCC 11 ICE, can be inlined
-         verify_handshake_message_size(msg_len, policy.maximum_handshake_message_size());
-
-         if(bytes.size() < HEADER_LENGTH + msg_len) {
-            return IncompleteNotProcessed{};
-         }
-
-         return NextMessageResult{
-            .type = type,
-            .tls_header_bytes = HandshakeProtocolHeader(std::array{bytes[0], bytes[1], bytes[2], bytes[3]}),
-            .message_bytes = StrongSpan<const SerializedHandshakeMessage>(bytes.subspan(HEADER_LENGTH, msg_len)),
-            .bytes_consumed = HEADER_LENGTH + msg_len,
-         };
-      }
-
-      std::optional<Handshake_Message_13> next_message(const Policy& policy,
-                                                       Transcript_Hash_State& transcript_hash) override {
-         BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
-         auto pending = std::span<const uint8_t>{m_read_buffer}.subspan(m_read_offset);
-
-         while(!pending.empty()) {
-            const auto step = next_message_buffer(pending, policy);
-            if(std::holds_alternative<IncompleteNotProcessed>(step)) {
-               // We need more bytes and do not need to advance the read offset
-               break;
-            }
-
-            if(const auto* processed = std::get_if<IncompleteProcessed>(&step)) {
-               // We have processed a fragment and advanced the state accordingly, but
-               // the message is not complete yet. We need to advance the read offset
-               // and continue processing.
-               m_read_offset += processed->bytes_consumed;
-               BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
-               pending = std::span<const uint8_t>{m_read_buffer}.subspan(m_read_offset);
-               continue;
-            }
-
-            BOTAN_ASSERT_NOMSG(std::holds_alternative<NextMessageResult>(step));
-
-            const auto& result = std::get<NextMessageResult>(step);
-            auto msg = parse_handshake_message(result.type, result.message_bytes, policy);
-
-            transcript_hash.update(result.tls_header_bytes, result.message_bytes);
-            m_read_offset += result.bytes_consumed;
-            BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
-
-            if(m_read_offset == m_read_buffer.size()) {
-               m_read_buffer.clear();
-               m_read_offset = 0;
-            }
-
-            return msg;
-         }
-
-         return std::nullopt;
-      }
-
-      std::optional<Post_Handshake_Message_13> next_post_handshake_message(const Policy& policy) override {
-         // TODO: Looping like in next_message() to handle fragmented post-handshake messages.
-         BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
-         auto pending = std::span<const uint8_t>{m_read_buffer}.subspan(m_read_offset);
-
-         const auto header_and_msg = next_message_buffer(pending, policy);
-         if(std::holds_alternative<IncompleteNotProcessed>(header_and_msg)) {
-            return std::nullopt;
-         }
-
-         if(const auto* processed = std::get_if<NextMessageResult>(&header_and_msg)) {
-            auto msg = parse_post_handshake_message(processed->type, processed->message_bytes);
-
-            m_read_offset += processed->bytes_consumed;
-            BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
-
-            if(m_read_offset == m_read_buffer.size()) {
-               m_read_buffer.clear();
-               m_read_offset = 0;
-            }
-
-            return msg;
-         }
-
-         return std::nullopt;
-      }
-
-   protected:
-      TLS_Flavor tls_flavor() const override { return TLS_Flavor::TLS; }
-
-   private:
-      std::vector<uint8_t> m_read_buffer;
-      size_t m_read_offset = 0;
-};
-
 }  // namespace
+
+TLS_Handshake_Layer::CopyDataResult TLS_Handshake_Layer::copy_data(const Policy& policy,
+                                                                   const Handshake_Record& data_from_peer) {
+   BOTAN_UNUSED(policy);
+
+   // Compact consumed data before appending new data
+   BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
+   if(m_read_offset > 0) {
+      m_read_buffer.erase(m_read_buffer.begin(), m_read_buffer.begin() + m_read_offset);
+      m_read_offset = 0;
+   }
+
+   m_read_buffer.insert(m_read_buffer.end(), data_from_peer.payload.begin(), data_from_peer.payload.end());
+   return CopyDataResult::Consumed;
+}
+
+TLS_Handshake_Layer::NextMessageStep TLS_Handshake_Layer::next_message_buffer(std::span<const uint8_t> bytes,
+                                                                              const Policy& policy) {
+   // read the message header
+   if(bytes.size() < HEADER_LENGTH) {
+      return IncompleteNotProcessed{};
+   }
+
+   const auto type = read_handshake_message_type(bytes[0]);
+   const auto msg_len = make_uint32(0, bytes[1], bytes[2], bytes[3]);
+
+   // TODO(Botan4) this is split out due to a GCC 11 ICE, can be inlined
+   verify_handshake_message_size(msg_len, policy.maximum_handshake_message_size());
+
+   if(bytes.size() < HEADER_LENGTH + msg_len) {
+      return IncompleteNotProcessed{};
+   }
+
+   return NextMessageResult{
+      .type = type,
+      .tls_header_bytes = HandshakeProtocolHeader(std::array{bytes[0], bytes[1], bytes[2], bytes[3]}),
+      .message_bytes = StrongSpan<const SerializedHandshakeMessage>(bytes.subspan(HEADER_LENGTH, msg_len)),
+      .bytes_consumed = HEADER_LENGTH + msg_len,
+   };
+}
+
+std::optional<Handshake_Message_13> TLS_Handshake_Layer::next_message(const Policy& policy,
+                                                                      Transcript_Hash_State& transcript_hash) {
+   BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
+   auto pending = std::span<const uint8_t>{m_read_buffer}.subspan(m_read_offset);
+
+   while(!pending.empty()) {
+      const auto step = next_message_buffer(pending, policy);
+      if(std::holds_alternative<IncompleteNotProcessed>(step)) {
+         // We need more bytes and do not need to advance the read offset
+         break;
+      }
+
+      if(const auto* processed = std::get_if<IncompleteProcessed>(&step)) {
+         // We have processed a fragment and advanced the state accordingly, but
+         // the message is not complete yet. We need to advance the read offset
+         // and continue processing.
+         m_read_offset += processed->bytes_consumed;
+         BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
+         pending = std::span<const uint8_t>{m_read_buffer}.subspan(m_read_offset);
+         continue;
+      }
+
+      BOTAN_ASSERT_NOMSG(std::holds_alternative<NextMessageResult>(step));
+
+      const auto& result = std::get<NextMessageResult>(step);
+      auto msg = parse_handshake_message(result.type, result.message_bytes, policy);
+
+      transcript_hash.update(result.tls_header_bytes, result.message_bytes);
+      m_read_offset += result.bytes_consumed;
+      BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
+
+      if(m_read_offset == m_read_buffer.size()) {
+         m_read_buffer.clear();
+         m_read_offset = 0;
+      }
+
+      return msg;
+   }
+
+   return std::nullopt;
+}
+
+std::optional<Post_Handshake_Message_13> TLS_Handshake_Layer::next_post_handshake_message(const Policy& policy) {
+   // TODO: Looping like in next_message() to handle fragmented post-handshake messages.
+   BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
+   auto pending = std::span<const uint8_t>{m_read_buffer}.subspan(m_read_offset);
+
+   const auto header_and_msg = next_message_buffer(pending, policy);
+   if(std::holds_alternative<IncompleteNotProcessed>(header_and_msg)) {
+      return std::nullopt;
+   }
+
+   if(const auto* processed = std::get_if<NextMessageResult>(&header_and_msg)) {
+      auto msg = parse_post_handshake_message(processed->type, processed->message_bytes);
+
+      m_read_offset += processed->bytes_consumed;
+      BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
+
+      if(m_read_offset == m_read_buffer.size()) {
+         m_read_buffer.clear();
+         m_read_offset = 0;
+      }
+
+      return msg;
+   }
+
+   return std::nullopt;
+}
 
 Handshake_Message_13 Handshake_Layer::parse_handshake_message(Handshake_Type type,
                                                               std::span<const uint8_t> msg,
@@ -229,18 +211,6 @@ Post_Handshake_Message_13 Handshake_Layer::parse_post_handshake_message(Handshak
          return Key_Update(msg);
       default:
          throw TLS_Exception(AlertType::UnexpectedMessage, "Unexpected post-handshake message received");
-   }
-}
-
-std::unique_ptr<Handshake_Layer> Handshake_Layer::create(Connection_Side whoami, TLS_Flavor flavor) {
-   if(flavor == TLS_Flavor::DTLS) {
-#if defined(BOTAN_HAS_DTLS_13)
-      return std::make_unique<DTLS_Handshake_Layer>(whoami);
-#else
-      throw TLS_Exception(AlertType::InternalError, "DTLS 1.3 is not supported in this build");
-#endif
-   } else {
-      return std::make_unique<TLS_Handshake_Layer>(whoami);
    }
 }
 

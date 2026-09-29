@@ -9,45 +9,40 @@
 #ifndef BOTAN_TLS_CHANNEL_IO_BASE_H_
 #define BOTAN_TLS_CHANNEL_IO_BASE_H_
 
-#include <botan/assert.h>
-#include <botan/tls_exceptn.h>
-#include <optional>
-
-#include <botan/internal/stl_util.h>
 #include <botan/internal/tls_flight_13.h>
-#include <botan/internal/tls_handshake_layer_13.h>
-#include <botan/internal/tls_record_layer_13.h>
+#include <botan/internal/tls_record_13.h>
+#include <optional>
 
 namespace Botan::TLS {
 
-class Secret_Logger;
-class Cipher_State;
+class Alert;
+class Record_Layer;
+class Handshake_Layer;
+class Channel_Impl;
 class Channel_Impl_13;
+class Cipher_State;
 struct RecordNumber;
 
 class Channel_IO {
    public:
-      using ReceiveEvent = std::variant<BytesNeeded,  //
+      using ReceiveEvent = std::variant<BytesNeeded,
                                         Handshake_Message_13,
                                         Post_Handshake_Message_13,
-                                        Record_Content>;
+                                        ChangeCipherSpec_Record,
+                                        Alert_Record,
+                                        ApplicationData_Record>;
 
       static std::unique_ptr<Channel_IO> create(TLS_Flavor flavor,
                                                 Connection_Side side,
-                                                Channel_Impl_13& channel,
-                                                const Secret_Logger& secret_logger,
+                                                const std::shared_ptr<Channel_Impl>& channel,
                                                 std::shared_ptr<const Policy> policy,
                                                 std::shared_ptr<Callbacks> callbacks);
 
    protected:
-      Channel_IO(TLS_Flavor flavor,
-                 Connection_Side side,
+      Channel_IO(std::weak_ptr<Channel_Impl_13> channel,
                  std::shared_ptr<const Policy> policy,
                  std::shared_ptr<Callbacks> callbacks) :
-            m_record_layer(Record_Layer::create(side, flavor, policy, callbacks)),
-            m_handshake_layer(Handshake_Layer::create(side, flavor)),
-            m_policy(std::move(policy)),
-            m_callbacks(std::move(callbacks)) {}
+            m_channel(std::move(channel)), m_policy(std::move(policy)), m_callbacks(std::move(callbacks)) {}
 
    public:
       Channel_IO(const Channel_IO&) = delete;
@@ -57,26 +52,43 @@ class Channel_IO {
 
       virtual ~Channel_IO() = default;
 
-      // TODO: Consider making send_record private and exposing:
-      // send_flight, send_alert, send_app_data, send_ccs
-      virtual void send_records(Record_Type record_type,
-                                std::span<const uint8_t> payload,
-                                Cipher_State* cipher_state) = 0;
-      virtual void send_flight(std::vector<Flight::Message> flight, Cipher_State* cipher_state) = 0;
+      /// @name Ingestion of incoming data
+      /// @{
 
-      virtual void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) = 0;
+      /**
+       * Ingests incoming data from the network and processes it into a stream
+       * of events. @sa next_pending_event().
+       */
+      virtual void copy_data(std::span<const uint8_t> data) = 0;
+
+      /**
+       * Retrieves the next pending event from the processed incoming data. If
+       * no more events are available, this will return a BytesNeeded event
+       * indicating how many more bytes are needed to continue processing.
+       */
+      ReceiveEvent next_pending_event(Transcript_Hash_State* transcript_hash, bool handshake_complete);
+
+      /// @}
+
+      /// @name Emission of outgoing data
+      /// @{
+
+      void send(std::span<const uint8_t> payload);
+      void send(const Alert& alert);
+      void send_dummy_change_cipher_spec();
+      virtual void send_flight(std::vector<Flight::Message> flight) = 0;
+      virtual void send_key_update(Key_Update msg) = 0;
+
+      /// @}
+
+      /// @name DTLS-specific state management
+      /// @{
 
       /**
        * Whether a previously sent KeyUpdate is still awaiting acknowledgement
        * by the peer. This can only happen via DTLS, TLS always returns false.
        */
       virtual bool has_pending_key_update() const { return false; }
-
-      virtual void ingest_records(std::span<const uint8_t> data) = 0;
-
-      virtual ReceiveEvent next_receive_event(Cipher_State* cipher_state,
-                                              Transcript_Hash_State* transcript_hash,
-                                              bool handshake_complete) = 0;
 
       /**
        * Notifies that the TLS state machine is sure that we're talking to a
@@ -91,7 +103,7 @@ class Channel_IO {
        * For the case of receiving a HelloRetryRequest, use
        * notify_protocol_version_committed_and_flight_superseded().
        */
-      virtual void notify_protocol_version_committed() = 0;
+      virtual void notify_protocol_version_committed() { /* don't care */ }
 
       /**
        * Like notify_protocol_version_committed(), but for the case where
@@ -104,7 +116,7 @@ class Channel_IO {
        * protocol version, this method also clears the resend buffer and
        * retransmission timer.
        */
-      virtual void notify_protocol_version_committed_and_flight_superseded() = 0;
+      virtual void notify_protocol_version_committed_and_flight_superseded() { /* don't care */ }
 
       /**
        * Notifies that the last message completing a flight was received.
@@ -112,7 +124,7 @@ class Channel_IO {
        * This is relevant for DTLS: At that point, everything we need
        * was received and the ACK mechanism is no longer needed.
        */
-      virtual void notify_received_complete_flight() = 0;
+      virtual void notify_received_complete_flight() { /* don't care */ }
 
       /**
        * Notifies that a complete flight was received that expects no response,
@@ -122,154 +134,54 @@ class Channel_IO {
        * that would implicitly acknowledge it, the flight must be acknowledged
        * explicitly with an ACK message.
        */
-      virtual void notify_received_final_flight() = 0;
+      virtual void notify_received_final_flight() { /* don't care */ }
+
+      std::optional<Epoch0_SequenceNumbers> epoch0_sequence_numbers() const;
+
+      /// @}
 
       /**
        * Notifies that the channel is closed for reading (close_notify received).
        * The IO can discard any read-side state; no further data will be processed.
        */
-      void notify_closed_for_reading() { m_record_layer->clear_read_buffer(); }
-
-      void set_record_size_limits(uint16_t out, uint16_t in) { m_record_layer->set_record_size_limits(out, in); }
-
-      void set_selected_certificate_type(Certificate_Type t) { m_handshake_layer->set_selected_certificate_type(t); }
-
-      std::optional<Epoch0_SequenceNumbers> epoch0_sequence_numbers() const {
-         // TODO: If possible, remove optional, make this DTLS-only
-         return m_record_layer->epoch0_sequence_numbers();
-      }
+      void notify_closed_for_reading();
+      void set_record_size_limits(uint16_t out, uint16_t in);
+      void set_selected_certificate_type(Certificate_Type t);
 
    protected:
       std::optional<ReceiveEvent> next_pending_handshake_message(Transcript_Hash_State* transcript_hash,
-                                                                 bool handshake_complete) {
-         if(!handshake_complete) {
-            BOTAN_ASSERT_NONNULL(transcript_hash);
-            auto handshake_msg = m_handshake_layer->next_message(*m_policy, *transcript_hash);
-            if(!handshake_msg.has_value()) {
-               return std::nullopt;
-            }
+                                                                 bool handshake_complete);
 
-            // RFC 8446 5.1
-            //    Handshake messages MUST NOT span key changes.  Implementations
-            //    MUST verify that all messages immediately preceding a key change
-            //    align with a record boundary; if not, then they MUST terminate the
-            //    connection with an "unexpected_message" alert.  Because the
-            //    ClientHello, EndOfEarlyData, ServerHello, Finished, and KeyUpdate
-            //    messages can immediately precede a key change, implementations
-            //    MUST send these messages in alignment with a record boundary.
-            //
-            // Note: Hello_Retry_Request was added to the list below although it cannot immediately precede a key change.
-            //       However, there cannot be any further sensible messages in the record after HRR.
-            //
-            // Note: Server_Hello_12 was deliberately not included in the check below because in TLS 1.2 Server Hello and
-            //       other handshake messages can be legally coalesced in a single record.
-            //
-            // TODO: This should be handled differently for DTLS
-            // Kimi: need per-record bookkeeping: copy_data should record
-            // whether the fragment completing a message was followed by
-            // more fragments in the same record, and attach that flag to
-            // the ReassembledMessage, rather than inferring it from
-            // global map state.
-            if(holds_any_of<Client_Hello_12_Shim,
-                            Client_Hello_13 /*, EndOfEarlyData,*/,
-                            Server_Hello_13,
-                            Hello_Verify_Request,  // DTLS 1.3 -> 1.2 downgrade
-                            Hello_Retry_Request,
-                            Finished_13>(handshake_msg.value()) &&
-               m_handshake_layer->has_pending_data()) {
-               throw Unexpected_Message("Unexpected additional handshake message data found in record");
-            }
+      virtual void process(const Handshake_Record& record) = 0;
+      virtual void process(const ACK_Record& ack_record) = 0;
 
-            // After the initial handshake message is received, the record
-            // layer must be more restrictive.
-            // See RFC 8446 5.1 regarding "legacy_record_version"
-            if(!m_first_message_delivered) {
-               // TODO: Consider always calling disable_receiving_compat_mode
-               // to get rid of m_first_message_delivered
-               m_record_layer->disable_receiving_compat_mode();
-               m_first_message_delivered = true;
-            }
-            return ReceiveEvent(std::move(handshake_msg.value()));
-         }
+      virtual void send_records(Record_Type record_type,
+                                std::span<const uint8_t> payload,
+                                Cipher_State* cipher_state) = 0;
 
-         // if handshake_complete
-         auto post_handshake_msg = m_handshake_layer->next_post_handshake_message(*m_policy);
-         if(!post_handshake_msg.has_value()) {
-            return std::nullopt;
-         }
+      virtual Record_Layer& record_layer() = 0;
 
-         // make sure Key_Update appears only at the end of a record; see RFC
-         // 8446 5.1 description above
-         //
-         // TODO: This doesn't work for DTLS, because the data may be delivered
-         //       out-of-order. This check assumes reliable stream semantics of
-         //       the underlying transport.
-         if(std::holds_alternative<Key_Update>(post_handshake_msg.value()) && m_handshake_layer->has_pending_data()) {
-            throw Unexpected_Message("Unexpected additional post-handshake message data found in record");
-         }
+      virtual Handshake_Layer& handshake_layer() = 0;
 
-         return ReceiveEvent(std::move(post_handshake_msg.value()));
-      }
+      virtual const Record_Layer& record_layer() const = 0;
 
-      Record_Layer::ReadResult<Record_Content> pull_record(Cipher_State* cipher_state) {
-         return std::visit(
-            overloaded{[](BytesNeeded bytes) -> Record_Layer::ReadResult<Record_Content> { return bytes; },
-                       [&](Record_Content&& record) -> Record_Layer::ReadResult<Record_Content> {
-                          // RFC 8446 5.1
-                          //   Handshake messages MUST NOT be interleaved with other record types.
-                          if(record.type != Record_Type::Handshake && m_handshake_layer->has_pending_data()) {
-                             throw Unexpected_Message("Expected remainder of a handshake message");
-                          }
+      virtual const Handshake_Layer& handshake_layer() const = 0;
 
-                          return std::move(record);
-                       }},
-            m_record_layer->next_record(cipher_state));
-      }
+      std::shared_ptr<const Channel_Impl_13> channel() const;
+      std::shared_ptr<Channel_Impl_13> channel();
 
-      Handshake_Layer::CopyDataResult feed_handshake_record(const Record_Content& record) {
-         return m_handshake_layer->copy_data(*m_policy, record.payload, record.epoch);
-      }
+      const Policy& policy() const { return *m_policy; }
 
-   protected:
-      std::unique_ptr<Record_Layer> m_record_layer;        // NOLINT(*non-private-member-variable*)
-      std::unique_ptr<Handshake_Layer> m_handshake_layer;  // NOLINT(*non-private-member-variable*)
-      std::shared_ptr<const Policy> m_policy;              // NOLINT(*non-private-member-variable*)
-      std::shared_ptr<Callbacks> m_callbacks;              // NOLINT(*non-private-member-variable*)
-      bool m_first_message_delivered = false;              // NOLINT(*non-private-member-variable*)
-};
+      const Callbacks& callbacks() const { return *m_callbacks; }
 
-class TLS_Channel_IO final : public Channel_IO {
-   public:
-      TLS_Channel_IO(Connection_Side side, std::shared_ptr<const Policy> policy, std::shared_ptr<Callbacks> callbacks) :
-            Channel_IO(TLS_Flavor::TLS, side, std::move(policy), std::move(callbacks)) {}
+      Callbacks& callbacks() { return *m_callbacks; }
 
-      void send_records(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override;
+   private:
+      bool m_first_message_delivered = false;
 
-      void send_flight(std::vector<Flight::Message> flight, Cipher_State* cipher_state) override;
-
-      void send_key_update(Key_Update msg, Cipher_State* cipher_state, const Secret_Logger& logger) override;
-
-      void ingest_records(std::span<const uint8_t> data) override { m_record_layer->copy_data(data); }
-
-      ReceiveEvent next_receive_event(Cipher_State* cipher_state,
-                                      Transcript_Hash_State* transcript_hash,
-                                      bool handshake_complete) override;
-
-      void notify_protocol_version_committed() override {
-         // In TLS, we do not care about this.
-      }
-
-      void notify_protocol_version_committed_and_flight_superseded() override {
-         // In TLS, we do not care about this.
-      }
-
-      void notify_received_complete_flight() override {
-         // In TLS, we do not care about this.
-      }
-
-      void notify_received_final_flight() override {
-         // In TLS, we do not care about this.
-      }
+      std::weak_ptr<Channel_Impl_13> m_channel;
+      std::shared_ptr<const Policy> m_policy;
+      std::shared_ptr<Callbacks> m_callbacks;
 };
 
 }  // namespace Botan::TLS

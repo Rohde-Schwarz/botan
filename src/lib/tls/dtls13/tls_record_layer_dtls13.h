@@ -62,7 +62,7 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       bool copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association);
       bool copy_data(std::span<const uint8_t> data_from_peer) override;
 
-      ReadResult<Record_Content> next_record(Cipher_State* cipher_state = nullptr) override;
+      ReadResult next_record(Cipher_State* cipher_state = nullptr) override;
 
       std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
                                                              std::span<const uint8_t> fragment,

@@ -21,10 +21,6 @@
 
 #include <utility>
 
-#if defined(BOTAN_HAS_DTLS_13)
-   #include <botan/internal/tls_channel_io_dtls13.h>
-#endif
-
 namespace Botan::TLS {
 
 namespace {
@@ -69,9 +65,10 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
    BOTAN_ASSERT_NONNULL(m_credentials_manager);
    BOTAN_ASSERT_NONNULL(m_rng);
    BOTAN_ASSERT_NONNULL(m_policy);
+}
 
-   const Secret_Logger& secret_logger = *this;
-   m_channel_io = Channel_IO::create(flavor, m_side, *this, secret_logger, m_policy, m_callbacks);
+void Channel_Impl_13::setup_io() {
+   m_channel_io = Channel_IO::create(m_flavor, m_side, shared_from_this(), m_policy, m_callbacks);
 }
 
 Channel_Impl_13::~Channel_Impl_13() = default;
@@ -92,11 +89,13 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
       }
 #endif
 
-      m_channel_io->ingest_records(data);
+      // First, ingest all incoming data...
+      m_channel_io->copy_data(data);
 
-      std::optional<size_t> res;
-
-      while(!res.has_value()) {
+      // ... then, process all pending events (i.e. decoded handshake messages,
+      // alerts, application data, etc.) until we either run out of events and
+      // have to wait for more data, or we encounter an exception and terminate.
+      while(true) {
          // RFC 8446 6.1
          //    Any data received after a closure alert has been received MUST be ignored.
          //
@@ -105,15 +104,26 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
             return 0;
          }
 
-         res = std::visit(
+         const auto bytes_needed = std::visit(  //
             overloaded{
-               [](BytesNeeded bytes) -> std::optional<size_t> { return bytes; },
-               [&]<typename T>(T&& event) -> std::optional<size_t> { return process_event(std::forward<T>(event)); },
+               [](BytesNeeded bytes) -> std::optional<BytesNeeded> { return bytes; },
+               [&]<typename T>(T&& event) -> std::optional<BytesNeeded> {
+                  constexpr bool can_report_bytes_needed =
+                     std::is_same_v<std::optional<BytesNeeded>, decltype(process(std::forward<T>(event)))>;
+                  if constexpr(can_report_bytes_needed) {
+                     return process(std::forward<T>(event));
+                  } else {
+                     process(std::forward<T>(event));
+                     return {};
+                  }
+               },
             },
-            m_channel_io->next_receive_event(m_cipher_state.get(), m_transcript_hash.get(), is_handshake_complete()));
-      }
+            m_channel_io->next_pending_event(m_transcript_hash.get(), is_handshake_complete()));
 
-      return res.value();
+         if(bytes_needed.has_value()) {
+            return *bytes_needed;
+         }
+      }
 
    } catch(TLS_Exception& e) {
       send_fatal_alert(e.type());
@@ -182,6 +192,8 @@ void Channel_Impl_13::handle(const Key_Update& key_update) {
 }
 
 void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
+   BOTAN_STATE_CHECK(!is_downgrading());
+
    if(!is_active()) {
       throw Invalid_State("Data cannot be sent on inactive TLS connection");
    }
@@ -240,10 +252,12 @@ void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
       update_traffic_keys(!m_key_update_requested);
    }
 
-   send_record(Record_Type::ApplicationData, std::vector<uint8_t>{data.begin(), data.end()});
+   m_channel_io->send(data);
 }
 
 void Channel_Impl_13::send_alert(const Alert& alert) {
+   BOTAN_STATE_CHECK(!is_downgrading());
+
    if(alert.is_valid() && m_can_write) {
       try {
          // RFC 9846 E.4
@@ -254,10 +268,10 @@ void Channel_Impl_13::send_alert(const Alert& alert) {
          // handshake (e.g., from a failing certificate verification or a
          // throwing callback).
          if(compat_mode_ccs_requested() && compat_mode_ccs_needed_before_alert()) {
-            send_record(Record_Type::ChangeCipherSpec, Flight::Dummy_ChangeCipherSpec::serialized);
+            m_channel_io->send_dummy_change_cipher_spec();
          }
 
-         send_record(Record_Type::Alert, alert.serialize());
+         m_channel_io->send(alert);
       } catch(...) { /* swallow it */
       }
    }
@@ -321,7 +335,7 @@ void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
    auto key_update_msg = Key_Update(request_peer_update);
    callbacks().tls_inspect_handshake_msg(key_update_msg);
 
-   m_channel_io->send_key_update(std::move(key_update_msg), m_cipher_state.get(), *this);
+   m_channel_io->send_key_update(std::move(key_update_msg));
 
    if(request_peer_update) {
       m_key_update_requested = true;
@@ -348,32 +362,44 @@ std::optional<std::chrono::milliseconds> Channel_Impl_13::next_retransmission_ti
       "implement TLS::Callbacks::tls_register_deferred_operation() instead");
 }
 
-void Channel_Impl_13::send_record(Record_Type record_type, std::span<const uint8_t> payload) {
-   BOTAN_ASSERT(record_type != Record_Type::Handshake, "Handshake messages are sent via another overload");
-   BOTAN_STATE_CHECK(!is_downgrading());
-   BOTAN_STATE_CHECK(m_can_write);
-
-   // RFC 9846 5.
-   //    An implementation which [...] receives a protected change_cipher_spec
-   //    record MUST abort the handshake [...].
-   //
-   // I.e. Change Cipher Spec records must always be sent unprotected, even if
-   // the cipher state is already set up for handshake message encryption.
-   auto* cipher_state = (record_type != Record_Type::ChangeCipherSpec) ? m_cipher_state.get() : nullptr;
-
-   m_channel_io->send_records(record_type, payload, cipher_state);
-}
-
 void Channel_Impl_13::send_flight(std::vector<Flight::Message> flight) {
    BOTAN_STATE_CHECK(!flight.empty());
    BOTAN_STATE_CHECK(!is_downgrading());
    BOTAN_STATE_CHECK(m_can_write);
 
-   m_channel_io->send_flight(std::move(flight), m_cipher_state.get());
+   m_channel_io->send_flight(std::move(flight));
 }
 
-void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
-   const Alert alert(record);
+std::optional<BytesNeeded> Channel_Impl_13::process(Handshake_Message_13 handshake_msg) {
+   process_handshake_msg(std::move(handshake_msg));
+
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+   if(is_downgrading()) {
+      // Downgrade to TLS 1.2 was detected. Stop everything we do and await
+      // being replaced by a 1.2 implementation.
+      return 0;
+   }
+   if(m_downgrade_info != nullptr) {
+      // We received a TLS 1.3 error alert that could have been a TLS 1.2 warning alert.
+      // Now that we know that we are talking to a TLS 1.3 server, shut down.
+      if(m_downgrade_info->received_tls_13_error_alert) {
+         shutdown();
+      }
+
+      // Downgrade can only be indicated in the first received peer message. This was not the case.
+      m_downgrade_info.reset();
+   }
+#endif
+
+   return {};
+}
+
+void Channel_Impl_13::process(Post_Handshake_Message_13 post_handshake_msg) {
+   process_post_handshake_msg(std::move(post_handshake_msg));
+}
+
+void Channel_Impl_13::process(const Alert_Record& alert_record) {
+   const Alert alert(alert_record.payload);
 
    if(is_close_notify_alert(alert)) {
       m_can_read = false;
@@ -418,63 +444,17 @@ void Channel_Impl_13::process_alert(const secure_vector<uint8_t>& record) {
    }
 }
 
-std::optional<size_t> Channel_Impl_13::process_event(Handshake_Message_13 handshake_msg) {
-   process_handshake_msg(std::move(handshake_msg));
-
-#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
-   if(is_downgrading()) {
-      // Downgrade to TLS 1.2 was detected. Stop everything we do and await being replaced by a 1.2 implementation.
-      return 0;
-   }
-   if(m_downgrade_info != nullptr) {
-      // We received a TLS 1.3 error alert that could have been a TLS 1.2 warning alert.
-      // Now that we know that we are talking to a TLS 1.3 server, shut down.
-      if(m_downgrade_info->received_tls_13_error_alert) {
-         shutdown();
-      }
-
-      // Downgrade can only be indicated in the first received peer message. This was not the case.
-      m_downgrade_info.reset();
-   }
-#endif
-   return std::nullopt;
+void Channel_Impl_13::process(const ChangeCipherSpec_Record& ccs_record) {
+   BOTAN_UNUSED(ccs_record);
+   process_dummy_change_cipher_spec();
 }
 
-std::optional<size_t> Channel_Impl_13::process_event(Post_Handshake_Message_13 post_handshake_msg) {
-   process_post_handshake_msg(std::move(post_handshake_msg));
-   return std::nullopt;
-}
-
-std::optional<size_t> Channel_Impl_13::process_event(const Record_Content& record) {
-   switch(record.type) {
-      case Record_Type::ChangeCipherSpec:
-         process_dummy_change_cipher_spec();
-         break;
-      case Record_Type::ApplicationData:
-         BOTAN_ASSERT_NONNULL(m_cipher_state);
-         if(!m_cipher_state->can_decrypt_application_traffic()) {
-            throw Unexpected_Message("Application data received before handshake completion");
-         }
-         /*
-         The record sequence number is set in Record_Layer::next_record only when
-         the record contents are decrypted under the current set of traffic keys
-         for TLS or under any retained epoch for DTLS.
-         */
-         if(!record.sequence_number.has_value()) {
-            throw Unexpected_Message("Application data must have a sequence number");
-         }
-         callbacks().tls_record_received(record.sequence_number.value(), record.payload);
-
-         break;
-      case Record_Type::Alert:
-         process_alert(record.payload);
-         break;
-      default:
-         throw Unexpected_Message("Unexpected record type " + std::to_string(static_cast<size_t>(record.type)) +
-                                  " from counterparty");
+void Channel_Impl_13::process(const ApplicationData_Record& record) {
+   if(!record.sequence_number.has_value()) {
+      throw Unexpected_Message("Application data must have a sequence number");
    }
 
-   return std::nullopt;
+   callbacks().tls_record_received(record.sequence_number.value(), record.payload);
 }
 
 void Channel_Impl_13::shutdown() {
@@ -519,24 +499,6 @@ void Channel_Impl_13::set_record_size_limits(const uint16_t outgoing_limit, cons
 
 void Channel_Impl_13::set_selected_certificate_type(const Certificate_Type cert_type) {
    m_channel_io->set_selected_certificate_type(cert_type);
-}
-
-std::unique_ptr<Channel_IO> Channel_IO::create(TLS_Flavor flavor,
-                                               Connection_Side side,
-                                               Channel_Impl_13& channel,
-                                               const Secret_Logger& secret_logger,
-                                               std::shared_ptr<const Policy> policy,
-                                               std::shared_ptr<Callbacks> callbacks) {
-   if(flavor == TLS_Flavor::DTLS) {
-#if defined(BOTAN_HAS_DTLS_13)
-      return std::make_unique<DTLS_Channel_IO>(side, channel, secret_logger, std::move(policy), std::move(callbacks));
-#else
-      throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
-#endif
-   } else {
-      BOTAN_UNUSED(channel, secret_logger);
-      return std::make_unique<TLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
-   }
 }
 
 }  // namespace Botan::TLS

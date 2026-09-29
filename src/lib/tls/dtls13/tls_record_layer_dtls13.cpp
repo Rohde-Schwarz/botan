@@ -231,7 +231,7 @@ Replay_Window_13& DTLS_Record_Layer::replay_window_for_epoch(Epoch_Number epoch)
    return it->second;
 }
 
-Record_Layer::ReadResult<Record_Content> DTLS_Record_Layer::next_record(Cipher_State* cipher_state) {
+Record_Layer::ReadResult DTLS_Record_Layer::next_record(Cipher_State* cipher_state) {
    while(!m_incoming_records.empty()) {
       const auto current_read_epoch = cipher_state != nullptr  //
                                          ? cipher_state->current_read_epoch_number()
@@ -239,7 +239,7 @@ Record_Layer::ReadResult<Record_Content> DTLS_Record_Layer::next_record(Cipher_S
 
       auto maybe_next_record = std::visit(
          overloaded{
-            [&](PlaintextRecord_DTLS record) -> std::optional<Record_Content> {
+            [&](PlaintextRecord_DTLS record) -> std::optional<Record> {
                // RFC 9147 4.2.1
                //    Implementations SHOULD discard records from earlier epochs
                //    [...].
@@ -266,14 +266,14 @@ Record_Layer::ReadResult<Record_Content> DTLS_Record_Layer::next_record(Cipher_S
                   return std::nullopt;
                }
 
-               return Record_Content{
+               return annotate_record_type({
                   .type = record.header.type,
                   .sequence_number = record.header.sequence_number,
                   .payload = std::move(record.payload),
                   .epoch = Epoch_Number::Unprotected,  // ossified (RFC 9147 Section 4 Figure 2)
-               };
+               });
             },
-            [&](ProtectedRecord_DTLS record) -> std::optional<Record_Content> {
+            [&](ProtectedRecord_DTLS record) -> std::optional<Record> {
                // RFC 9147 Section 4.5.2
                //     In general, invalid records SHOULD be silently discarded
                //     [...].
@@ -291,19 +291,27 @@ Record_Layer::ReadResult<Record_Content> DTLS_Record_Layer::next_record(Cipher_S
          next_incoming_record());
 
       if(maybe_next_record.has_value()) {
-         BOTAN_DEBUG_ASSERT(maybe_next_record->epoch.has_value() && maybe_next_record->sequence_number.has_value());
+         std::visit(
+            [&](const auto& record) {
+               BOTAN_DEBUG_ASSERT(record.epoch.has_value() && record.sequence_number.has_value());
 
-         // RFC 9147 Section 4.5.1
-         //    For each received record, the receiver MUST verify that the
-         //    record contains a sequence number that does not duplicate the
-         //    sequence number of any other record received in that epoch during
-         //    the lifetime of the association. This check SHOULD happen after
-         //    deprotecting the record; otherwise, the record discard might
-         //    itself serve as a timing channel for the record number.
-         auto& window = replay_window_for_epoch(maybe_next_record->epoch.value());
-         if(window.accept(maybe_next_record->sequence_number.value())) {
-            return std::move(maybe_next_record).value();
-         }
+               // RFC 9147 Section 4.5.1
+               //    For each received record, the receiver MUST verify that the
+               //    record contains a sequence number that does not duplicate the
+               //    sequence number of any other record received in that epoch during
+               //    the lifetime of the association. This check SHOULD happen after
+               //    deprotecting the record; otherwise, the record discard might
+               //    itself serve as a timing channel for the record number.
+               auto& window = replay_window_for_epoch(record.epoch.value());
+               if(!window.accept(record.sequence_number.value())) {
+                  maybe_next_record.reset();
+               }
+            },
+            *maybe_next_record);
+      }
+
+      if(maybe_next_record.has_value()) {
+         return generalize_to<ReadResult>(std::move(maybe_next_record).value());
       }
    }
 

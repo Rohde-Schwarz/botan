@@ -60,15 +60,14 @@ struct DTLS_Handshake_Header {
 }  // namespace
 
 Handshake_Layer::CopyDataResult DTLS_Handshake_Layer::copy_data(const Policy& policy,
-                                                                std::span<const uint8_t> bytes,
-                                                                std::optional<Epoch_Number> epoch) {
-   BOTAN_ARG_CHECK(epoch.has_value(), "Epoch number must be provided for DTLS handshake messages");
+                                                                const Handshake_Record& data_from_peer) {
+   BOTAN_ARG_CHECK(data_from_peer.epoch.has_value(), "Epoch number must be provided for DTLS handshake messages");
 
    bool consumed_something = false;
    bool skipped_fragment = false;
    bool detected_duplicate = false;
 
-   BufferSlicer bs(bytes);
+   BufferSlicer bs(data_from_peer.payload);
    while(!bs.empty()) {
       if(bs.remaining() < DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH) {
          throw TLS_Exception(AlertType::DecodeError, "Bad lengths in DTLS header");
@@ -134,7 +133,7 @@ Handshake_Layer::CopyDataResult DTLS_Handshake_Layer::copy_data(const Policy& po
             //       appears bogus. Note: There's also a commented-out test
             //       for that in test_tls_dtls13_handshake_layer.cpp, called
             //       "parse ClientHello detects incoming garbage data with invalid message type".
-            .epoch = epoch.value(),
+            .epoch = *data_from_peer.epoch,
             .header =
                HandshakeProtocolHeader(std::array{header_bytes[0], header_bytes[1], header_bytes[2], header_bytes[3]}),
             .payload = DTLSPayload(msg_len),
@@ -143,7 +142,7 @@ Handshake_Layer::CopyDataResult DTLS_Handshake_Layer::copy_data(const Policy& po
          });
       auto& reassembled = itr->second;
 
-      if(reassembled.epoch != epoch.value()) {
+      if(reassembled.epoch != data_from_peer.epoch) {
          throw TLS_Exception(Alert::IllegalParameter,
                              "Detected DTLS handshake message fragments spanning multiple epochs");
       }

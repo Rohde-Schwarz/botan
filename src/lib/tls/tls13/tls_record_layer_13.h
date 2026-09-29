@@ -14,16 +14,15 @@
 #include <botan/exceptn.h>
 #include <botan/secmem.h>
 #include <botan/tls_magic.h>
+#include <botan/internal/stl_util.h>
 #include <botan/internal/tls_record_13.h>
 #include <botan/internal/tls_types_13.h>
+#include <deque>
 #include <memory>
 #include <span>
-#include <variant>
 #include <vector>
 
 namespace Botan::TLS {
-
-using BytesNeeded = size_t;
 
 class Callbacks;
 class Cipher_State;
@@ -51,8 +50,7 @@ class BOTAN_TEST_API Record_Layer {
       Record_Layer(Record_Layer&&) = default;
       Record_Layer& operator=(Record_Layer&&) = default;
 
-      template <typename ResT>
-      using ReadResult = std::variant<BytesNeeded, ResT>;
+      using ReadResult = variant_append_t<Record, BytesNeeded>;
 
       /**
        * Reads data that was received by the peer and stores it internally for further
@@ -77,7 +75,7 @@ class BOTAN_TEST_API Record_Layer {
        *                      cipher_state should be ready to decrypt data. Pass nullptr to
        *                      process plaintext data.
        */
-      virtual ReadResult<Record_Content> next_record(Cipher_State* cipher_state = nullptr) = 0;
+      virtual ReadResult next_record(Cipher_State* cipher_state = nullptr) = 0;
 
       virtual std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
                                                                      std::span<const uint8_t> payload,
@@ -152,6 +150,30 @@ class BOTAN_TEST_API Record_Layer {
       // records for sending and receiving is handled differently for backward
       // compatibility reasons. (RFC 8446 5.1 regarding "legacy_record_version")
       bool m_receiving_compat_mode;  // TODO: Possibly movable to TLS-only
+};
+
+class TLS_Record_Layer final : public Record_Layer {
+   public:
+      explicit TLS_Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy);
+
+      bool copy_data(std::span<const uint8_t> data_from_peer) override;
+      ReadResult next_record(Cipher_State* cipher_state = nullptr) override;
+      std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
+                                                             std::span<const uint8_t> payload,
+                                                             Cipher_State* cipher_state) const override;
+
+      void clear_read_buffer() override;
+
+      uint16_t record_payload_size_limit(const Policy& policy,
+                                         Cipher_State* cipher_state = nullptr,
+                                         std::optional<Epoch_Number> epoch = std::nullopt) const override;
+
+      bool sending_compat_mode() const { return m_sending_compat_mode; }
+
+   private:
+      std::deque<Record_TLS> m_incoming_records;
+
+      mutable bool m_sending_compat_mode = false;  // TODO: prepare_records becomes non-const
 };
 
 }  // namespace Botan::TLS
