@@ -155,9 +155,7 @@ class Channel_IO {
       virtual void process(const Handshake_Record& record) = 0;
       virtual void process(const ACK_Record& ack_record) = 0;
 
-      virtual void send_records(Record_Type record_type,
-                                std::span<const uint8_t> payload,
-                                Cipher_State* cipher_state) = 0;
+      virtual void send_data(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) = 0;
 
       virtual Record_Layer& record_layer() = 0;
 

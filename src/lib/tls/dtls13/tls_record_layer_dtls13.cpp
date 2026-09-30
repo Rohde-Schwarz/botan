@@ -31,6 +31,10 @@ namespace Botan::TLS {
 
 namespace {
 
+// RFC 8446 5.2
+//    type:  The TLSPlaintext.type value containing the content type of the record.
+constexpr size_t content_type_tag_length = 1;
+
 bool protection_desired(Cipher_State* cipher_state, std::optional<Epoch_Number> record_epoch) {
    // If the user provided a specific epoch, we protect (or not) based on that
    // wish. Otherwise, we protect if a cipher_state is provided.
@@ -315,22 +319,35 @@ Record_Layer::ReadResult DTLS_Record_Layer::next_record(Cipher_State* cipher_sta
 }
 
 MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(Record_Type type,
-                                                            std::span<const uint8_t> fragment,
+                                                            std::span<const uint8_t> data,
                                                             Cipher_State* cipher_state,
-                                                            std::optional<Epoch_Number> epoch) const {
+                                                            std::optional<Epoch_Number> epoch) {
    // RFC 8446 5.1
    //    The length MUST NOT exceed 2^14 bytes.
-   BOTAN_ARG_CHECK(fragment.size() <= MAX_PLAINTEXT_SIZE, "length must not exceed 2^14 bytes");
-   BOTAN_ARG_CHECK(type != Record_Type::ChangeCipherSpec, "DTLS 1.3 does not use ChangeCipherSpec");
+   //
+   // We deliberately do not check against record_payload_size_limit() here,
+   // because this would take the configured MTU into account. We won't stop the
+   // user from sending larger records than their configuration allows.
+   BOTAN_ASSERT_NOMSG(data.size() <= MAX_PLAINTEXT_SIZE);
+   BOTAN_ASSERT_NOMSG(type != Record_Type::ChangeCipherSpec);
 
    const bool protect = protection_desired(cipher_state, epoch);
 
-   BOTAN_ARG_CHECK(protect || type != Record_Type::ApplicationData,
-                   "Application Data records MUST NOT be written to the wire unprotected");
-   BOTAN_ARG_CHECK(!fragment.empty() || type == Record_Type::ApplicationData,
-                   "zero-length fragments of types other than application data are not allowed");
+   // RFC 9846 5.1
+   //    Application Data messages are always protected.
+   BOTAN_ASSERT_IMPLICATION(type == Record_Type::ApplicationData,
+                            cipher_state != nullptr,
+                            "Application Data records MUST NOT be written to the wire unprotected");
 
-   // TODO: Check that the record we create will not exceed MTU
+   // RFC 9846 5.1
+   //    Implementations MUST NOT send zero-length fragments of Handshake types,
+   //    even if those fragments contain padding. [...] a record with an Alert
+   //    type MUST contain exactly one message. [...] Zero-length fragments of
+   //    Application Data [...] MAY be sent, as they are potentially useful as a
+   //    traffic analysis countermeasure.
+   BOTAN_ASSERT_IMPLICATION(data.empty(),
+                            type == Record_Type::ApplicationData,
+                            "Zero-length fragments are only allowed for Application Data");
 
    if(!protect) {
       // RFC 9147 Section 4 (3.)
@@ -351,19 +368,20 @@ MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(Record_Type type,
          .legacy_version = Protocol_Version::DTLS_V12,  // TODO: perhaps use V10 for first message (compatibility)
          // .epoch = Epoch_Number::Unprotected, // ossified (RFC 9147 Section 4 Figure 2)
          .sequence_number = write_seq_no,
-         .length = static_cast<uint16_t>(fragment.size()),
+         .length = static_cast<uint16_t>(data.size()),
       };
 
-      return {concat<MarshalledRecord>(header.serialize(), fragment),
-              {.epoch = Epoch_Number::Unprotected, .sequence_number = write_seq_no}};
+      return {
+         concat<MarshalledRecord>(header.serialize(), data),
+         {
+            .epoch = Epoch_Number::Unprotected,
+            .sequence_number = write_seq_no,
+         },
+      };
    } else {
       BOTAN_DEBUG_ASSERT(!epoch.has_value() || *epoch > Epoch_Number::Unprotected);
 
-      // RFC 8446 5.2
-      //    type:  The TLSPlaintext.type value containing the content type of the record.
-      constexpr size_t content_type_tag_length = 1;
-
-      const size_t pt_size_with_type_tag = fragment.size() + content_type_tag_length;
+      const size_t pt_size_with_type_tag = data.size() + content_type_tag_length;
       const size_t max_record_size = outgoing_record_size_limit();
 
       // Don't even bother consulting the policy if we already filled the
@@ -378,21 +396,14 @@ MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(Record_Type type,
             : 0;
       BOTAN_ASSERT_NOMSG(pt_size_with_type_tag + padding_length <= max_record_size);
 
-      return cipher_state->protect_record_dtls(type, fragment, padding_length, epoch);
+      return cipher_state->protect_record_dtls(type, data, padding_length, epoch);
    }
-}
-
-std::vector<MarshalledRecordAndNumber> DTLS_Record_Layer::prepare_records(Record_Type type,
-                                                                          std::span<const uint8_t> fragment,
-                                                                          Cipher_State* cipher_state) const {
-   return {prepare_record(type, fragment, cipher_state)};
 }
 
 MarshalledRecordAndNumber DTLS_Record_Layer::prepare_handshake_record(PackedHandshakeMessageFragments packed_fragments,
                                                                       Cipher_State* cipher_state,
-                                                                      std::optional<Epoch_Number> epoch) const {
-   BOTAN_ARG_CHECK(packed_fragments.size() <= record_payload_size_limit(policy(), cipher_state, epoch),
-                   "Handshake record payload must not exceed the maximum record payload size");
+                                                                      std::optional<Epoch_Number> epoch) {
+   BOTAN_ASSERT_NOMSG(packed_fragments.size() <= record_payload_size_limit(policy(), cipher_state, epoch));
 
    auto marshalled_record_and_number = prepare_record(Record_Type::Handshake, packed_fragments, cipher_state, epoch);
    m_unacked_outgoing_handshake_records.push_back({
@@ -403,7 +414,7 @@ MarshalledRecordAndNumber DTLS_Record_Layer::prepare_handshake_record(PackedHand
    return marshalled_record_and_number;
 }
 
-std::vector<MarshalledRecord> DTLS_Record_Layer::prepare_unacknowledged_records(Cipher_State* cipher_state) const {
+std::vector<MarshalledRecord> DTLS_Record_Layer::prepare_unacknowledged_records(Cipher_State* cipher_state) {
    std::vector<MarshalledRecord> prepared_records;
    prepared_records.reserve(m_unacked_outgoing_handshake_records.size());
 

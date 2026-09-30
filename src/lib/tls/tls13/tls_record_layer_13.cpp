@@ -23,6 +23,12 @@
 
 namespace Botan::TLS {
 
+namespace {
+
+// RFC 9846 5.2
+//    type:  The TLSPlaintext.type value containing the content type of the record.
+constexpr uint16_t content_type_tag_length = 1;
+
 bool verify_change_cipher_spec(std::span<const uint8_t> data) {
    // RFC 8446 5.
    //    An implementation may receive an unencrypted record of type
@@ -34,6 +40,8 @@ bool verify_change_cipher_spec(std::span<const uint8_t> data) {
    constexpr uint8_t expected_fragment_byte = 0x01;
    return (data.size() == expected_fragment_length && data.front() == expected_fragment_byte);
 }
+
+}  // namespace
 
 Record_Layer::Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy, bool receiving_compat_mode) :
       m_side(side),
@@ -102,39 +110,91 @@ bool TLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer, bool h
    return true;
 }
 
-std::vector<MarshalledRecordAndNumber> TLS_Record_Layer::prepare_records(const Record_Type type,
-                                                                         std::span<const uint8_t> data,
-                                                                         Cipher_State* cipher_state) const {
-   // RFC 8446 5.
+MarshalledRecordAndNumber TLS_Record_Layer::prepare_record(const Record_Type type,
+                                                           std::span<const uint8_t> data,
+                                                           Cipher_State* cipher_state,
+                                                           std::optional<Epoch_Number> epoch) {
+   BOTAN_ASSERT_NOMSG(data.size() <= record_payload_size_limit(policy(), cipher_state, epoch));
+
+   // RFC 9846 5.
    //    Note that [change_cipher_spec records] may appear at a point at the
    //    handshake where the implementation is expecting protected records.
    //
-   // RFC 8446 5.
+   // RFC 9846 5.
    //    An implementation which receives [...] a protected change_cipher_spec
    //    record MUST abort the handshake [...].
    //
    // ... hence, CHANGE_CIPHER_SPEC is never protected, even if a usable cipher
    // state was passed to this method.
-   const bool protect = cipher_state != nullptr && type != Record_Type::ChangeCipherSpec;
+   BOTAN_ASSERT_IMPLICATION(type == Record_Type::ChangeCipherSpec,
+                            cipher_state == nullptr,
+                            "CHANGE_CIPHER_SPEC records must not be protected");
 
-   // RFC 8446 5.1
-   BOTAN_ASSERT(protect || type != Record_Type::ApplicationData,
-                "Application Data records MUST NOT be written to the wire unprotected");
+   // RFC 9846 5.1
+   //    Application Data messages are always protected.
+   BOTAN_ASSERT_IMPLICATION(type == Record_Type::ApplicationData,
+                            cipher_state != nullptr,
+                            "Application Data records MUST NOT be written to the wire unprotected");
 
-   // RFC 8446 5.1
-   //   "MUST NOT sent zero-length fragments of Handshake types"
-   //   "a record with an Alert type MUST contain exactly one message" [of non-zero length]
-   //   "Zero-length fragments of Application Data MAY be sent"
-   BOTAN_ASSERT(!data.empty() || type == Record_Type::ApplicationData,
-                "zero-length fragments of types other than application data are not allowed");
+   // RFC 9846 5.1
+   //    Implementations MUST NOT send zero-length fragments of Handshake types,
+   //    even if those fragments contain padding. [...] a record with an Alert
+   //    type MUST contain exactly one message. [...] Zero-length fragments of
+   //    Application Data [...] MAY be sent, as they are potentially useful as a
+   //    traffic analysis countermeasure.
+   BOTAN_ASSERT_IMPLICATION(data.empty(),
+                            type == Record_Type::ApplicationData,
+                            "Zero-length fragments are only allowed for Application Data");
 
-   if(type == Record_Type::ChangeCipherSpec && !verify_change_cipher_spec(data)) {
-      throw Invalid_Argument("TLS 1.3 deprecated CHANGE_CIPHER_SPEC");
+   if(cipher_state != nullptr) {
+      const size_t pt_size_with_type_tag = data.size() + content_type_tag_length;
+      const size_t max_record_size = outgoing_record_size_limit();
+
+      // Don't even bother consulting the policy if we already filled the
+      // record fully, because then we can't add any padding anyway.
+      // If the user requests more padding than we can actually add, we will
+      // truncate the padding to fill up the record entirely.
+      const size_t padding_length =
+         (pt_size_with_type_tag < max_record_size)
+            ? std::min(policy().record_padding_bytes(pt_size_with_type_tag), max_record_size - pt_size_with_type_tag)
+            : 0;
+      BOTAN_ASSERT_NOMSG(pt_size_with_type_tag + padding_length <= max_record_size);
+
+      return cipher_state->protect_record(type, data, padding_length);
+   } else {
+      // RFC 9846 5.1
+      //    MUST be set to 0x0303 for all records generated by a TLS 1.3
+      //    implementation other than an initial ClientHello [...], where
+      //    it MAY also be 0x0301 for compatibility purposes.
+      const auto legacy_record_version = (m_sending_compat_mode) ? Protocol_Version::TLS_V10  //
+                                                                 : Protocol_Version::TLS_V12;
+      m_sending_compat_mode = false;
+
+      // RFC 9846 5.1
+      //    type:                  The higher-level protocol used to process
+      //                           the enclosed fragment.
+      //    legacy_record_version: [see above]
+      //    length:                The length (in bytes) of the following
+      //                           TLSPlaintext.fragment.
+      const auto header = Record_TLS::serialize_header(type,                   //
+                                                       legacy_record_version,  //
+                                                       checked_cast_to<uint16_t>(data.size()));
+
+      return {
+         concat<MarshalledRecord>(header, data),
+         RecordNumber{
+            .epoch = Epoch_Number::Unprotected,
+            // TODO: technically that isn't correct. TLS just doesn't actually handle the sequence number of unprotected records
+            .sequence_number = 0,
+         },
+      };
    }
+}
 
-   // RFC 8446 5.2
-   //    type:  The TLSPlaintext.type value containing the content type of the record.
-   constexpr size_t content_type_tag_length = 1;
+uint16_t TLS_Record_Layer::record_payload_size_limit(const Policy& policy,
+                                                     Cipher_State* cipher_state,
+                                                     std::optional<Epoch_Number> epoch) const {
+   BOTAN_UNUSED(policy, epoch);  // not relevant for TLS
 
    // RFC 8449 4.
    //    When the "record_size_limit" extension is negotiated, an endpoint
@@ -151,96 +211,6 @@ std::vector<MarshalledRecordAndNumber> TLS_Record_Layer::prepare_records(const R
    // Hence, this calculates the maximum amount of actual application data
    // payload bytes that can be transferred in a single record (assuming no
    // further padding is applied by the policy).
-   const size_t max_plaintext_payload_size =
-      (protect) ? outgoing_record_size_limit() - content_type_tag_length : static_cast<uint16_t>(MAX_PLAINTEXT_SIZE);
-
-   const auto records = std::max(ceil_division(data.size(), max_plaintext_payload_size), size_t(1));
-
-   std::vector<MarshalledRecordAndNumber> output;
-   output.reserve(records);
-
-   BufferSlicer bs(data);
-
-   // RFC 9846 5.1
-   //    Zero-length fragments of Application Data [...] MAY be sent, as they
-   //    are potentially useful as a traffic analysis countermeasure.
-   //
-   // For protected records we need to write at least one encrypted fragment,
-   // even if the plaintext size is zero. This happens only for Application
-   // Data types.
-   BOTAN_ASSERT_NOMSG(!bs.empty() || protect);
-
-   do /* NOLINT(*-avoid-do-while)*/ {
-      const size_t pt_size = std::min(bs.remaining(), max_plaintext_payload_size);
-      const auto pt_fragment = bs.take(pt_size);
-
-      if(protect) {
-         const size_t pt_size_with_type_tag = pt_size + content_type_tag_length;
-         const size_t max_record_size = outgoing_record_size_limit();
-
-         // Don't even bother consulting the policy if we already filled the
-         // record fully, because then we can't add any padding anyway.
-         // If the user requests more padding than we can actually add, we will
-         // truncate the padding to fill up the record entirely.
-         const size_t padding_length =
-            (pt_size_with_type_tag < max_record_size)
-               ? std::min(policy().record_padding_bytes(pt_size_with_type_tag), max_record_size - pt_size_with_type_tag)
-               : 0;
-         BOTAN_ASSERT_NOMSG(pt_size_with_type_tag + padding_length <= max_record_size);
-
-         output.push_back(cipher_state->protect_record(type, pt_fragment, padding_length));
-      } else {
-         // RFC 9846 5.1
-         //    MUST be set to 0x0303 for all records generated by a TLS 1.3
-         //    implementation other than an initial ClientHello [...], where
-         //    it MAY also be 0x0301 for compatibility purposes.
-         const auto legacy_record_version = (sending_compat_mode()) ? Protocol_Version::TLS_V10  //
-                                                                    : Protocol_Version::TLS_V12;
-
-         // RFC 9846 5.1
-         //    type:                  The higher-level protocol used to process
-         //                           the enclosed fragment.
-         //    legacy_record_version: [see above]
-         //    length:                The length (in bytes) of the following
-         //                           TLSPlaintext.fragment.
-         const auto header = Record_TLS::serialize_header(type,                   //
-                                                          legacy_record_version,  //
-                                                          checked_cast_to<uint16_t>(pt_fragment.size()));
-
-         MarshalledRecordAndNumber& plaintext_record = output.emplace_back();
-         plaintext_record.second = RecordNumber{
-            .epoch = Epoch_Number::Unprotected,
-            // TODO: technically that isn't correct. TLS just doesn't actually handle the sequence number of unprotected records
-            .sequence_number = 0,
-         };
-         plaintext_record.first.get().reserve(header.size() + pt_fragment.size());
-         plaintext_record.first.get().insert(plaintext_record.first.get().end(), header.begin(), header.end());
-         plaintext_record.first.get().insert(
-            plaintext_record.first.get().end(), pt_fragment.begin(), pt_fragment.end());
-      }
-   }
-
-   while(!bs.empty());
-
-   BOTAN_ASSERT_NOMSG(output.size() == records);
-
-   // Set send compatibility mode in case this was the first record we sent
-   m_sending_compat_mode = false;
-
-   return output;
-}
-
-uint16_t TLS_Record_Layer::record_payload_size_limit(const Policy& policy,
-                                                     Cipher_State* cipher_state,
-                                                     std::optional<Epoch_Number> epoch) const {
-   BOTAN_UNUSED(policy, epoch);  // not relevant for TLS
-   constexpr uint16_t content_type_tag_length = 1;
-
-   // RFC 8449 4.
-   //    When the "record_size_limit" extension is negotiated, an endpoint
-   //    MUST NOT generate a protected record with plaintext that is larger
-   //    than the RecordSizeLimit value it receives from its peer.
-   //    Unprotected messages are not subject to this limit.
    return (cipher_state != nullptr) ? outgoing_record_size_limit() - content_type_tag_length
                                     : static_cast<uint16_t>(MAX_PLAINTEXT_SIZE);
 }

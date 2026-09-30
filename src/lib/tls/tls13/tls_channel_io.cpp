@@ -9,6 +9,7 @@
 #include <botan/internal/tls_channel_io.h>
 
 #include <botan/tls_callbacks.h>
+#include <botan/internal/buffer_slicer.h>
 #include <botan/internal/concat_util.h>
 #include <botan/internal/tls_channel_impl_13.h>
 #include <botan/internal/tls_cipher_state.h>
@@ -139,16 +140,16 @@ Channel_IO::ReceiveEvent Channel_IO::next_pending_event(Transcript_Hash_State* t
 }
 
 void Channel_IO::send(std::span<const uint8_t> payload) {
-   send_records(Record_Type::ApplicationData, payload, channel()->cipher_state());
+   send_data(Record_Type::ApplicationData, payload, channel()->cipher_state());
 }
 
 void Channel_IO::send(const Alert& alert) {
-   send_records(Record_Type::Alert, alert.serialize(), channel()->cipher_state());
+   send_data(Record_Type::Alert, alert.serialize(), channel()->cipher_state());
 }
 
 void Channel_IO::send_dummy_change_cipher_spec() {
    constexpr auto ccs = std::array<uint8_t, 1>{0x01};
-   send_records(Record_Type::ChangeCipherSpec, ccs, nullptr);
+   send_data(Record_Type::ChangeCipherSpec, ccs, nullptr);
 }
 
 void Channel_IO::notify_closed_for_reading() {
@@ -192,7 +193,7 @@ class TLS_Channel_IO final : public Channel_IO {
             m_record_layer(side, std::move(policy)),
             m_handshake_layer(side) {}
 
-      void send_records(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override;
+      void send_data(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override;
 
       void send_flight(std::vector<Flight::Message> flight) override;
 
@@ -240,12 +241,35 @@ std::unique_ptr<Channel_IO> Channel_IO::create(TLS_Flavor flavor,
    }
 }
 
-void TLS_Channel_IO::send_records(Record_Type record_type,
-                                  std::span<const uint8_t> payload,
-                                  Cipher_State* cipher_state) {
-   for(const auto& [record_to_write, _] : m_record_layer.prepare_records(record_type, payload, cipher_state)) {
+void TLS_Channel_IO::send_data(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) {
+   const size_t max_plaintext_payload_size = record_layer().record_payload_size_limit(policy(), cipher_state);
+
+   // RFC 9846 5.1
+   //    Handshake messages MAY be [...] fragmented across several records.
+   //    [...] Application Data fragments MAY be split across multiple records
+   //    [...].
+   //
+   // In TLS, we may fragment application data and handshake data into multiple
+   // records. Other record types are not allowed to be fragmented.
+   BOTAN_ASSERT_IMPLICATION(payload.size() > max_plaintext_payload_size,
+                            record_type == Record_Type::ApplicationData || record_type == Record_Type::Handshake,
+                            "Application Data records MUST NOT be zero-length");
+
+   BufferSlicer bs(payload);
+
+   // RFC 9846 5.1
+   //    Zero-length fragments of Application Data [...] MAY be sent, as they
+   //    are potentially useful as a traffic analysis countermeasure.
+   //
+   // We're using a do-while loop to ensure that we process at least one slice
+   // of the payload, even if that first slice is empty.
+   do /* NOLINT(*-avoid-do-while) */ {
+      const size_t pt_size = std::min(bs.remaining(), max_plaintext_payload_size);
+      const auto pt_fragment = bs.take(pt_size);
+
+      const auto [record_to_write, _] = m_record_layer.prepare_record(record_type, pt_fragment, cipher_state);
       callbacks().tls_emit_data(record_to_write);
-   }
+   } while(!bs.empty());
 }
 
 void TLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
@@ -268,7 +292,7 @@ void TLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
          protect, cipher_state != nullptr, "Cipher State is available when messages require protection");
       auto* cs = protect ? cipher_state : nullptr;
 
-      send_records(Record_Type::Handshake, msgs, cs);
+      send_data(Record_Type::Handshake, msgs, cs);
 
       msgs.get().clear();
    };
@@ -319,12 +343,7 @@ void TLS_Channel_IO::send_key_update(Key_Update msg) {
       prepare_tls_handshake_header(Handshake_Type::KeyUpdate, msg_serialized_bytes), msg_serialized_bytes);
 
    auto ch = channel();
-
-   const auto prepared_records =
-      m_record_layer.prepare_records(Record_Type::Handshake, msg_marshalled_bytes, ch->cipher_state());
-
-   BOTAN_ASSERT_NOMSG(prepared_records.size() == 1);  // KeyUpdate is small enough to fit into a single record
-   callbacks().tls_emit_data(prepared_records.front().first);
+   send_data(Record_Type::Handshake, msg_marshalled_bytes, ch->cipher_state());
 
    // Immediately update the write keys after sending the
    // KeyUpdate message (in contrast to DTLS, we have

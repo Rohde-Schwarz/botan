@@ -38,7 +38,7 @@ class DTLS_Channel_IO final : public Channel_IO {
 
       void process(const ACK_Record& ack_record) override;
 
-      void send_records(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override;
+      void send_data(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override;
 
       void send_flight(std::vector<Flight::Message> flight) override;
 
@@ -57,8 +57,6 @@ class DTLS_Channel_IO final : public Channel_IO {
       bool has_pending_key_update() const override { return m_pending_key_update_record.has_value(); }
 
    private:
-      void notify_sent_handshake_flight() { m_retransmission_timer.flight_sent(); }
-
       void maybe_clear_resend_buffer() {
          // If we're not sure that the peer is using DTLS 1.3, we must not clear
          // the resend buffer as soon as we received any fragment of the peer's
@@ -91,8 +89,6 @@ class DTLS_Channel_IO final : public Channel_IO {
    private:
       void arm_dtls_retransmission_timer();
       void on_retransmission_timer();
-
-      void maybe_cancel_dtls_acknowledgement_timer();
 
       DTLS_Record_Layer& record_layer() override { return m_record_layer; }
 

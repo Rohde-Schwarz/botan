@@ -20,7 +20,6 @@
 #include <deque>
 #include <memory>
 #include <span>
-#include <vector>
 
 namespace Botan::TLS {
 
@@ -88,9 +87,24 @@ class BOTAN_TEST_API Record_Layer {
       /// @name Record Preparation
       /// @{
 
-      virtual std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
-                                                                     std::span<const uint8_t> payload,
-                                                                     Cipher_State* cipher_state = nullptr) const = 0;
+      /**
+       * Prepares a record for transmission.
+       *
+       * The payload passed into this function must fit into a single record,
+       * @sa record_payload_size_limit() for the maximum allowed payload size.
+       *
+       * @param type          The type of the record to be prepared.
+       * @param payload       The plaintext payload to be included in the record.
+       * @param cipher_state  Optional pointer to a Cipher_State instance. If provided, the
+       *                      record will be encrypted using this cipher state. Pass nullptr
+       *                      to prepare a plaintext record.
+       *
+       * @returns A vector of marshalled records along with their sequence numbers.
+       */
+      virtual MarshalledRecordAndNumber prepare_record(Record_Type type,
+                                                       std::span<const uint8_t> payload,
+                                                       Cipher_State* cipher_state = nullptr,
+                                                       std::optional<Epoch_Number> epoch = std::nullopt) = 0;
 
       /// @}
 
@@ -171,9 +185,10 @@ class TLS_Record_Layer final : public Record_Layer {
 
       bool copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) override;
       ReadResult next_record(Cipher_State* cipher_state = nullptr) override;
-      std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
-                                                             std::span<const uint8_t> payload,
-                                                             Cipher_State* cipher_state) const override;
+      MarshalledRecordAndNumber prepare_record(Record_Type type,
+                                               std::span<const uint8_t> payload,
+                                               Cipher_State* cipher_state,
+                                               std::optional<Epoch_Number> epoch = std::nullopt) override;
 
       void clear_read_buffer() override;
 
@@ -181,12 +196,9 @@ class TLS_Record_Layer final : public Record_Layer {
                                          Cipher_State* cipher_state = nullptr,
                                          std::optional<Epoch_Number> epoch = std::nullopt) const override;
 
-      bool sending_compat_mode() const { return m_sending_compat_mode; }
-
    private:
+      bool m_sending_compat_mode;
       std::deque<Record_TLS> m_incoming_records;
-
-      mutable bool m_sending_compat_mode = false;  // TODO: prepare_records becomes non-const
 };
 
 }  // namespace Botan::TLS

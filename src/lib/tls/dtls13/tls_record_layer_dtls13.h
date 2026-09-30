@@ -54,9 +54,10 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
 
       ReadResult next_record(Cipher_State* cipher_state = nullptr) override;
 
-      std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
-                                                             std::span<const uint8_t> fragment,
-                                                             Cipher_State* cipher_state) const override;
+      MarshalledRecordAndNumber prepare_record(Record_Type type,
+                                               std::span<const uint8_t> data,
+                                               Cipher_State* cipher_state,
+                                               std::optional<Epoch_Number> epoch = std::nullopt) override;
 
       /**
        * Prepares a single handshake record from a payload containing one or
@@ -71,7 +72,7 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
        */
       MarshalledRecordAndNumber prepare_handshake_record(PackedHandshakeMessageFragments packed_fragments,
                                                          Cipher_State* cipher_state,
-                                                         std::optional<Epoch_Number> epoch = std::nullopt) const;
+                                                         std::optional<Epoch_Number> epoch = std::nullopt);
 
       /**
        * Re-prepares all records that are currently not acknowledged by the
@@ -83,7 +84,7 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
        * @returns a vector of ready-to-send records re-prepared in the
        *          respective epoch of their first transmission.
        */
-      std::vector<MarshalledRecord> prepare_unacknowledged_records(Cipher_State* cipher_state) const;
+      std::vector<MarshalledRecord> prepare_unacknowledged_records(Cipher_State* cipher_state);
 
       /**
        * Like the overload above, but determines the record overhead from the
@@ -158,11 +159,6 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       PlaintextRecord_DTLS read_plaintext_record(BufferSlicer& bs);
       ProtectedRecord_DTLS read_protected_record(BufferSlicer& bs);
 
-      MarshalledRecordAndNumber prepare_record(Record_Type type,
-                                               std::span<const uint8_t> fragment,
-                                               Cipher_State* cipher_state,
-                                               std::optional<Epoch_Number> epoch = std::nullopt) const;
-
       IncomingRecord next_incoming_record();
 
       Replay_Window_13& replay_window_for_epoch(Epoch_Number epoch);
@@ -171,15 +167,14 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       std::shared_ptr<Callbacks> m_callbacks;
 
       std::deque<IncomingRecord> m_incoming_records;
-      mutable std::vector<HandshakeRecordInfo>
-         m_unacked_outgoing_handshake_records;  // TODO: prepare_records shouldn't be const
+      std::vector<HandshakeRecordInfo> m_unacked_outgoing_handshake_records;
 
       std::map<Epoch_Number, Replay_Window_13> m_replay_windows;
 
-      mutable uint64_t m_unprotected_write_seq_no = 0;  // TODO: maybe just make prepare_records non-const
-      mutable uint64_t m_unprotected_read_seq_no = 0;   // TODO: maybe just make deprotect_fragment non-const
+      uint64_t m_unprotected_write_seq_no = 0;
+      uint64_t m_unprotected_read_seq_no = 0;
 
-      mutable std::vector<RecordNumber> m_record_numbers_to_ack;
+      std::vector<RecordNumber> m_record_numbers_to_ack;
 };
 
 }  // namespace Botan::TLS

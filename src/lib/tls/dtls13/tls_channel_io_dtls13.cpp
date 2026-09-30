@@ -39,12 +39,9 @@ DTLS_Channel_IO::DTLS_Channel_IO(Connection_Side side,
       m_handshake_layer(side),
       m_retransmission_timer(policy(), std::move(callbacks)) {}
 
-void DTLS_Channel_IO::send_records(Record_Type record_type,
-                                   std::span<const uint8_t> payload,
-                                   Cipher_State* cipher_state) {
-   for(const auto& [record_to_write, _] : m_record_layer.prepare_records(record_type, payload, cipher_state)) {
-      callbacks().tls_emit_data(record_to_write);
-   }
+void DTLS_Channel_IO::send_data(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) {
+   const auto [prepared_record, _] = m_record_layer.prepare_record(record_type, payload, cipher_state);
+   callbacks().tls_emit_data(prepared_record);
 }
 
 void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
@@ -141,9 +138,9 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
 
    flush_datagram();
 
-   notify_sent_handshake_flight();
+   m_retransmission_timer.flight_sent();
    arm_dtls_retransmission_timer();
-   maybe_cancel_dtls_acknowledgement_timer();
+   m_ack_token.reset();
 }
 
 void DTLS_Channel_IO::send_key_update(Key_Update msg) {
@@ -159,10 +156,10 @@ void DTLS_Channel_IO::send_key_update(Key_Update msg) {
                                          DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH + serialized_key_update.size());
 
    BOTAN_ASSERT_NOMSG(msg_bytes.size() == 1);  // KeyUpdate is small enough to always fit into a single fragment
-   const auto prepared_record = record_layer().prepare_handshake_record(
+   const auto [prepared_record, record_number] = record_layer().prepare_handshake_record(
       PackedHandshakeMessageFragments(std::move(msg_bytes.front())), cipher_state);
 
-   callbacks().tls_emit_data(prepared_record.first);
+   callbacks().tls_emit_data(prepared_record);
 
    // RFC 9147 8.
    //    [...]  KeyUpdates MUST be acknowledged. In order to facilitate epoch
@@ -172,7 +169,7 @@ void DTLS_Channel_IO::send_key_update(Key_Update msg) {
    //
    // The actual call to cipher_state->update_write_keys() is
    // deferred to the handling of the respective acknowledgement.
-   m_pending_key_update_record = prepared_record.second;
+   m_pending_key_update_record = record_number;
 
    // TODO: BoGo is completely green if we forget to
    // arm the retransmission timer here -> add a regression test.
@@ -199,7 +196,7 @@ void DTLS_Channel_IO::send_acknowledgements() {
 
    auto* cipher_state = channel()->cipher_state();
    const auto max_plaintext_length = record_layer().record_payload_size_limit(policy(), cipher_state);
-   send_records(Record_Type::ACK, current_ack_record(max_plaintext_length), cipher_state);
+   send_data(Record_Type::ACK, current_ack_record(max_plaintext_length), cipher_state);
 }
 
 void DTLS_Channel_IO::notify_protocol_version_committed_and_flight_superseded() {
@@ -317,10 +314,6 @@ void DTLS_Channel_IO::maybe_arm_dtls_acknowledgement_timer() {
          channel_io.send_acknowledgements();
       });
    }
-}
-
-void DTLS_Channel_IO::maybe_cancel_dtls_acknowledgement_timer() {
-   m_ack_token.reset();
 }
 
 void DTLS_Channel_IO::process(const Handshake_Record& record) {
