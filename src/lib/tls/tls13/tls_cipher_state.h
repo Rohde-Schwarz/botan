@@ -246,6 +246,12 @@ class BOTAN_TEST_API Cipher_State {
       }
 
       /**
+       * Indicates whether the cipher state has established cryptographic keys
+       * and is capable of sending/receiving protected records.
+       */
+      bool has_cryptographic_association() const;
+
+      /**
        * Indicates whether unprotected Alert records are to be expected
        */
       bool must_expect_unprotected_alert_traffic() const;

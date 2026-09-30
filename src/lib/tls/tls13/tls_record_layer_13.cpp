@@ -80,7 +80,9 @@ TLS_Record_Layer::TLS_Record_Layer(Connection_Side side, std::shared_ptr<const P
                    /* receiving_compat_mode = */ true),
       m_sending_compat_mode(side == Connection_Side::Client) {}
 
-bool TLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer) {
+bool TLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) {
+   BOTAN_UNUSED(has_cryptographic_association);
+
    while(!data_from_peer.empty()) {
       auto& record = [&]() -> Record_TLS& {
          if(m_incoming_records.empty() || m_incoming_records.back().complete()) {

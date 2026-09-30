@@ -50,17 +50,7 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
                         std::shared_ptr<const Policy> policy,
                         std::shared_ptr<Callbacks> callbacks);
 
-      /**
-       * Ingests datagrams received from the peer. This assumes being called for
-       * each individual datagram received from the peer.
-       *
-       * @param data_from_peer  A complete and single datagram from the peer
-       *
-       * @returns false if the datagram got discarded due to some error
-       *          (e.g., invalid formatting), true otherwise
-       */
-      bool copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association);
-      bool copy_data(std::span<const uint8_t> data_from_peer) override;
+      bool copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) override;
 
       ReadResult next_record(Cipher_State* cipher_state = nullptr) override;
 

@@ -189,14 +189,6 @@ void DTLS_Channel_IO::send_key_update(Key_Update msg) {
    // to avoid this.
 }
 
-void DTLS_Channel_IO::copy_data(std::span<const uint8_t> data) {
-   auto* cipher_state = channel()->cipher_state();
-   const auto has_cryptographic_association =
-      (cipher_state != nullptr) && cipher_state->current_read_epoch_number() > Epoch_Number::Unprotected;
-
-   record_layer().copy_data(data, has_cryptographic_association);
-}
-
 void DTLS_Channel_IO::send_acknowledgements() {
    // There might be nothing to acknowledge, e.g. when all recently received
    // handshake records contained fragments that had to be discarded. Don't

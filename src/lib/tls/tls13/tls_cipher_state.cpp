@@ -479,6 +479,11 @@ size_t Cipher_State::minimum_decryption_input_length() const {
    return m_read_epochs.back()->cipher->minimum_final_size();
 }
 
+bool Cipher_State::has_cryptographic_association() const {
+   return current_write_epoch_number() > Epoch_Number::Unprotected &&
+          current_read_epoch_number() > Epoch_Number::Unprotected;
+}
+
 bool Cipher_State::must_expect_unprotected_alert_traffic() const {
    // Client side:
    //   After successfully receiving a Server Hello we expect servers to send

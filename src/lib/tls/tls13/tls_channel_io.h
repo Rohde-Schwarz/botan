@@ -59,7 +59,7 @@ class Channel_IO {
        * Ingests incoming data from the network and processes it into a stream
        * of events. @sa next_pending_event().
        */
-      virtual void copy_data(std::span<const uint8_t> data) = 0;
+      void copy_data(std::span<const uint8_t> data);
 
       /**
        * Retrieves the next pending event from the processed incoming data. If

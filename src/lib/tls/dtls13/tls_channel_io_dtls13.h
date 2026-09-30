@@ -34,8 +34,6 @@ class DTLS_Channel_IO final : public Channel_IO {
                       std::shared_ptr<Callbacks> callbacks);
 
    public:
-      void copy_data(std::span<const uint8_t> data) override;
-
       void process(const Handshake_Record& record) override;
 
       void process(const ACK_Record& ack_record) override;

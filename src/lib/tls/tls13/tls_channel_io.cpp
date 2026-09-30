@@ -94,6 +94,14 @@ std::optional<Channel_IO::ReceiveEvent> Channel_IO::next_pending_handshake_messa
    }
 }
 
+void Channel_IO::copy_data(std::span<const uint8_t> data) {
+   auto* cipher_state = channel()->cipher_state();
+   const auto has_cryptographic_association =
+      (cipher_state != nullptr) && cipher_state->has_cryptographic_association();
+
+   record_layer().copy_data(data, has_cryptographic_association);
+}
+
 Channel_IO::ReceiveEvent Channel_IO::next_pending_event(Transcript_Hash_State* transcript_hash,
                                                         bool handshake_complete) {
    while(true) {
@@ -190,8 +198,6 @@ class TLS_Channel_IO final : public Channel_IO {
 
       void send_key_update(Key_Update msg) override;
 
-      void copy_data(std::span<const uint8_t> data) override { m_record_layer.copy_data(data); }
-
       void process(const Handshake_Record& record) override {
          std::ignore = m_handshake_layer.copy_data(policy(), record);
       }
@@ -262,9 +268,7 @@ void TLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
          protect, cipher_state != nullptr, "Cipher State is available when messages require protection");
       auto* cs = protect ? cipher_state : nullptr;
 
-      for(const auto& [record_to_write, _] : m_record_layer.prepare_records(Record_Type::Handshake, msgs, cs)) {
-         callbacks().tls_emit_data(record_to_write);
-      }
+      send_records(Record_Type::Handshake, msgs, cs);
 
       msgs.get().clear();
    };

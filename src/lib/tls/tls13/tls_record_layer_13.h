@@ -52,17 +52,23 @@ class BOTAN_TEST_API Record_Layer {
 
       using ReadResult = variant_append_t<Record, BytesNeeded>;
 
+      /// @name Record Ingestion
+      /// @{
+
       /**
        * Reads data that was received by the peer and stores it internally for further
        * processing during the invocation of `next_record()`.
        *
        * @param data_from_peer  The data to be parsed.
+       * @param has_cryptographic_association  Indicates whether there is already an
+       *                                       established cryptographic association
+       *                                       with the peer (i.e. a shared secret).
        *
        * @returns true if the data was successfully ingested, false if something
        *          went wrong. Typically DTLS record layers will return false if
        *          the passed-in datagram was somehow invalid and got discarded.
        */
-      virtual bool copy_data(std::span<const uint8_t> data_from_peer) = 0;
+      virtual bool copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) = 0;
 
       /**
        * Parses one record off the internal buffer that is being filled using `ingest`.
@@ -77,9 +83,16 @@ class BOTAN_TEST_API Record_Layer {
        */
       virtual ReadResult next_record(Cipher_State* cipher_state = nullptr) = 0;
 
+      /// @}
+
+      /// @name Record Preparation
+      /// @{
+
       virtual std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
                                                                      std::span<const uint8_t> payload,
                                                                      Cipher_State* cipher_state = nullptr) const = 0;
+
+      /// @}
 
       /**
        * Returns the maximum number of bytes that can be put into a record.
@@ -156,7 +169,7 @@ class TLS_Record_Layer final : public Record_Layer {
    public:
       explicit TLS_Record_Layer(Connection_Side side, std::shared_ptr<const Policy> policy);
 
-      bool copy_data(std::span<const uint8_t> data_from_peer) override;
+      bool copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) override;
       ReadResult next_record(Cipher_State* cipher_state = nullptr) override;
       std::vector<MarshalledRecordAndNumber> prepare_records(Record_Type type,
                                                              std::span<const uint8_t> payload,
