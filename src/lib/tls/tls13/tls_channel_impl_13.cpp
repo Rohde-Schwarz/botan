@@ -71,6 +71,12 @@ void Channel_Impl_13::setup_io() {
    m_channel_io = Channel_IO::create(m_flavor, m_side, shared_from_this(), m_policy, m_callbacks);
 }
 
+Cipher_State& Channel_Impl_13::setup_cipher_state(std::unique_ptr<Cipher_State> cipher_state) {
+   BOTAN_ASSERT_NOMSG(cipher_state != nullptr);
+   m_cipher_state = std::move(cipher_state);
+   return *m_cipher_state;
+}
+
 Channel_Impl_13::~Channel_Impl_13() = default;
 
 size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {

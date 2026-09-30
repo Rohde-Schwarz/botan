@@ -112,25 +112,10 @@
 #include <botan/internal/tls_channel_impl_13.h>
 
 #if defined(BOTAN_HAS_DTLS_13)
-   #include <botan/block_cipher.h>
-   #include <botan/stream_cipher.h>
-   #include <botan/internal/tls_utils_dtls13.h>
+   #include <botan/internal/tls_cipher_state_dtls13.h>
 #endif
 
 namespace Botan::TLS {
-
-namespace {
-// RFC 8446 5.3
-//    Each AEAD algorithm will specify a range of possible lengths for the
-//    per-record nonce, from N_MIN bytes to N_MAX bytes of input [RFC5116].
-//    The length of the TLS per-record nonce (iv_length) is set to the
-//    larger of 8 bytes and N_MIN for the AEAD algorithm (see [RFC5116],
-//    Section 4).
-//
-// N_MIN is 12 for AES_GCM and AES_CCM as per RFC 5116 and also 12 for ChaCha20 per RFC 8439.
-constexpr size_t NONCE_LENGTH = 12;
-
-}  // namespace
 
 std::unique_ptr<Cipher_State> Cipher_State::init_with_server_hello(const Connection_Side side,
                                                                    secure_vector<uint8_t>&& shared_secret,
@@ -138,7 +123,7 @@ std::unique_ptr<Cipher_State> Cipher_State::init_with_server_hello(const Connect
                                                                    const Transcript_Hash& transcript_hash,
                                                                    const Secret_Logger& logger,
                                                                    TLS_Flavor flavor) {
-   auto cs = std::unique_ptr<Cipher_State>(new Cipher_State(side, cipher.prf_algo(), flavor));
+   auto cs = Cipher_State::create(side, cipher.prf_algo(), flavor);
    cs->advance_without_psk();
    cs->advance_with_server_hello(cipher, std::move(shared_secret), transcript_hash, logger);
    return cs;
@@ -149,15 +134,13 @@ std::unique_ptr<Cipher_State> Cipher_State::init_with_psk(const Connection_Side 
                                                           secure_vector<uint8_t>&& psk,
                                                           std::string_view prf_algo,
                                                           TLS_Flavor flavor) {
-   auto cs = std::unique_ptr<Cipher_State>(new Cipher_State(side, prf_algo, flavor));
+   auto cs = Cipher_State::create(side, prf_algo, flavor);
    cs->advance_with_psk(type, std::move(psk));
    return cs;
 }
 
 void Cipher_State::advance_with_client_hello(const Transcript_Hash& transcript_hash, const Secret_Logger& logger) {
    BOTAN_ASSERT_NOMSG(m_state == State::PskBinder);
-   BOTAN_DEBUG_ASSERT(current_write_epoch_number() == Epoch_Number::Unprotected);
-   BOTAN_DEBUG_ASSERT(current_read_epoch_number() == Epoch_Number::Unprotected);
 
    zap(m_binder_key);
 
@@ -183,8 +166,7 @@ void Cipher_State::advance_with_client_hello(const Transcript_Hash& transcript_h
 
 void Cipher_State::advance_with_server_finished(const Transcript_Hash& transcript_hash, const Secret_Logger& logger) {
    BOTAN_ASSERT_NOMSG(m_state == State::HandshakeTraffic);
-   BOTAN_DEBUG_ASSERT(current_write_epoch_number() == Epoch_Number::HandshakeTraffic);
-   BOTAN_DEBUG_ASSERT(current_read_epoch_number() == Epoch_Number::HandshakeTraffic);
+   BOTAN_ASSERT_NONNULL(m_hash);
 
    const auto master_secret = hkdf_extract(secure_vector<uint8_t>(m_hash->output_length(), 0x00));
 
@@ -223,14 +205,8 @@ void Cipher_State::advance_with_server_finished(const Transcript_Hash& transcrip
 
 void Cipher_State::advance_with_client_finished(const Transcript_Hash& transcript_hash) {
    BOTAN_ASSERT_NOMSG(m_state == State::ServerApplicationTraffic);
-   BOTAN_DEBUG_ASSERT(/* Server => (read_epoch == Handshake && write_epoch == AppTraffic) */
-                      m_connection_side != Connection_Side::Server ||
-                      (current_read_epoch_number() == Epoch_Number::HandshakeTraffic &&
-                       current_write_epoch_number() >= Epoch_Number::ApplicationTraffic_0));
-   BOTAN_DEBUG_ASSERT(/* Client => (read_epoch == AppTraffic && write_epoch == Handshake) */
-                      m_connection_side != Connection_Side::Client ||
-                      (current_write_epoch_number() == Epoch_Number::HandshakeTraffic &&
-                       current_read_epoch_number() >= Epoch_Number::ApplicationTraffic_0));
+   BOTAN_ASSERT_NONNULL(m_hash);
+   BOTAN_ASSERT_NOMSG(!m_client_application_traffic_secret_0.empty());
 
    // With the client's Finished message, the handshake is complete and
    // we can process client application data.
@@ -254,9 +230,8 @@ void Cipher_State::advance_with_client_finished(const Transcript_Hash& transcrip
    m_state = State::Completed;
 }
 
-namespace {
-
-auto current_nonce(const uint64_t seq_no, std::span<const uint8_t> iv) {
+std::array<uint8_t, Cipher_State::NONCE_LENGTH> Cipher_State::current_nonce(const uint64_t seq_no,
+                                                                            std::span<const uint8_t> iv) {
    // RFC 8446 5.3
    //    The per-record nonce for the AEAD construction is formed as follows:
    //
@@ -271,21 +246,17 @@ auto current_nonce(const uint64_t seq_no, std::span<const uint8_t> iv) {
    return nonce;
 }
 
-}  // namespace
-
-MarshalledRecordAndNumber Cipher_State::protect_record(Record_Type type,
-                                                       std::span<const uint8_t> plaintext,
-                                                       size_t padding_bytes) {
-   BOTAN_STATE_CHECK(current_write_epoch_number() > Epoch_Number::Unprotected);
-
-   auto& epoch = *m_write_epochs.back();
+MarshalledRecordAndNumber TLS_Cipher_State::protect_record(Record_Type type,
+                                                           std::span<const uint8_t> plaintext,
+                                                           size_t padding_bytes) {
+   BOTAN_ASSERT_NOMSG(m_write_epoch.has_value());
 
    // RFC 8446 5.3
    //    Sequence numbers MUST NOT wrap.
    // RFC 9147 4.2.1
    //    Implementations MUST either abandon an association or rekey prior to
    //    allowing the sequence number to wrap.
-   if(epoch.sequence_number == std::numeric_limits<uint64_t>::max()) {
+   if(m_write_epoch->sequence_number == std::numeric_limits<uint64_t>::max()) {
       throw Invalid_State("TLS write sequence number overflow");
    }
 
@@ -329,24 +300,22 @@ MarshalledRecordAndNumber Cipher_State::protect_record(Record_Type type,
    result.get().insert(result.end(), padding_bytes, 0x00);                 // zeros (padding)
 
    BOTAN_ASSERT_NOMSG(result.size() == unprotected_record_length);
-   const auto sequence_number = epoch.sequence_number++;
-   epoch.cipher->set_associated_data(std::span{result}.first<TLS_HEADER_SIZE>());
-   epoch.cipher->start(current_nonce(sequence_number, epoch.iv));
-   epoch.cipher->finish(result, TLS_HEADER_SIZE);
+   const auto sequence_number = m_write_epoch->sequence_number++;
+   m_write_epoch->cipher->set_associated_data(std::span{result}.first<TLS_HEADER_SIZE>());
+   m_write_epoch->cipher->start(current_nonce(sequence_number, m_write_epoch->iv));
+   m_write_epoch->cipher->finish(result, TLS_HEADER_SIZE);
    BOTAN_ASSERT_NOMSG(result.size() == protected_record_length);
 
    return std::make_pair(std::move(result),
                          RecordNumber{
-                            .epoch = epoch.number,
+                            .epoch = m_write_epoch->number,
                             .sequence_number = sequence_number,
                          });
 }
 
-Record Cipher_State::deprotect_record(Record_TLS record, size_t incoming_record_size_limit) {
-   BOTAN_STATE_CHECK(current_read_epoch_number() > Epoch_Number::Unprotected);
+Record TLS_Cipher_State::deprotect_record(Record_TLS record, size_t incoming_record_size_limit) {
+   BOTAN_ASSERT_NOMSG(m_read_epoch.has_value());
    BOTAN_ARG_CHECK(record.type() == Record_Type::ApplicationData, "Record type must be ApplicationData");
-
-   auto& epoch = *m_read_epochs.back();
 
    // RFC 9846 5.2
    //    length: The length (in bytes) [...], which is the sum of the lengths of
@@ -358,7 +327,7 @@ Record Cipher_State::deprotect_record(Record_TLS record, size_t incoming_record_
    //
    // If the protected record contains less bytes than the expected AEAD tag we
    // can already fail early because the decryption will fail anyway.
-   if(record.payload().size() < epoch.cipher->minimum_final_size()) {
+   if(record.payload().size() < m_read_epoch->cipher->minimum_final_size()) {
       throw TLS_Exception(Alert::BadRecordMac, "incomplete record mac received");
    }
 
@@ -376,21 +345,21 @@ Record Cipher_State::deprotect_record(Record_TLS record, size_t incoming_record_
 
    // RFC 8446 5.3
    //    Sequence numbers MUST NOT wrap.
-   if(epoch.sequence_number == std::numeric_limits<uint64_t>::max()) {
+   if(m_read_epoch->sequence_number == std::numeric_limits<uint64_t>::max()) {
       throw Invalid_State("TLS read sequence number overflow");
    }
 
    auto result = Record_Content{
       .type = Record_Type::Invalid,
-      .sequence_number = epoch.sequence_number++,
+      .sequence_number = m_read_epoch->sequence_number++,
       .payload = record.take_payload(),
       .epoch = std::nullopt,
    };
 
    BOTAN_ASSERT_NOMSG(result.payload.size() <= MAX_CIPHERTEXT_SIZE_TLS13);
-   epoch.cipher->set_associated_data(record.header());
-   epoch.cipher->start(current_nonce(result.sequence_number.value(), epoch.iv));
-   epoch.cipher->finish(result.payload);
+   m_read_epoch->cipher->set_associated_data(record.header());
+   m_read_epoch->cipher->start(current_nonce(result.sequence_number.value(), m_read_epoch->iv));
+   m_read_epoch->cipher->finish(result.payload);
    BOTAN_ASSERT_NOMSG(result.payload.size() <= MAX_PLAINTEXT_SIZE + 1 /* content_type byte */);
 
    // Remove record padding (RFC 9846 5.4). The TLSInnerPlaintext layout is
@@ -459,24 +428,21 @@ Record Cipher_State::deprotect_record(Record_TLS record, size_t incoming_record_
 }
 
 size_t Cipher_State::encrypt_output_length(const size_t input_length) const {
-   BOTAN_STATE_CHECK(current_write_epoch_number() > Epoch_Number::Unprotected);
    // This assumes that the AEAD cipher's output length does not change
    // between epochs.
-   return m_write_epochs.back()->cipher->output_length(input_length);
+   return latest_write_epoch().cipher->output_length(input_length);
 }
 
 size_t Cipher_State::decrypt_output_length(const size_t input_length) const {
-   BOTAN_STATE_CHECK(current_read_epoch_number() > Epoch_Number::Unprotected);
    // This assumes that the AEAD cipher's output length does not change
    // between epochs.
-   return m_read_epochs.back()->cipher->output_length(input_length);
+   return latest_read_epoch().cipher->output_length(input_length);
 }
 
 size_t Cipher_State::minimum_decryption_input_length() const {
-   BOTAN_STATE_CHECK(current_read_epoch_number() > Epoch_Number::Unprotected);
    // This assumes that the AEAD cipher's minimal final size does not change
    // between epochs.
-   return m_read_epochs.back()->cipher->minimum_final_size();
+   return latest_read_epoch().cipher->minimum_final_size();
 }
 
 bool Cipher_State::has_cryptographic_association() const {
@@ -547,7 +513,7 @@ bool Cipher_State::is_compatible_with(const Ciphersuite& cipher) const {
    if(current_write_epoch_number() > Epoch_Number::Unprotected) {
       auto canonical = AEAD_Mode::create(cipher.cipher_algo(), Cipher_Dir::Encryption);
       // This assumes that the AEAD cipher does not change between epochs.
-      if(!canonical || canonical->name() != m_write_epochs.back()->cipher->name()) {
+      if(!canonical || canonical->name() != latest_write_epoch().cipher->name()) {
          return false;
       }
    }
@@ -558,6 +524,7 @@ bool Cipher_State::is_compatible_with(const Ciphersuite& cipher) const {
 std::vector<uint8_t> Cipher_State::psk_binder_mac(
    const Transcript_Hash& transcript_hash_with_truncated_client_hello) const {
    BOTAN_ASSERT_NOMSG(m_state == State::PskBinder);
+   BOTAN_ASSERT_NONNULL(m_hash);
 
    auto hmac = HMAC(m_hash->new_object());
    hmac.set_key(m_binder_key);
@@ -568,9 +535,9 @@ std::vector<uint8_t> Cipher_State::psk_binder_mac(
 std::vector<uint8_t> Cipher_State::finished_mac(const Transcript_Hash& transcript_hash) const {
    BOTAN_ASSERT_NOMSG(m_connection_side != Connection_Side::Server || m_state == State::HandshakeTraffic);
    BOTAN_ASSERT_NOMSG(m_connection_side != Connection_Side::Client || m_state == State::ServerApplicationTraffic);
-   BOTAN_ASSERT_NOMSG(current_write_epoch_number() == Epoch_Number::HandshakeTraffic);
+   BOTAN_ASSERT_NONNULL(m_hash);
 
-   auto& epoch = *m_write_epochs.back();
+   const auto& epoch = latest_write_epoch();
    BOTAN_ASSERT_NOMSG(epoch.finished_key.has_value());
 
    auto hmac = HMAC(m_hash->new_object());
@@ -583,9 +550,9 @@ bool Cipher_State::verify_peer_finished_mac(const Transcript_Hash& transcript_ha
                                             const std::vector<uint8_t>& peer_mac) const {
    BOTAN_ASSERT_NOMSG(m_connection_side != Connection_Side::Server || m_state == State::ServerApplicationTraffic);
    BOTAN_ASSERT_NOMSG(m_connection_side != Connection_Side::Client || m_state == State::HandshakeTraffic);
-   BOTAN_ASSERT_NOMSG(current_read_epoch_number() == Epoch_Number::HandshakeTraffic);
+   BOTAN_ASSERT_NONNULL(m_hash);
 
-   auto& epoch = *m_read_epochs.back();
+   const auto& epoch = latest_read_epoch();
    BOTAN_ASSERT_NOMSG(epoch.finished_key.has_value());
 
    auto hmac = HMAC(m_hash->new_object());
@@ -619,6 +586,7 @@ Ticket_Nonce Cipher_State::next_ticket_nonce() {
 
 secure_vector<uint8_t> Cipher_State::export_key(std::string_view label, std::string_view context, size_t length) const {
    BOTAN_ASSERT_NOMSG(can_export_keys());
+   BOTAN_ASSERT_NONNULL(m_hash);
 
    m_hash->update(context);
    const auto context_hash = m_hash->final_stdvec();
@@ -634,24 +602,24 @@ std::unique_ptr<MessageAuthenticationCode> create_hmac(std::string_view hash) {
 
 }  // namespace
 
-Cipher_State::Cipher_State(Connection_Side whoami, std::string_view hash_function, TLS_Flavor flavor) :
-      m_tls_flavor(flavor),
+Cipher_State::Cipher_State(Connection_Side whoami, std::string_view hash_function) :
       m_state(State::Uninitialized),
       m_connection_side(whoami),
       m_extract(std::make_unique<HKDF_Extract>(create_hmac(hash_function))),
       m_expand(std::make_unique<HKDF_Expand>(create_hmac(hash_function))),
       m_hash(HashFunction::create_or_throw(hash_function)),
       m_salt(m_hash->output_length(), 0x00),
-      m_write_key_update_count(0),
-      m_read_key_update_count(0),
       m_ticket_nonce(0) {}
+
+TLS_Cipher_State::TLS_Cipher_State(Connection_Side side, std::string_view prf_algo) : Cipher_State(side, prf_algo) {}
 
 Cipher_State::~Cipher_State() = default;
 
+TLS_Cipher_State::~TLS_Cipher_State() = default;
+
 void Cipher_State::advance_without_psk() {
    BOTAN_ASSERT_NOMSG(m_state == State::Uninitialized);
-   BOTAN_DEBUG_ASSERT(current_write_epoch_number() == Epoch_Number::Unprotected);
-   BOTAN_DEBUG_ASSERT(current_read_epoch_number() == Epoch_Number::Unprotected);
+   BOTAN_ASSERT_NONNULL(m_hash);
 
    // We are not using `m_early_secret` here because the secret won't be needed
    // in any further state advancement methods.
@@ -664,8 +632,7 @@ void Cipher_State::advance_without_psk() {
 
 void Cipher_State::advance_with_psk(PSK_Type type, secure_vector<uint8_t>&& psk) {
    BOTAN_ASSERT_NOMSG(m_state == State::Uninitialized);
-   BOTAN_DEBUG_ASSERT(current_write_epoch_number() == Epoch_Number::Unprotected);
-   BOTAN_DEBUG_ASSERT(current_read_epoch_number() == Epoch_Number::Unprotected);
+   BOTAN_ASSERT_NONNULL(m_hash);
 
    m_early_secret = hkdf_extract(std::move(psk));
 
@@ -703,8 +670,6 @@ void Cipher_State::advance_with_server_hello(const Ciphersuite& cipher,
    BOTAN_ASSERT_NOMSG(m_state == State::EarlyTraffic);
    BOTAN_STATE_CHECK(is_compatible_with(cipher));
    BOTAN_STATE_CHECK(!m_ciphersuite.has_value());
-   BOTAN_DEBUG_ASSERT(current_write_epoch_number() == Epoch_Number::Unprotected);
-   BOTAN_DEBUG_ASSERT(current_read_epoch_number() == Epoch_Number::Unprotected);
 
    m_ciphersuite = cipher;
 
@@ -733,29 +698,34 @@ void Cipher_State::advance_with_server_hello(const Ciphersuite& cipher,
    m_state = State::HandshakeTraffic;
 }
 
-std::unique_ptr<Cipher_State::Epoch> Cipher_State::create_epoch(Epoch_Number epoch_number,
-                                                                Cipher_Dir direction,
-                                                                const secure_vector<uint8_t>& traffic_secret) const {
-   auto epoch = Epoch{
+Cipher_State::Epoch Cipher_State::create_epoch(Epoch_Number epoch_number,
+                                               Cipher_Dir direction,
+                                               const secure_vector<uint8_t>& traffic_secret) const {
+   BOTAN_ASSERT_NONNULL(m_hash);
+   BOTAN_ASSERT_NOMSG(m_ciphersuite.has_value());
+
+   return {
       .number = epoch_number,
-      .cipher = AEAD_Mode::create_or_throw(m_ciphersuite->cipher_algo(), direction),
+      .cipher = [&]() -> std::unique_ptr<AEAD_Mode> {
+         auto cipher = AEAD_Mode::create_or_throw(m_ciphersuite->cipher_algo(), direction);
+         cipher->set_key(hkdf_expand_label(traffic_secret, "key", {}, cipher->minimum_keylength()));
+         return cipher;
+      }(),
       .iv = hkdf_expand_label(traffic_secret, "iv", {}, NONCE_LENGTH),
       .sequence_number = 0,
       .traffic_secret = traffic_secret,
+      .finished_key = [&]() -> std::optional<secure_vector<uint8_t>> {
+         if(epoch_number == Epoch_Number::HandshakeTraffic) {
+            return hkdf_expand_label(traffic_secret, "finished", {}, m_hash->output_length());
+         }
+         return {};
+      }(),
    };
+}
 
-   epoch.cipher->set_key(hkdf_expand_label(traffic_secret, "key", {}, epoch.cipher->minimum_keylength()));
-
-   if(epoch_number == Epoch_Number::HandshakeTraffic) {
-      epoch.finished_key = hkdf_expand_label(traffic_secret, "finished", {}, m_hash->output_length());
-   }
-
-   if(m_tls_flavor == TLS_Flavor::DTLS) {
-      // RFC 9147 Section 4.2.3
-      epoch.sequence_number_key = hkdf_expand_label(traffic_secret, "sn", {}, epoch.cipher->minimum_keylength());
-   }
-
-   return std::make_unique<Epoch>(std::move(epoch));
+const Ciphersuite& Cipher_State::ciphersuite() const {
+   BOTAN_ASSERT_NOMSG(m_ciphersuite.has_value());
+   return *m_ciphersuite;
 }
 
 namespace {
@@ -764,50 +734,55 @@ Epoch_Number operator+(Epoch_Number current, size_t offset) {
    return static_cast<Epoch_Number>(to_underlying(current) + offset);
 }
 
-}  // namespace
-
-void Cipher_State::advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
-                                       std::optional<Epoch_Number> epoch_number) {
-   const auto next_epoch_number = epoch_number.value_or(current_write_epoch_number() + 1);
-   m_write_epochs.push_back(create_epoch(next_epoch_number, Cipher_Dir::Encryption, traffic_secret));
-
-   // TODO: How many epochs should we keep around for DTLS?
-   const size_t epochs_to_keep = m_tls_flavor == TLS_Flavor::DTLS ? 2 : 1;
-   BOTAN_ASSERT_NOMSG(m_write_epochs.size() <= epochs_to_keep + 1);
-   if(m_write_epochs.size() > epochs_to_keep) {
-      m_write_epochs.erase(m_write_epochs.begin());
-   }
+Epoch_Number operator-(Epoch_Number current, Epoch_Number offset) {
+   return static_cast<Epoch_Number>(to_underlying(current) - to_underlying(offset));
 }
 
-void Cipher_State::advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
-                                      std::optional<Epoch_Number> epoch_number) {
-   const auto next_epoch_number = epoch_number.value_or(current_read_epoch_number() + 1);
-   m_read_epochs.push_back(create_epoch(next_epoch_number, Cipher_Dir::Decryption, traffic_secret));
+}  // namespace
 
-   // TODO: How many epochs should we keep around for DTLS?
-   const size_t epochs_to_keep = m_tls_flavor == TLS_Flavor::DTLS ? 2 : 1;
-   BOTAN_ASSERT_NOMSG(m_read_epochs.size() <= epochs_to_keep + 1);
-   if(m_read_epochs.size() > epochs_to_keep) {
-      m_read_epochs.erase(m_read_epochs.begin());
-   }
+void TLS_Cipher_State::advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                           std::optional<Epoch_Number> epoch_number) {
+   const auto next_epoch_number = epoch_number.value_or(current_write_epoch_number() + 1);
+   m_write_epoch = create_epoch(next_epoch_number, Cipher_Dir::Encryption, traffic_secret);
+}
+
+void TLS_Cipher_State::advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                          std::optional<Epoch_Number> epoch_number) {
+   const auto next_epoch_number = epoch_number.value_or(current_read_epoch_number() + 1);
+   m_read_epoch = create_epoch(next_epoch_number, Cipher_Dir::Decryption, traffic_secret);
+}
+
+void TLS_Cipher_State::clear_write_keys() {
+   m_write_epoch.reset();
+}
+
+void TLS_Cipher_State::clear_read_keys() {
+   m_read_epoch.reset();
 }
 
 secure_vector<uint8_t> Cipher_State::hkdf_extract(std::span<const uint8_t> ikm) const {
+   BOTAN_ASSERT_NONNULL(m_extract);
+   BOTAN_ASSERT_NONNULL(m_hash);
    return m_extract->derive_key(m_hash->output_length(), ikm, m_salt, std::vector<uint8_t>());
+}
+
+std::array<uint8_t, 6> TLS_Cipher_State::expansion_label_prefix() const {
+   // RFC 9846 7.1
+   return {'t', 'l', 's', '1', '3', ' '};
 }
 
 secure_vector<uint8_t> Cipher_State::hkdf_expand_label(const secure_vector<uint8_t>& secret,
                                                        std::string_view label,
                                                        const std::vector<uint8_t>& context,
                                                        const size_t length) const {
+   BOTAN_ASSERT_NONNULL(m_expand);
    BOTAN_ARG_CHECK(length <= std::numeric_limits<uint16_t>::max(), "invalid length");
    BOTAN_ARG_CHECK(context.size() <= 255, "context too large");
 
-   const std::string_view prefix = m_tls_flavor == TLS_Flavor::DTLS ? "dtls13" : "tls13 ";
-
+   const auto prefix = expansion_label_prefix();
    const auto hkdf_label = concat<secure_vector<uint8_t>>(store_be(static_cast<uint16_t>(length)),
                                                           store_be(static_cast<uint8_t>(prefix.size() + label.size())),
-                                                          as_span_of_bytes(prefix),
+                                                          prefix,
                                                           as_span_of_bytes(label),
                                                           store_be(static_cast<uint8_t>(context.size())),
                                                           context);
@@ -820,26 +795,30 @@ secure_vector<uint8_t> Cipher_State::hkdf_expand_label(const secure_vector<uint8
 secure_vector<uint8_t> Cipher_State::derive_secret(const secure_vector<uint8_t>& secret,
                                                    std::string_view label,
                                                    const Transcript_Hash& messages_hash) const {
+   BOTAN_ASSERT_NONNULL(m_hash);
    return hkdf_expand_label(secret, label, messages_hash, m_hash->output_length());
 }
 
 std::vector<uint8_t> Cipher_State::empty_hash() const {
+   BOTAN_ASSERT_NONNULL(m_hash);
    m_hash->update("");
    return m_hash->final_stdvec();
 }
 
 void Cipher_State::update_read_keys(const Secret_Logger& logger) {
    BOTAN_ASSERT_NOMSG(m_state == State::ServerApplicationTraffic || m_state == State::Completed);
-   BOTAN_ASSERT_NOMSG(current_read_epoch_number() >= Epoch_Number::ApplicationTraffic_0);
+   BOTAN_ASSERT_NONNULL(m_hash);
 
-   auto& epoch = *m_read_epochs.back();
+   auto& epoch = latest_read_epoch();
 
    const auto new_read_application_traffic_secret =
       hkdf_expand_label(epoch.traffic_secret, "traffic upd", {}, m_hash->output_length());
 
+   BOTAN_DEBUG_ASSERT(current_read_epoch_number() >= Epoch_Number::ApplicationTraffic_0);
+   const auto app_key_index = current_read_epoch_number() - Epoch_Number::ApplicationTraffic_0;
    const auto secret_label = fmt("{}_TRAFFIC_SECRET_{}",
                                  m_connection_side == Connection_Side::Server ? "CLIENT" : "SERVER",
-                                 ++m_read_key_update_count);
+                                 to_underlying(app_key_index));
    logger.maybe_log_secret(secret_label, new_read_application_traffic_secret);
 
    advance_read_epoch(new_read_application_traffic_secret);
@@ -847,493 +826,49 @@ void Cipher_State::update_read_keys(const Secret_Logger& logger) {
 
 void Cipher_State::update_write_keys(const Secret_Logger& logger) {
    BOTAN_ASSERT_NOMSG(m_state == State::ServerApplicationTraffic || m_state == State::Completed);
-   BOTAN_ASSERT_NOMSG(current_write_epoch_number() >= Epoch_Number::ApplicationTraffic_0);
+   BOTAN_ASSERT_NONNULL(m_hash);
 
-   auto& epoch = *m_write_epochs.back();
+   auto& epoch = latest_write_epoch();
 
    const auto new_write_application_traffic_secret =
       hkdf_expand_label(epoch.traffic_secret, "traffic upd", {}, m_hash->output_length());
 
+   BOTAN_DEBUG_ASSERT(current_write_epoch_number() >= Epoch_Number::ApplicationTraffic_0);
+   const auto app_key_index = current_write_epoch_number() - Epoch_Number::ApplicationTraffic_0;
    const auto secret_label = fmt("{}_TRAFFIC_SECRET_{}",
                                  m_connection_side == Connection_Side::Server ? "SERVER" : "CLIENT",
-                                 ++m_write_key_update_count);
+                                 to_underlying(app_key_index));
    logger.maybe_log_secret(secret_label, new_write_application_traffic_secret);
 
    advance_write_epoch(new_write_application_traffic_secret);
 }
 
 uint64_t Cipher_State::current_write_sequence_number() const {
-   BOTAN_STATE_CHECK(current_write_epoch_number() > Epoch_Number::Unprotected);
-   return m_write_epochs.back()->sequence_number;
+   return latest_write_epoch().sequence_number;
 }
 
 uint64_t Cipher_State::current_read_sequence_number() const {
-   BOTAN_STATE_CHECK(current_read_epoch_number() > Epoch_Number::Unprotected);
-   return m_read_epochs.back()->sequence_number;
-}
-
-void Cipher_State::encrypt_record_fragment_dtls(uint64_t seq_no,
-                                                std::span<const uint8_t> header,
-                                                secure_vector<uint8_t>& fragment) {
-#if defined(BOTAN_HAS_DTLS_13)
-   BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
-   BOTAN_STATE_CHECK(current_write_epoch_number() > Epoch_Number::Unprotected);
-
-   auto& epoch = *m_write_epochs.back();
-   BOTAN_STATE_CHECK(seq_no == epoch.sequence_number);
-
-   epoch.cipher->set_associated_data(header);
-   epoch.cipher->start(current_nonce(seq_no, epoch.iv));
-   epoch.cipher->finish(fragment);
-
-   epoch.sequence_number++;
-#else
-   BOTAN_UNUSED(seq_no, header, fragment);
-   throw Not_Implemented("DTLS 1.3 is not configured");
-#endif
-}
-
-void Cipher_State::decrypt_record_fragment_dtls(uint64_t seq_no,
-                                                std::span<const uint8_t> header,
-                                                secure_vector<uint8_t>& fragment) {
-#if defined(BOTAN_HAS_DTLS_13)
-   BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
-   BOTAN_STATE_CHECK(current_read_epoch_number() > Epoch_Number::Unprotected);
-
-   auto& epoch = *m_read_epochs.back();
-
-   // TODO: implement proper out-of-order handling
-   BOTAN_STATE_CHECK(seq_no == epoch.sequence_number);
-
-   epoch.cipher->set_associated_data(header);
-   epoch.cipher->start(current_nonce(seq_no, epoch.iv));
-   epoch.cipher->finish(fragment);
-
-   epoch.sequence_number++;
-#else
-   BOTAN_UNUSED(seq_no, header, fragment);
-   throw Not_Implemented("DTLS 1.3 is not configured");
-#endif
-}
-
-#if defined(BOTAN_HAS_DTLS_13)
-namespace {
-
-/**
- * Computes the record number mask (RFC 9147 Section 4.2.3) for the
- * given write epoch from a 16-byte ciphertext sample.
- */
-std::array<uint8_t, 16> compute_record_number_mask(const Cipher_State::Epoch& epoch,
-                                                   const Ciphersuite& ciphersuite,
-                                                   std::span<const uint8_t, 16> ct) {
-   BOTAN_ASSERT_NOMSG(epoch.sequence_number_key.has_value());
-
-   auto mask = typecast_copy<std::array<uint8_t, 16>>(ct);
-
-   // TODO: it would be helpful to provide a canonical block/stream cipher name
-   //       from the Ciphersuite (e.g. "AES-128" or "ChaCha20") or any other way
-   //       to avoid string comparisons here.
-
-   if(ciphersuite.to_string() == "CHACHA20_POLY1305_SHA256") {
-      auto chacha = StreamCipher::create_or_throw("ChaCha20");
-
-      // RFC 8439 2.3
-      //    chacha20_block(key, counter, nonce)
-      //
-      // RFC 9147 4.2.3
-      //    Mask = ChaCha20(sn_key, Ciphertext[0..3], Ciphertext[4..15])
-
-      const uint64_t counter = load_le(ct.first<4>());
-      const auto nonce = ct.last<12>();
-
-      chacha->set_key(epoch.sequence_number_key.value());
-      chacha->set_iv(nonce);
-      chacha->seek(counter * 64);
-      chacha->write_keystream(mask);
-   } else if(ciphersuite.to_string().starts_with("AES_128")) {
-      auto aes = BlockCipher::create_or_throw(fmt("AES-128"));
-      aes->set_key(epoch.sequence_number_key.value());
-      aes->encrypt(mask);
-   } else if(ciphersuite.to_string().starts_with("AES_256")) {
-      auto aes = BlockCipher::create_or_throw(fmt("AES-256"));
-      aes->set_key(epoch.sequence_number_key.value());
-      aes->encrypt(mask);
-   } else {
-      throw Not_Implemented(
-         fmt("Ciphersuite {} is not supported for DTLS 1.3 record number masking", ciphersuite.to_string()));
-   }
-
-   return mask;
-}
-
-/**
- * Computes the record number mask (RFC 9147 Section 4.2.3) and XORs
- * it with the given sequence number hint to (de)protect it.
- */
-SequenceNumberHint xor_record_sequence_number(const Cipher_State::Epoch& epoch,
-                                              const Ciphersuite& ciphersuite,
-                                              std::span<const uint8_t> ciphertext,
-                                              SequenceNumberHint seqno_hint) {
-   BOTAN_ARG_CHECK(ciphertext.size() >= 16, "Record payload must be at least 16 bytes in DTLS 1.3");
-   const auto mask = compute_record_number_mask(epoch, ciphersuite, ciphertext.first<16>());
-
-   return std::visit(
-      [&]<std::unsigned_integral T>(const T seqno) -> SequenceNumberHint {
-         // RFC 9147 Section 4.2.3
-         //    The encrypted sequence number is computed by XORing the leading
-         //    bytes of the mask with the on-the-wire representation of the
-         //    sequence number. Decryption is accomplished by the same process.
-         return static_cast<T>(seqno ^ load_be(std::span{mask}.first<sizeof(T)>()));
-      },
-      seqno_hint);
-}
-
-}  // namespace
-
-#endif
-
-std::optional<Record> Cipher_State::deprotect_record(ProtectedRecord_DTLS record,
-                                                     size_t incoming_record_size_limit,
-                                                     uint64_t current_time_ms) {
-   BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
-   BOTAN_STATE_CHECK(current_read_epoch_number() > Epoch_Number::Unprotected);
-
-   prune_outdated_read_epochs(current_time_ms);
-
-   // RFC 9147 4.2.2
-   //    When receiving protected DTLS records, the recipient does not have a
-   //    full epoch or sequence number value in the record and so there is some
-   //    opportunity for ambiguity. Because the full sequence number is used to
-   //    compute the per-record nonce and the epoch determines the keys, failure
-   //    to reconstruct these values leads to failure to deprotect the record.
-   auto epoch = latest_epoch_matching_epoch_hint(record.header.epoch_bits);
-   if(!epoch.has_value()) {
-      return std::nullopt;  // without a matching epoch, we cannot deprotect the record
-   }
-
-   record.header.sequence_number =
-      xor_record_sequence_number(epoch->get(), *m_ciphersuite, record.payload, record.header.sequence_number);
-
-   // RFC 9147 4.2.2
-   //    [I]mplementations SHOULD reconstruct the sequence number by computing
-   //    the full sequence number which is numerically closest to one plus the
-   //    sequence number of the highest successfully deprotected record in the
-   //    current epoch.
-   const uint64_t sequence_number =
-      reconstruct_full_sequence_number(epoch->get().sequence_number, record.header.sequence_number);
-
-   auto result = Record_Content{
-      .type = Record_Type::Invalid,
-      .sequence_number = sequence_number,
-      .payload = std::move(record.payload),
-      .epoch = epoch->get().number,
-   };
-
-   BOTAN_ASSERT_NOMSG(result.payload.size() <= MAX_CIPHERTEXT_SIZE_TLS13);
-
-   try {
-      epoch->get().cipher->set_associated_data(record.header.serialize());
-      epoch->get().cipher->start(current_nonce(result.sequence_number.value(), epoch->get().iv));
-      epoch->get().cipher->finish(result.payload);
-   } catch(const Invalid_Authentication_Tag&) {
-      // RFC 9147 Section 4.5.2
-      //    Unlike TLS, DTLS is resilient in the face of invalid records
-      //    (e.g., invalid formatting, length, MAC, etc.). In general,
-      //    invalid records SHOULD be silently discarded, thus preserving the
-      //    association [...].
-      //
-      // If deprotection fails (i.e. MAC verification does not check out), we
-      // silently reject the record.
-      return std::nullopt;
-   }
-
-   // --------------------------------------------------------------------------
-   // BEYOND THIS LINE WE DEAL WITH AUTHENTICATED DATA.
-   // Hence, errors are fatal and we throw TLS exceptions with appropriate
-   // alerts which will terminate the association.
-   // --------------------------------------------------------------------------
-
-   // Update "the sequence number of the highest successfully deprotected record"
-   // (RFC 9147 Section 4.2.2) if the current record's sequence number is higher
-   // than the previous highest.
-   epoch->get().sequence_number = std::max(epoch->get().sequence_number, result.sequence_number.value());
-
-   // RFC 9147 8.
-   //    Implementations SHOULD discard records from earlier epochs but MAY
-   //    choose to retain keying material from previous epochs [...].
-   //
-   // Once an epoch was successfully used for deprotection for the first time,
-   // all previous epochs can be retired. After some time, these epochs will be
-   // discarded (see `prune_outdated_read_epochs()`).
-   if(!std::exchange(epoch->get().used_successfully, true)) {
-      retire_outdated_read_epochs(current_time_ms);
-   }
-
-   // RFC 8449 Section 4
-   //    a DTLS endpoint that receives a record larger than its advertised
-   //    limit MAY either generate a fatal "record_overflow" alert or
-   //    discard the record.
-   //
-   // We choose to generate a fatal alert, given that this error is detected
-   // after decryption only. Records that are extensively too large are
-   // discarded in read_datagram already.
-   if(result.payload.size() > incoming_record_size_limit) {
-      throw TLS_Exception(Alert::RecordOverflow, "Received an encrypted record that exceeds maximum plaintext size");
-   }
-
-   // Remove record padding (RFC 8446 5.4). The TLSInnerPlaintext layout is
-   //   content || content_type || zero_padding
-   auto seen_nonzero = CT::Mask<uint8_t>::cleared();
-   uint8_t content_type_byte = 0;
-   size_t content_index = 0;
-   for(size_t i = result.payload.size(); i-- > 0;) {
-      const uint8_t b = result.payload[i];
-      const auto byte_is_nonzero = CT::Mask<uint8_t>::expand(b);
-      // Set on the first non-zero byte we encounter scanning right-to-left.
-      const auto first_nonzero = byte_is_nonzero & ~seen_nonzero;
-      content_type_byte = first_nonzero.select(b, content_type_byte);
-      content_index = CT::Mask<size_t>::expand(first_nonzero.value()).select(i, content_index);
-      seen_nonzero |= byte_is_nonzero;
-   }
-
-   if(!seen_nonzero.as_bool()) {
-      // RFC 8446 5.4
-      //   If a receiving implementation does not
-      //   find a non-zero octet in the cleartext, it MUST terminate the
-      //   connection with an "unexpected_message" alert.
-      throw TLS_Exception(Alert::UnexpectedMessage, "No content type found in encrypted record");
-   }
-
-   result.type = static_cast<Record_Type>(content_type_byte);
-
-   // Truncate to drop the content_type byte and padding. resize() on a
-   // vector of trivially-destructible elements is bookkeeping-only and
-   // does not allocate or iterate over the dropped suffix.
-   result.payload.resize(content_index);
-
-   // RFC 9147 Section 4.1 Figure 5
-   //    [...]
-   //
-   // After deprotection, the record type must be Alert (21), DTLSHandshake (22),
-   // Application Data (23), Heartbeat (24), or ACK (26). Any other type should
-   // result in an error and RFC 9846 Section 5 should be enforced:
-   //
-   // RFC 9846 Section 5
-   //    If a TLS implementation receives an unexpected record type, it MUST
-   //    terminate the connection with an "unexpected_message" alert.
-   if(result.type != Record_Type::Alert &&            //
-      result.type != Record_Type::Handshake &&        //
-      result.type != Record_Type::ApplicationData &&  //
-      result.type != Record_Type::Heartbeat &&        //
-      result.type != Record_Type::ACK) {
-      throw TLS_Exception(
-         Alert::UnexpectedMessage,
-         fmt("Deprotected DTLS record had unexpected content type: {}", static_cast<uint32_t>(result.type)));
-   }
-
-   // RFC 9147 6.1
-   //    Epoch value (3) is used for payloads protected using keys derived from
-   //    the initial [sender]_application_traffic_secret_0
-   //
-   // We thus reject application data records received at the handshake epoch.
-   if(result.type == Record_Type::ApplicationData && epoch->get().number == Epoch_Number::HandshakeTraffic) {
-      throw TLS_Exception(Alert::UnexpectedMessage, "Can't interleave application and handshake data");
-   }
-
-   return annotate_record_type(std::move(result));
-}
-
-std::pair<MarshalledRecord, RecordNumber> Cipher_State::protect_record_dtls(Record_Type type,
-                                                                            std::span<const uint8_t> payload,
-                                                                            size_t padding_bytes,
-                                                                            std::optional<Epoch_Number> epoch_number) {
-   BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
-   BOTAN_ARG_CHECK(!epoch_number.has_value() || *epoch_number > Epoch_Number::Unprotected,
-                   "epoch_number must implicate record protection");
-
-   auto& epoch = [&]() -> Epoch& {
-      if(!epoch_number.has_value()) {
-         BOTAN_STATE_CHECK(current_write_epoch_number() > Epoch_Number::Unprotected);
-         return *m_write_epochs.back();
-      } else {
-         const auto eitr = std::find_if(m_write_epochs.rbegin(), m_write_epochs.rend(), [&](const auto& write_epoch) {
-            return write_epoch->number == *epoch_number;
-         });
-
-         if(eitr == m_write_epochs.rend()) {
-            throw TLS_Exception(Alert::InternalError, "No write epoch found for requested epoch number");
-         }
-
-         return *(*eitr);
-      }
-   }();
-
-   // RFC 8446 5.2
-   //    type:  The TLSPlaintext.type value containing the content type of the record.
-   constexpr size_t content_type_tag_length = 1;
-
-   // 1. Figure out how many encrypted bytes we will produce
-   // RFC 9147 Figure 2 DTLSInnerPlaintext = content | type | zeros
-
-   size_t plaintext_size = 0;
-   size_t ciphertext_size = 0;
-
-   // TODO: re-visit this with a clearer mind on another day
-   while(true) {
-      plaintext_size = payload.size() + content_type_tag_length + padding_bytes;
-      ciphertext_size = encrypt_output_length(plaintext_size);
-
-      // RFC 9147 Section 4.2.3
-      //      Senders MUST pad short plaintexts out (using the conventional
-      //      record padding mechanism) in order to make a suitable-length
-      //      ciphertext. Note that most of the DTLS AEAD algorithms have a 16
-      //      byte authentication tag and need no padding. However, some
-      //      algorithms, such as TLS_AES_128_CCM_8_SHA256, have a shorter
-      //      authentication tag and may require padding for short inputs.
-      if(ciphertext_size >= 16) {
-         break;
-      } else {
-         padding_bytes += 1;  // Increase padding until ciphertext is at least 16 bytes
-      }
-   }
-
-   // 2. Set up *pre-encryption* unified_hdr, which serves as
-   //    Associated Data (AD).
-
-   const auto write_seq_no = epoch.sequence_number++;
-   const auto ct_len = checked_cast_to<uint16_t>(ciphertext_size);
-   auto unified_header = UnifiedHeader_DTLS{
-      .epoch_bits = static_cast<uint8_t>(to_underlying(epoch.number) & 0b00000011),
-      .connection_id = std::nullopt,                           // TODO: support CID
-      .sequence_number = static_cast<uint16_t>(write_seq_no),  // TODO: support 16 and 8 bit seq_no
-      .length = ct_len,                                        // TODO: support length field omission
-   };
-
-   const size_t header_size = unified_header.serialized_byte_length();
-   const size_t record_size = header_size + ciphertext_size;
-
-   // 3. Set up DTLSInnerPlaintext layout with headers, which is the plaintext
-   //    to be encrypted. The layout is DTLSInnerPlaintext = content || type || zeros
-
-   MarshalledRecord result;
-   result.reserve(record_size);
-   result.resize(header_size);
-
-   result.get().insert(result.end(), payload.begin(), payload.end());  // content
-   result.get().push_back(to_underlying(type));                        // type
-   result.get().insert(result.end(), padding_bytes, 0x00);             // zeros
-   BOTAN_ASSERT_NOMSG(result.size() == header_size + plaintext_size);
-
-   // 4. Encrypt the record.
-
-   epoch.cipher->set_associated_data(unified_header.serialize());
-   epoch.cipher->start(current_nonce(write_seq_no, epoch.iv));
-   epoch.cipher->finish(result, header_size);
-
-   BOTAN_ASSERT_NOMSG(result.size() == header_size + ciphertext_size);
-
-   // 5. Mask seq bytes (RFC 9147 Section 4.2.3 Record Number Encryption) and
-   //    render the header into the output buffer
-
-   unified_header.sequence_number = xor_record_sequence_number(
-      epoch, *m_ciphersuite, std::span{result}.subspan(header_size), unified_header.sequence_number);
-   unified_header.serialize_to(std::span{result}.first(header_size));
-
-   return {result, {.epoch = epoch.number, .sequence_number = write_seq_no}};
-}
-
-std::optional<std::reference_wrapper<Cipher_State::Epoch>> Cipher_State::latest_epoch_matching_epoch_hint(
-   uint8_t epoch_hint) const {
-   BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
-   BOTAN_STATE_CHECK(!m_read_epochs.empty());
-   BOTAN_DEBUG_ASSERT(epoch_hint <= 0b00000011);
-
-   // RFC 9147 Section 4.2.2
-   //    If the epoch bits match those of the current epoch, then
-   //    implementations SHOULD [attempt to deprotect the record] in the current
-   //    epoch.
-   //    [...]
-   //    After the handshake is complete, if the epoch bits do not match those
-   //    from the current epoch, implementations SHOULD use the most recent past
-   //    epoch which has matching bits [...].
-   //
-   // So we go through our list of available read epochs starting from the
-   // newest and select the first one that matches the epoch hint.
-   //
-   // NOLINTNEXTLINE(modernize-loop-convert): TODO: use std::views::reverse
-   for(auto it = m_read_epochs.rbegin(); it != m_read_epochs.rend(); ++it) {
-      if((to_underlying((*it)->number) & 0b00000011) == epoch_hint) {
-         return **it;
-      }
-   }
-
-   // No matching epoch found
-   return std::nullopt;
-}
-
-void Cipher_State::retire_outdated_read_epochs(uint64_t current_time_ms) {
-   BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
-
-   // RFC 9147 Section 4.2.1
-   //    Implementations [...] MAY choose to retain keying material from
-   //    previous epochs for up to the default MSL specified for TCP [RFC0793]
-   //    to allow for packet reordering.
-   //
-   // RFC 9293 4.
-   //    MSL: Maximum Segment Lifetime, the time a TCP segment can exist in the
-   //         internetwork system. Arbitrarily defined to be 2 minutes.
-   constexpr uint64_t expiration_time = 2 * 60 * 1000;
-
-   if(m_read_epochs.empty() || !m_read_epochs.back()->used_successfully) {
-      return;
-   }
-
-   for(auto it = m_read_epochs.begin(); it != std::prev(m_read_epochs.end()); ++it) {
-      auto& epoch = **it;
-      if(!epoch.expiration_timestamp.has_value()) {
-         epoch.expiration_timestamp = current_time_ms + expiration_time;
-      }
-   }
-}
-
-void Cipher_State::prune_outdated_read_epochs(uint64_t current_time_ms) {
-   BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
-
-   for(auto it = m_read_epochs.begin(); it != std::prev(m_read_epochs.end());) {
-      auto& epoch = **it;
-      if(epoch.expiration_timestamp.has_value() && current_time_ms >= *epoch.expiration_timestamp) {
-         it = m_read_epochs.erase(it);
-      } else {
-         ++it;
-      }
-   }
-}
-
-void Cipher_State::prune_outdated_write_epochs() {
-   BOTAN_ASSERT_NOMSG(m_tls_flavor == TLS_Flavor::DTLS);
-
-   if(m_write_epochs.empty()) {
-      return;
-   }
-
-   // Clear all but the last entry in the m_write_epochs list
-   m_write_epochs.erase(m_write_epochs.begin(), std::prev(m_write_epochs.end()));
-}
-
-void Cipher_State::clear_read_keys() {
-   m_read_epochs.clear();
-}
-
-void Cipher_State::clear_write_keys() {
-   m_write_epochs.clear();
+   return latest_read_epoch().sequence_number;
 }
 
 Epoch_Number Cipher_State::current_write_epoch_number() const {
-   return m_write_epochs.empty() ? Epoch_Number::Unprotected : m_write_epochs.back()->number;
+   return has_write_epoch() ? latest_write_epoch().number : Epoch_Number::Unprotected;
 }
 
 Epoch_Number Cipher_State::current_read_epoch_number() const {
-   return m_read_epochs.empty() ? Epoch_Number::Unprotected : m_read_epochs.back()->number;
+   return has_read_epoch() ? latest_read_epoch().number : Epoch_Number::Unprotected;
+}
+
+std::unique_ptr<Cipher_State> Cipher_State::create(Connection_Side side, std::string_view prf_algo, TLS_Flavor flavor) {
+   if(flavor == TLS_Flavor::DTLS) {
+#if defined(BOTAN_HAS_DTLS_13)
+      return std::make_unique<DTLS_Cipher_State>(side, prf_algo);
+#else
+      throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
+#endif
+   } else {
+      return std::make_unique<TLS_Cipher_State>(side, prf_algo);
+   }
 }
 
 }  // namespace Botan::TLS

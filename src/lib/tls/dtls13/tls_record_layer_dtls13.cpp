@@ -26,6 +26,7 @@
 #include <botan/internal/loadstor.h>
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_cipher_state.h>
+#include <botan/internal/tls_cipher_state_dtls13.h>
 
 namespace Botan::TLS {
 
@@ -284,8 +285,9 @@ Record_Layer::ReadResult DTLS_Record_Layer::next_record(Cipher_State* cipher_sta
                   return std::nullopt;
                }
 
-               return cipher_state->deprotect_record(
-                  std::move(record), incoming_record_size_limit(), m_callbacks->tls_current_monotonic_clock_ms());
+               return dynamic_cast<DTLS_Cipher_State*>(cipher_state)
+                  ->deprotect_record(
+                     std::move(record), incoming_record_size_limit(), m_callbacks->tls_current_monotonic_clock_ms());
             },
          },
          next_incoming_record());
@@ -396,7 +398,7 @@ MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(Record_Type type,
             : 0;
       BOTAN_ASSERT_NOMSG(pt_size_with_type_tag + padding_length <= max_record_size);
 
-      return cipher_state->protect_record_dtls(type, data, padding_length, epoch);
+      return dynamic_cast<DTLS_Cipher_State*>(cipher_state)->protect_record(type, data, padding_length, epoch);
    }
 }
 

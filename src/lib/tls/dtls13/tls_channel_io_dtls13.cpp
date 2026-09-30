@@ -9,6 +9,7 @@
 #include <botan/internal/tls_channel_io_dtls13.h>
 
 #include <botan/internal/tls_channel_impl_13.h>
+#include <botan/internal/tls_cipher_state_dtls13.h>
 
 #include <utility>
 
@@ -414,7 +415,7 @@ void DTLS_Channel_IO::process(const ACK_Record& ack_record) {
    // If there's nothing left to retransmit, we can safely discard any
    // outdated write epochs.
    if(cipher_state != nullptr && !record_layer().has_unacknowledged_records()) {
-      cipher_state->prune_outdated_write_epochs();
+      dynamic_cast<DTLS_Cipher_State*>(cipher_state)->prune_outdated_write_epochs();
    }
 
    // RFC 9147 7.2

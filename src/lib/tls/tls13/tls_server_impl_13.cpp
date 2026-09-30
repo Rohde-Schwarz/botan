@@ -122,7 +122,6 @@ bool Server_Impl_13::new_session_ticket_supported() const {
 
 size_t Server_Impl_13::send_new_session_tickets(const size_t tickets) {
    BOTAN_STATE_CHECK(is_handshake_complete());
-   BOTAN_STATE_CHECK(m_cipher_state != nullptr);
 
    if(tickets == 0) {
       return 0;
@@ -132,11 +131,13 @@ size_t Server_Impl_13::send_new_session_tickets(const size_t tickets) {
    size_t tickets_created = 0;
 
    BOTAN_STATE_CHECK(m_active_state.has_value());
+   auto* cs = cipher_state();
+   BOTAN_ASSERT_NONNULL(cs);
 
    for(size_t i = 0; i < tickets; ++i) {
-      auto nonce = m_cipher_state->next_ticket_nonce();
+      auto nonce = cs->next_ticket_nonce();
       const uint32_t ticket_age_add = load_be(rng().random_array<4>());
-      const Session session(m_cipher_state->psk(nonce),
+      const Session session(cs->psk(nonce),
                             std::nullopt,  // early data not yet implemented
                             ticket_age_add,
                             policy().session_ticket_lifetime(),
@@ -451,7 +452,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
                                                                   rng())));
    }
 
-   flight.add(m_handshake->state.sending(Finished_13(new_cipher_state.get(), m_transcript_hash->current())));
+   flight.add(m_handshake->state.sending(Finished_13(*new_cipher_state, m_transcript_hash->current())));
 
    if(client_hello.extensions().has<Record_Size_Limit>() &&
       m_handshake->state.encrypted_extensions().extensions().has<Record_Size_Limit>()) {
@@ -477,10 +478,10 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
 
    // Promote cipher state immediately before sending the flight (see comment
    // at declaration of new_cipher_state).
-   m_cipher_state = std::move(new_cipher_state);
+   auto& cs = setup_cipher_state(std::move(new_cipher_state));
    send_flight(flight.commit());
 
-   m_cipher_state->advance_with_server_finished(m_transcript_hash->current(), *this);
+   cs.advance_with_server_finished(m_transcript_hash->current(), *this);
 
    if(m_handshake->state.has_certificate_request()) {
       // RFC 8446 4.4.2
@@ -742,11 +743,14 @@ void Server_Impl_13::handle(const Finished_13& finished_msg) {
    BOTAN_ASSERT_NONNULL(m_handshake);
    BOTAN_ASSERT_NONNULL(m_transcript_hash);
 
+   auto* cs = cipher_state();
+   BOTAN_ASSERT_NONNULL(cs);
+
    // RFC 8446 4.4.4
    //    Recipients of Finished messages MUST verify that the contents are
    //    correct and if incorrect MUST terminate the connection with a
    //    "decrypt_error" alert.
-   if(!finished_msg.verify(m_cipher_state.get(), m_transcript_hash->previous())) {
+   if(!finished_msg.verify(*cs, m_transcript_hash->previous())) {
       throw TLS_Exception(Alert::DecryptError, "Finished message didn't verify");
    }
 
@@ -764,7 +768,7 @@ void Server_Impl_13::handle(const Finished_13& finished_msg) {
                       Server_Information(m_handshake->state.client_hello().sni_hostname()),
                       callbacks().tls_current_timestamp()));
 
-   m_cipher_state->advance_with_client_finished(m_transcript_hash->current());
+   cs->advance_with_client_finished(m_transcript_hash->current());
 
    m_channel_io->notify_received_final_flight();
 

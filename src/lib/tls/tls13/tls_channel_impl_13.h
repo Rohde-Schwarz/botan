@@ -162,9 +162,11 @@ class Channel_Impl_13 : public Channel_Impl,
       */
       std::optional<std::chrono::milliseconds> next_retransmission_timeout() const override;
 
-      Cipher_State* cipher_state() { return m_cipher_state.get(); }
-
       const Secret_Logger& secret_logger() const { return *this; }
+
+      const Cipher_State* cipher_state() const { return m_cipher_state.get(); }
+
+      Cipher_State* cipher_state() { return m_cipher_state.get(); }
 
    protected:
       /**
@@ -176,6 +178,8 @@ class Channel_Impl_13 : public Channel_Impl,
        * See {Client/Server}_Impl_13::create() for usage
        */
       void setup_io();
+
+      Cipher_State& setup_cipher_state(std::unique_ptr<Cipher_State> cipher_state);
 
       virtual void process_handshake_msg(Handshake_Message_13 msg) = 0;
       virtual void process_post_handshake_msg(Post_Handshake_Message_13 msg) = 0;
@@ -223,7 +227,6 @@ class Channel_Impl_13 : public Channel_Impl,
    protected:
       const Connection_Side m_side;                              // NOLINT(*non-private-member-variable*)
       std::unique_ptr<Transcript_Hash_State> m_transcript_hash;  // NOLINT(*non-private-member-variable*)
-      std::unique_ptr<Cipher_State> m_cipher_state;              // NOLINT(*non-private-member-variable*)
       std::optional<Active_Connection_State_13> m_active_state;  // NOLINT(*non-private-member-variable*)
       TLS_Flavor m_flavor;                                       // NOLINT(*-non-private-member-*)
 
@@ -271,6 +274,7 @@ class Channel_Impl_13 : public Channel_Impl,
       std::shared_ptr<Credentials_Manager> m_credentials_manager;
       std::shared_ptr<RandomNumberGenerator> m_rng;
       std::shared_ptr<const Policy> m_policy;
+      std::unique_ptr<Cipher_State> m_cipher_state;
 
       bool m_can_read;
       bool m_can_write;

@@ -413,30 +413,35 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
 
    m_transcript_hash->set_algorithm(cipher.value().prf_algo());
 
-   if(sh.extensions().has<PSK>()) {
-      std::tie(m_handshake->psk_identity, m_cipher_state) =
-         ch.extensions().get<PSK>()->take_selected_psk_info(*sh.extensions().get<PSK>(), cipher.value());
+   setup_cipher_state([&] {
+      if(sh.extensions().has<PSK>()) {
+         std::unique_ptr<Cipher_State> new_cipher_state;
+         std::tie(m_handshake->psk_identity, new_cipher_state) =
+            ch.extensions().get<PSK>()->take_selected_psk_info(*sh.extensions().get<PSK>(), cipher.value());
 
-      // If we offered a session for resumption *and* an externally provided PSK
-      // and the latter was chosen by the server over the offered resumption, we
-      // want to invalidate the now-outdated session in m_handshake->resumed_session.
-      if(m_handshake->psk_identity.has_value() && m_handshake->resumed_session.has_value()) {
-         m_handshake->resumed_session.reset();
+         // If we offered a session for resumption *and* an externally provided PSK
+         // and the latter was chosen by the server over the offered resumption, we
+         // want to invalidate the now-outdated session in m_handshake->resumed_session.
+         if(m_handshake->psk_identity.has_value() && m_handshake->resumed_session.has_value()) {
+            m_handshake->resumed_session.reset();
+         }
+
+         // TODO: When implementing early data, `advance_with_client_hello` must
+         //       happen _before_ encrypting any early application data.
+         //       Same when we want to support early key export.
+         new_cipher_state->advance_with_client_hello(m_transcript_hash->previous(), *this);
+         new_cipher_state->advance_with_server_hello(
+            cipher.value(), std::move(shared_secret), m_transcript_hash->current(), *this);
+
+         // TODO: Early data
+
+         return new_cipher_state;
+      } else {
+         m_handshake->resumed_session.reset();  // might have been set if we attempted a resumption
+         return Cipher_State::init_with_server_hello(
+            m_side, std::move(shared_secret), cipher.value(), m_transcript_hash->current(), *this, m_flavor);
       }
-
-      // TODO: When implementing early data, `advance_with_client_hello` must
-      //       happen _before_ encrypting any early application data.
-      //       Same when we want to support early key export.
-      m_cipher_state->advance_with_client_hello(m_transcript_hash->previous(), *this);
-      m_cipher_state->advance_with_server_hello(
-         cipher.value(), std::move(shared_secret), m_transcript_hash->current(), *this);
-
-      // TODO: Early data
-   } else {
-      m_handshake->resumed_session.reset();  // might have been set if we attempted a resumption
-      m_cipher_state = Cipher_State::init_with_server_hello(
-         m_side, std::move(shared_secret), cipher.value(), m_transcript_hash->current(), *this, m_flavor);
-   }
+   }());
 
    callbacks().tls_examine_extensions(sh.extensions(), Connection_Side::Server, Handshake_Type::ServerHello);
 
@@ -731,11 +736,14 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    // The Server's Finished message is the last handshake message in the flight.
    m_channel_io->notify_received_complete_flight();
 
+   auto* cs = cipher_state();
+   BOTAN_ASSERT_NONNULL(cs);
+
    // RFC 8446 4.4.4
    //    Recipients of Finished messages MUST verify that the contents are
    //    correct and if incorrect MUST terminate the connection with a
    //    "decrypt_error" alert.
-   if(!finished_msg.verify(m_cipher_state.get(), m_transcript_hash->previous())) {
+   if(!finished_msg.verify(*cs, m_transcript_hash->previous())) {
       throw TLS_Exception(Alert::DecryptError, "Finished message didn't verify");
    }
 
@@ -754,7 +762,7 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
 
    // Derives the secrets for receiving application data but defers
    // the derivation of sending application data.
-   m_cipher_state->advance_with_server_finished(m_transcript_hash->current(), *this);
+   cs->advance_with_server_finished(m_transcript_hash->current(), *this);
 
    auto flight = Flight(*m_transcript_hash, callbacks());
 
@@ -779,12 +787,12 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    }
 
    // send client finished handshake message (still using handshake traffic secrets)
-   flight.add(m_handshake->state.sending(Finished_13(m_cipher_state.get(), m_transcript_hash->current())));
+   flight.add(m_handshake->state.sending(Finished_13(*cs, m_transcript_hash->current())));
 
    send_flight(flight.commit());
 
    // derives the sending application traffic secrets
-   m_cipher_state->advance_with_client_finished(m_transcript_hash->current());
+   cs->advance_with_client_finished(m_transcript_hash->current());
 
    // TODO: Create a dummy session object and invoke tls_session_established.
    //       Alternatively, consider changing the expectations described in the
@@ -846,7 +854,10 @@ void TLS::Client_Impl_13::handle(const New_Session_Ticket_13& new_session_ticket
    callbacks().tls_examine_extensions(
       new_session_ticket.extensions(), Connection_Side::Server, Handshake_Type::NewSessionTicket);
 
-   const Session session(m_cipher_state->psk(new_session_ticket.nonce()),
+   auto* cs = cipher_state();
+   BOTAN_ASSERT_NONNULL(cs);
+
+   const Session session(cs->psk(new_session_ticket.nonce()),
                          new_session_ticket.early_data_byte_limit(),
                          new_session_ticket.ticket_age_add(),
                          new_session_ticket.lifetime_hint(),
@@ -940,7 +951,7 @@ bool Client_Impl_13::compat_mode_ccs_needed_before_alert() const {
    // In that case, the alert is considered the "second flight" and the CCS must
    // still be sent.
    return m_handshake && m_handshake->state.has_client_hello() && m_handshake->state.has_server_hello() &&
-          !m_handshake->state.has_client_finished() && m_cipher_state != nullptr;
+          !m_handshake->state.has_client_finished();
 }
 
 void Client_Impl_13::maybe_log_secret(std::string_view label, std::span<const uint8_t> secret) const {
