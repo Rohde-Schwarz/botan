@@ -11,13 +11,10 @@
 #ifndef BOTAN_TLS_CHANNEL_IMPL_13_H_
 #define BOTAN_TLS_CHANNEL_IMPL_13_H_
 
-#include <botan/tls_messages_13.h>
-#include <botan/internal/stl_util.h>
 #include <botan/internal/tls_channel_impl.h>
 #include <botan/internal/tls_connection_state_13.h>
 #include <botan/internal/tls_flight_13.h>
-#include <botan/internal/tls_handshake_layer_13.h>
-#include <botan/internal/tls_record_layer_13.h>
+#include <botan/internal/tls_record_13.h>
 
 namespace Botan::TLS {
 

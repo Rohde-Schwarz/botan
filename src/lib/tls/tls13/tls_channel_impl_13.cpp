@@ -13,11 +13,9 @@
 #include <botan/tls_callbacks.h>
 #include <botan/tls_exceptn.h>
 #include <botan/tls_messages_13.h>
-#include <botan/tls_policy.h>
+#include <botan/internal/stl_util.h>
 #include <botan/internal/tls_channel_io.h>
 #include <botan/internal/tls_cipher_state.h>
-#include <botan/internal/tls_handshake_layer_13.h>
-#include <botan/internal/tls_record_layer_13.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 
 #include <utility>
@@ -341,10 +339,7 @@ void Channel_Impl_13::process(const ChangeCipherSpec_Record& ccs_record) {
 }
 
 void Channel_Impl_13::process(const ApplicationData_Record& record) {
-   if(!record.sequence_number.has_value()) {
-      throw Unexpected_Message("Application data must have a sequence number");
-   }
-
+   BOTAN_ASSERT_NOMSG(record.sequence_number.has_value());
    callbacks().tls_record_received(record.sequence_number.value(), record.payload);
 }
 
