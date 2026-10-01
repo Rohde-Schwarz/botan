@@ -1,5 +1,5 @@
 /*
-* DTLS timer
+* DTLS timer helpers
 * (C) 2026 Jack Lloyd
 *     2026 Amos Treiber, René Meusel - Rohde & Schwarz Networks and Cybersecurity GmbH
 *
@@ -9,9 +9,8 @@
 #ifndef BOTAN_TLS_TIMER_DTLS13_H_
 #define BOTAN_TLS_TIMER_DTLS13_H_
 
-#include <botan/assert.h>
 #include <botan/tls_callbacks.h>
-#include <botan/tls_magic.h>
+#include <botan/tls_exceptn.h>
 #include <botan/tls_policy.h>
 #include <chrono>
 #include <optional>
@@ -31,6 +30,11 @@ class Callbacks;
  */
 class SingleshotTimer final {
    private:
+      /**
+       * This Token is owned by the SingleshotTimer object and shared with the
+       * deferred operation as a weak_ptr. If the Token is destroyed before the
+       * deferred operation is executed, the operation will act as a no-op.
+       */
       struct Token {
             bool executed = false;
       };
@@ -81,34 +85,61 @@ class SingleshotTimer final {
  * the timeout starts at the policy's initial value and doubles with each
  * retransmission, capped at the policy's maximum.
  *
- * The current time is obtained via Callbacks::tls_current_monotonic_clock_ms().
+ * The user can cancel and restart the timer as needed. If the timer object is
+ * destroyed, the timer is automatically cancelled.
  */
-class DTLS_Retransmission_Timer {
+class RetransmissionTimer final {
    public:
-      DTLS_Retransmission_Timer(const Policy& policy, std::shared_ptr<Callbacks> callbacks) :
-            m_initial_timeout(policy.dtls_initial_timeout()),  //
-            m_max_timeout(policy.dtls_maximum_timeout()),
-            m_max_retransmissions(policy.dtls_maximum_retransmissions()),
-            m_callbacks(std::move(callbacks)) {}
+      using DeferredOperation = std::function<void()>;
 
+   private:
       /**
-       * @returns true iff the timer has been set
-      */
-      bool started() const { return m_next_deadline.has_value(); }
-
-      /**
-       * @returns true if the deadline was reached; false otherwise or if the
-       * timer was never armed
+       * The retransmission timer keeps its state in a shared_ptr<Token> so that
+       * the deferred operation can hold a weak_ptr to this state object instead
+       * of the actual RetransmissionTimer object. The Token's lifetime is bound
+       * to the RetransmissionTimer's lifetime and not the deferred operation.
+       *
+       * Because the RetransmissionTimer implements an exponential backoff, the
+       * deferred operation can re-schedule itself using only the Token's state
+       * without needing to access the RetransmissionTimer object.
        */
-      bool expired() const {
-         if(!started()) {
-            return false;
-         }
+      struct Token {
+            const std::chrono::milliseconds initial_timeout;
+            const std::chrono::milliseconds max_timeout;
+            const std::optional<size_t> max_retransmissions;
+            const std::shared_ptr<Callbacks> callbacks;
 
-         constexpr auto fudge_ms = std::chrono::milliseconds(DTLS_RETRANSMISSION_TIMER_FUDGE);
-         const auto ref = m_next_deadline.value() - std::min(fudge_ms, m_next_deadline.value());
-         return now() >= ref;
-      }
+            DeferredOperation on_retransmission;
+            size_t retransmissions;
+            std::chrono::milliseconds next_timeout;
+            SingleshotTimer retransmission_timer;
+      };
+
+   public:
+      RetransmissionTimer(const Policy& policy, std::shared_ptr<Callbacks> callbacks) :
+            m_token(std::make_shared<Token>(Token{
+               .initial_timeout = std::chrono::milliseconds(policy.dtls_initial_timeout()),
+               .max_timeout = std::chrono::milliseconds(policy.dtls_maximum_timeout()),
+               .max_retransmissions = policy.dtls_maximum_retransmissions(),
+               .callbacks = std::move(callbacks),
+               .on_retransmission = {},
+               .retransmissions = 0,
+               .next_timeout = std::chrono::milliseconds(policy.dtls_initial_timeout()),
+               .retransmission_timer = {},
+            })) {}
+
+      ~RetransmissionTimer() = default;
+
+      RetransmissionTimer(const RetransmissionTimer&) = delete;
+      RetransmissionTimer& operator=(const RetransmissionTimer&) = delete;
+      RetransmissionTimer(RetransmissionTimer&&) = default;
+      RetransmissionTimer& operator=(RetransmissionTimer&&) = default;
+
+      /// @returns true if the timer is currently armed; false otherwise
+      bool armed() const { return m_token->retransmission_timer.armed(); }
+
+      // NOLINTNEXTLINE(*-explicit-conversions)
+      operator bool() const { return armed(); }
 
       /**
        * Disarm the timer and reset the retransmission counter. This is done
@@ -116,89 +147,52 @@ class DTLS_Retransmission_Timer {
        * retransmissions are needed. Note that this doesn't necesarily mean
        * that the handshake is complete!
        */
-      void stop() {
-         m_next_deadline.reset();
-         m_next_timeout_span = std::chrono::milliseconds(0);
-         m_retransmissions = 0;
-      }
+      void cancel() { reset(); }
 
       /**
-       * @returns true if the policy's retransmission limit was reached;
-       *          always false if the policy sets no limit or the timer is not armed
-       */
-      bool retransmissions_exhausted() const {
-         if(!m_max_retransmissions.has_value() || !started()) {
-            return false;
-         }
-         return m_retransmissions >= m_max_retransmissions.value();
-      }
-
-      /**
-       *  Arm (or restart) the timer when a *new* flight was just sent.
-       *  Resets the timeout span to the initial value and the retransmission
-       *  counter to zero.
-       */
-      void flight_sent() {
-         m_next_timeout_span = m_initial_timeout;
-         m_next_deadline = now() + m_next_timeout_span;
-         m_retransmissions = 0;
-      }
-
-      /**
-       * Start the timer if not already armed.
-       */
-      void start_if_not_started() {
-         if(!started()) {
-            m_next_timeout_span = m_initial_timeout;
-            m_next_deadline = now() + m_next_timeout_span;
-            m_retransmissions = 0;
-         }
-      }
-
-      /**
-       *  Re-arm the timer after retransmitting a flight. Doubles the timeout
-       *  span (capped at the policy's maximum) and counts the retransmission.
-       */
-      void retransmitted() {
-         BOTAN_STATE_CHECK(started());
-         m_next_timeout_span = std::min(2 * m_next_timeout_span, m_max_timeout);
-         m_next_deadline = now() + m_next_timeout_span;
-         m_retransmissions++;
-      }
-
-      /**
-       *  Remaining time until expiry
-       *  @returns time in ms until the next timeout, or std::nullopt if not yet armed.
+       * Arm (or restart) the timer when a *new* flight was just sent.
+       * Resets the timeout span to the initial value and the retransmission
+       * counter to zero.
        *
-       *  Note that a return with value 0 means the timer has expired.
+       * The operation @p on_retransmission will be executed consecutively
+       * with an exponential backoff until the configured maximum retransmission
+       * count is reached or the timer is cancelled.
        */
-      std::optional<std::chrono::milliseconds> next_timeout() const {
-         if(!started()) {
-            return std::nullopt;
-         }
-
-         if(expired()) {
-            using namespace std::chrono_literals;
-            return 0ms;
-         }
-
-         return m_next_deadline.value() - now();
+      void start(DeferredOperation on_retransmission) {
+         reset(std::move(on_retransmission));
+         set_timer(m_token);
       }
 
    private:
-      std::chrono::milliseconds now() const {
-         return std::chrono::milliseconds{m_callbacks->tls_current_monotonic_clock_ms()};
+      void reset(DeferredOperation on_retransmission = {}) {
+         m_token->on_retransmission = std::move(on_retransmission);
+         m_token->retransmissions = 0;
+         m_token->next_timeout = m_token->initial_timeout;
+         m_token->retransmission_timer.cancel();
+      }
+
+      static void set_timer(const std::shared_ptr<Token>& token) {
+         token->retransmission_timer = SingleshotTimer::start(*token->callbacks, token->next_timeout, on(token));
+      }
+
+      static SingleshotTimer::DeferredOperation on(const std::shared_ptr<Token>& token) {
+         return [weak_token = std::weak_ptr(token)] {
+            if(auto handle = weak_token.lock()) {
+               if(handle->max_retransmissions.has_value() &&
+                  handle->retransmissions >= handle->max_retransmissions.value()) {
+                  throw TLS_Exception(Alert::None, "DTLS handshake timed out: maximum retransmissions exceeded");
+               }
+
+               handle->on_retransmission();
+               handle->next_timeout = std::min(2 * handle->next_timeout, handle->max_timeout);
+               handle->retransmissions++;
+               set_timer(handle);
+            }
+         };
       }
 
    private:
-      const std::chrono::milliseconds m_initial_timeout;
-      const std::chrono::milliseconds m_max_timeout;
-      const std::optional<size_t> m_max_retransmissions;
-      const std::shared_ptr<Callbacks> m_callbacks;
-
-      std::optional<std::chrono::milliseconds> m_next_deadline;  // unset until first flight
-      std::chrono::milliseconds m_next_timeout_span = std::chrono::milliseconds(0);
-      size_t m_retransmissions = 0;
+      std::shared_ptr<Token> m_token;
 };
 
 }  // namespace Botan::TLS

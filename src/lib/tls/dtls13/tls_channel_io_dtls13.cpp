@@ -138,8 +138,7 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
 
    flush_datagram();
 
-   m_retransmission_timer.flight_sent();
-   arm_dtls_retransmission_timer();
+   arm_retransmission_timer();
    m_ack_timer.cancel();
 }
 
@@ -217,8 +216,9 @@ void DTLS_Channel_IO::send_key_update(const Key_Update& msg) {
    // If we just reset it, it may possibly interfere with
    // a retransmission of the last client flight, have to check
    // that again.
-   m_retransmission_timer.start_if_not_started();
-   arm_dtls_retransmission_timer();
+   if(!m_retransmission_timer.armed()) {
+      arm_retransmission_timer();
+   }
 
    // TODO: There is a case where the user requests a KeyUpdate while the channel does one
    // automatically - one of them will lock the ACK mechanism, the other will fail because
@@ -235,12 +235,12 @@ void DTLS_Channel_IO::send_acknowledgements() {
    }
 
    const auto max_plaintext_length = record_layer().record_payload_size_limit(policy(), cipher_state());
-   send_data(Record_Type::ACK, current_ack_record(max_plaintext_length), cipher_state());
+   send_data(Record_Type::ACK, m_record_layer.acknowledgements().serialize(max_plaintext_length), cipher_state());
 }
 
 void DTLS_Channel_IO::notify_protocol_version_committed_and_flight_superseded() {
    notify_protocol_version_committed();
-   maybe_clear_resend_buffer();
+   maybe_clear_retransmission_buffer();
 }
 
 void DTLS_Channel_IO::notify_received_complete_flight() {
@@ -256,26 +256,27 @@ void DTLS_Channel_IO::notify_received_final_flight() {
    send_acknowledgements();
 }
 
-void DTLS_Channel_IO::maybe_retransmit(Cipher_State* cipher_state) {
-   if(!m_retransmission_timer.started()) {
-      return;
-   }
+void DTLS_Channel_IO::maybe_clear_retransmission_buffer() {
+   // If we're not sure that the peer is using DTLS 1.3, we must not clear
+   // the resend buffer as soon as we received any fragment of the peer's
+   // flight. If some fragment got lost, we can't ACK and therefore are
+   // forced to retransmit our entire previous flight.
+   if(m_dtls_version_committed) {
+      record_layer().clear_resend_buffer();
 
-   if(m_retransmission_timer.retransmissions_exhausted()) {
-      throw TLS_Exception(Alert::None, "DTLS handshake timed out: maximum retransmissions exceeded");
+      // Nothing left to retransmit, cancel the timer
+      m_retransmission_timer.cancel();
    }
+}
 
-   if(!m_retransmission_timer.expired()) {
-      return;  // timer has not yet expired
-   }
-
+void DTLS_Channel_IO::retransmit() {
    // Pack the retransmitted records into datagrams up to the MTU, just like
    // send_flight() did for the original transmission. This keeps the packing
    // of a full retransmission identical to the original flight.
    const size_t mtu = policy().dtls_default_mtu();
 
    std::vector<uint8_t> datagram;
-   for(const auto& record_to_write : record_layer().prepare_unacknowledged_records(cipher_state)) {
+   for(const auto& record_to_write : record_layer().prepare_unacknowledged_records(cipher_state())) {
       if(!datagram.empty() && datagram.size() + record_to_write.size() > mtu) {
          callbacks().tls_emit_data(datagram);
          datagram.clear();
@@ -285,56 +286,17 @@ void DTLS_Channel_IO::maybe_retransmit(Cipher_State* cipher_state) {
    if(!datagram.empty()) {
       callbacks().tls_emit_data(datagram);
    }
-
-   m_retransmission_timer.retransmitted();
 }
 
-void DTLS_Channel_IO::arm_dtls_retransmission_timer() {
-   const auto next_timeout = next_retransmission_timeout();
-
-   // If there is no timeout, the handshake is complete or there is no handshake
-   // in progress, so there is nothing to arm a timer for.
-   if(!next_timeout.has_value()) {
-      return;
-   }
-
-   // We invalidate any other timer chain that might still be
-   // running from a backoff interval that has been cut short by incoming data
-   // from the peer by dropping any possible previous m_retransmission_token.
-   m_retransmission_token = std::make_shared<TimerToken>(*this);
-
-   // The actual asynchronous operation:
-   auto on_timer = [token = std::weak_ptr(m_retransmission_token)]() mutable {
-      // If this operation is called after the channel implementation is gone,
-      // the channel magically became some other type, or the token was consumed
-      // because the operation was called more than once (see below) just return.
-      auto handle = token.lock();
-      if(!handle) {
-         // Arming superseded, cancelled, or channel gone
-         return;
+void DTLS_Channel_IO::arm_retransmission_timer() {
+   m_retransmission_timer.start([weak = weak_from_this()] {
+      if(auto self = weak.lock()) {
+         self->retransmit();
       }
-
-      auto& io = handle->channel_io();
-      io.m_retransmission_token.reset();  // firing consumes the token
-      io.on_retransmission_timer();
-   };
-
-   callbacks().tls_register_deferred_operation(next_timeout->count(), on_timer);
+   });
 }
 
-void DTLS_Channel_IO::on_retransmission_timer() {
-   maybe_retransmit(cipher_state());
-
-   // Spawn the next timer generation for the next backoff interval in this
-   // chain. This will be a no-op if the timer is no longer needed.
-   arm_dtls_retransmission_timer();
-}
-
-void DTLS_Channel_IO::maybe_arm_dtls_acknowledgement_timer() {
-   if(!m_dtls_version_committed || m_ack_timer.armed()) {
-      return;
-   }
-
+void DTLS_Channel_IO::arm_acknowledgement_timer() {
    const auto ack_time = std::chrono::milliseconds(policy().dtls_initial_timeout() / 4);
    m_ack_timer = SingleshotTimer::start(callbacks(), ack_time, [weak = weak_from_this()] {
       if(auto self = weak.lock()) {
@@ -368,7 +330,7 @@ void DTLS_Channel_IO::process(const Handshake_Record& record) {
       const bool is_post_handshake_traffic =
          record.epoch.has_value() && record.epoch.value() >= Epoch_Number::ApplicationTraffic_0;
       if(!is_post_handshake_traffic) {
-         maybe_clear_resend_buffer();
+         maybe_clear_retransmission_buffer();
       }
    }
 
@@ -399,7 +361,9 @@ void DTLS_Channel_IO::process(const Handshake_Record& record) {
       // successfully generate our next handshake flight in response to the
       // incoming data. If we fail to generate such a flight, the timer will
       // eventually emit ACKs to the peer.
-      maybe_arm_dtls_acknowledgement_timer();
+      if(m_dtls_version_committed && !m_ack_timer.armed()) {
+         arm_acknowledgement_timer();
+      }
    }
 }
 
@@ -426,8 +390,8 @@ void DTLS_Channel_IO::process(const ACK_Record& ack_record) {
    }
 
    if(record_layer().handle_acknowledgements(acks)) {
-      // Nothing left to retransmit, stop the timer
-      m_retransmission_timer.stop();
+      // Nothing left to retransmit, cancel the timer
+      m_retransmission_timer.cancel();
    }
 
    auto* cs = as_dtls_cipher_state(cipher_state());
