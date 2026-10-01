@@ -3,6 +3,7 @@
 * (C) 2022 Jack Lloyd
 *     2021 Elektrobit Automotive GmbH
 *     2022 Hannes Rantzsch, René Meusel - neXenio GmbH
+*     2026 Amos Treiber, René Meusel - Rohde & Schwarz Networks and Cybersecurity GmbH
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -57,9 +58,7 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
       m_rng(rng),
       m_policy(policy),
       m_can_read(true),
-      m_can_write(true),
-      m_opportunistic_key_update(false),
-      m_key_update_requested(false) {
+      m_can_write(true) {
    BOTAN_ASSERT_NONNULL(m_callbacks);
    BOTAN_ASSERT_NONNULL(m_session_manager);
    BOTAN_ASSERT_NONNULL(m_credentials_manager);
@@ -157,45 +156,7 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
 }
 
 void Channel_Impl_13::handle(const Key_Update& key_update) {
-   // A non-requesting KeyUpdate received while our own request is outstanding
-   // is the reciprocation we solicited. It is exempt from rate limiting (and
-   // invisible to it), so that a peer whose own key update crossed ours in
-   // flight is not penalized for the resulting back to back KeyUpdates.
-   const bool solicited_reciprocation = m_key_update_requested && !key_update.expects_reciprocation();
-
-   if(const uint64_t min_interval = policy().minimum_key_update_interval_ms();
-      min_interval > 0 && !solicited_reciprocation) {
-      const uint64_t now = callbacks().tls_current_monotonic_clock_ms();
-
-      if(m_last_key_update_ms != 0 && (now - m_last_key_update_ms) < min_interval) {
-         throw TLS_Exception(Alert::UnexpectedMessage, "Peer is requesting KeyUpdates too frequently");
-      }
-
-      m_last_key_update_ms = now;
-   }
-
-   BOTAN_ASSERT_NONNULL(m_cipher_state);
-   m_cipher_state->update_read_keys();
-
-   // Only an actual reciprocation settles our outstanding request. RFC 9846
-   // 4.7.3 would allow requesting again after any KeyUpdate from the peer,
-   // but waiting for the reciprocation keeps the exemption above one-shot.
-   if(!key_update.expects_reciprocation()) {
-      m_key_update_requested = false;
-   }
-
-   // RFC 8446 4.6.3
-   //    If the request_update field is set to "update_requested", then the
-   //    receiver MUST send a KeyUpdate of its own with request_update set to
-   //    "update_not_requested" prior to sending its next Application Data
-   //    record.
-   if(key_update.expects_reciprocation()) {
-      // RFC 8446 4.6.3
-      //    This mechanism allows either side to force an update to the
-      //    multiple KeyUpdates while it is silent to respond with a single
-      //    update.
-      opportunistically_update_traffic_keys();
-   }
+   m_channel_io->handle_key_update(key_update);
 }
 
 void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
@@ -203,60 +164,6 @@ void Channel_Impl_13::to_peer(std::span<const uint8_t> data) {
 
    if(!is_active()) {
       throw Invalid_State("Data cannot be sent on inactive TLS connection");
-   }
-
-   // RFC 9846 Section 5.5
-   //    Implementations MUST either close the connection or do a key update as
-   //    described in Section 4.7.3 prior to reaching these limits.
-   //
-   // [This is a SHOULD in RFC 8446]
-   //
-   // The ChaCha-based suites don't have any practical usage limit but we
-   // apply the limit for all suites for simplicity.
-   auto needs_traffic_based_key_update = [&]() {
-      const uint64_t limit = policy().records_per_traffic_key();
-
-      // Have to skip this if the handshake is not yet completed since we can't
-      // send a KeyUpdate in the (unlikely) case that the limit is hit with
-      // half-RTT data. If it is we just defer until the handshake completes.
-
-      if(limit == 0 || !is_handshake_complete()) {
-         return false;
-      }
-
-      if(m_cipher_state->current_write_sequence_number() >= limit) {
-         return true;
-      }
-
-      // For the read side all we can do is ask the peer to update its keys,
-      // and only if no earlier request is still outstanding. The threshold is
-      // set above the write-side limit so that a peer which tracks its own
-      // write limit will normally have rotated its keys already, avoiding a
-      // redundant key update crossing ours in flight.
-      const uint64_t read_limit = limit + limit / 2;
-      return !m_key_update_requested && m_cipher_state->current_read_sequence_number() >= read_limit;
-   };
-
-   // RFC 8446 4.6.3
-   //    If the request_update field [of a received KeyUpdate] is set to
-   //    "update_requested", then the receiver MUST send a KeyUpdate of its own
-   //    with request_update set to "update_not_requested" prior to sending its
-   //    next Application Data record.
-   //    This mechanism allows either side to force an update to the entire
-   //    connection, but causes an implementation which receives multiple
-   //    KeyUpdates while it is silent to respond with a single update.
-   if(m_opportunistic_key_update) {
-      update_traffic_keys(false /* update_requested */);
-      m_opportunistic_key_update = false;
-   } else if(needs_traffic_based_key_update()) {
-      // If approaching traffic limits request the peer update their own keys
-      // as well, unless an earlier request is still unanswered:
-      //
-      // RFC 9846 4.7.3
-      //    Until receiving a subsequent KeyUpdate from the peer, the sender
-      //    MUST NOT send another KeyUpdate with request_update set to
-      //    "update_requested".
-      update_traffic_keys(!m_key_update_requested);
    }
 
    m_channel_io->send(data);
@@ -315,38 +222,7 @@ SymmetricKey Channel_Impl_13::key_material_export(std::string_view label,
 
 void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
    BOTAN_STATE_CHECK(!is_downgrading() && is_handshake_complete() && is_active());
-   BOTAN_ASSERT_NONNULL(m_cipher_state);
-
-   // RFC 9147 8.
-   //    [...] implementations MUST NOT send [...] a new KeyUpdate until the
-   //    previous KeyUpdate has been acknowledged [...].
-   //
-   // In DTLS a previously sent KeyUpdate might still await acknowledgement.
-   // In that case we silently drop this request.
-   if(m_channel_io->has_pending_key_update()) {
-      return;
-   }
-
-   // RFC 9147 8. (Errata-ID 8050)
-   //    After the handshake, each epoch change consumes a message_seq value,
-   //    which is limited to 2^16-1. [...] In this case, the implementation MUST
-   //    check for this limit, if reached, terminate the association.
-   //
-   // We don't terminate the association but we reject any further key updates.
-   if(is_datagram() &&
-      to_underlying(m_cipher_state->current_write_epoch_number()) == std::numeric_limits<uint16_t>::max()) {
-      // TODO: move to Channel_IO
-      throw Invalid_State("Cannot update keys: maximum DTLS epoch number reached");
-   }
-
-   auto key_update_msg = Key_Update(request_peer_update);
-   callbacks().tls_inspect_handshake_msg(key_update_msg);
-
-   m_channel_io->send_key_update(std::move(key_update_msg));
-
-   if(request_peer_update) {
-      m_key_update_requested = true;
-   }
+   m_channel_io->update_traffic_keys(request_peer_update);
 }
 
 bool Channel_Impl_13::timeout_check() {

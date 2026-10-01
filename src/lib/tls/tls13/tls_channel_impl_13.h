@@ -3,6 +3,7 @@
 * (C) 2022 Jack Lloyd
 *     2021 Elektrobit Automotive GmbH
 *     2022 Hannes Rantzsch, René Meusel - neXenio GmbH
+*     2026 Amos Treiber, René Meusel - Rohde & Schwarz Networks and Cybersecurity GmbH
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -190,13 +191,6 @@ class Channel_Impl_13 : public Channel_Impl,
 
       void handle(const Key_Update& key_update);
 
-      /**
-       * Schedule a traffic key update to opportunistically happen before the
-       * channel sends application data the next time. Such a key update will
-       * never request a reciprocal key update from the peer.
-       */
-      void opportunistically_update_traffic_keys() { m_opportunistic_key_update = true; }
-
       Callbacks& callbacks() const { return *m_callbacks; }
 
       Session_Manager& session_manager() { return *m_session_manager; }
@@ -278,16 +272,6 @@ class Channel_Impl_13 : public Channel_Impl,
 
       bool m_can_read;
       bool m_can_write;
-
-      bool m_opportunistic_key_update;
-
-      /**
-       * True while a KeyUpdate with "update_requested" is outstanding, i.e.
-       * the peer has not yet replied with a KeyUpdate of its own.
-       */
-      bool m_key_update_requested;
-
-      uint64_t m_last_key_update_ms = 0;
 };
 
 }  // namespace Botan::TLS

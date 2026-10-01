@@ -211,6 +211,12 @@ class BOTAN_TEST_API Cipher_State {
       }
 
       /**
+       * Indicates whether both peers' Finished messages were processed, i.e.
+       * the key schedule reached its final state.
+       */
+      bool is_handshake_complete() const { return m_state == State::Completed; }
+
+      /**
        * Indicates whether the cipher state has established cryptographic keys
        * and is capable of sending/receiving protected records.
        */

@@ -9,6 +9,8 @@
 #include <botan/internal/tls_channel_io.h>
 
 #include <botan/tls_callbacks.h>
+#include <botan/tls_exceptn.h>
+#include <botan/tls_policy.h>
 #include <botan/internal/buffer_slicer.h>
 #include <botan/internal/concat_util.h>
 #include <botan/internal/tls_channel_impl_13.h>
@@ -139,7 +141,122 @@ Channel_IO::ReceiveEvent Channel_IO::next_pending_event(Transcript_Hash_State* t
 }
 
 void Channel_IO::send(std::span<const uint8_t> payload) {
+   // RFC 9846 4.7.3
+   //    If the request_update field [of a received KeyUpdate] is set to
+   //    "update_requested", then the receiver MUST send a KeyUpdate of its own
+   //    with request_update set to "update_not_requested" prior to sending its
+   //    next Application Data record. This mechanism allows either side to
+   //    force an update to the entire connection, but causes an implementation
+   //    which receives multiple KeyUpdates while it is silent to respond with
+   //    a single update.
+   if(m_key_update_reciprocation_pending) {
+      update_traffic_keys(false /* update_requested */);
+      m_key_update_reciprocation_pending = false;
+   } else if(needs_traffic_based_key_update()) {
+      // If approaching traffic limits request the peer update their own keys
+      // as well, unless an earlier request is still unanswered:
+      //
+      // RFC 9846 4.7.3
+      //    Until receiving a subsequent KeyUpdate from the peer, the sender
+      //    MUST NOT send another KeyUpdate with request_update set to
+      //    "update_requested".
+      update_traffic_keys(!m_key_update_requested);
+   }
+
    send_data(Record_Type::ApplicationData, payload, cipher_state());
+}
+
+bool Channel_IO::needs_traffic_based_key_update() const {
+   // RFC 9846 5.5
+   //    There are cryptographic limits on the amount of plaintext which can be
+   //    safely encrypted under a given set of keys. [...] Implementations MUST
+   //    either close the connection or do a key update as described in Section
+   //    4.7.3 prior to reaching these limits.
+   //
+   // The ChaCha-based suites don't have any practical usage limit but we apply
+   // the limit for all suites for simplicity.
+   const uint64_t limit = policy().records_per_traffic_key();
+   BOTAN_ASSERT_NONNULL(cipher_state());
+
+   // Have to skip this if the handshake is not yet completed since we can't
+   // send a KeyUpdate in the (unlikely) case that the limit is hit with
+   // half-RTT data. If it is we just defer until the handshake completes.
+   if(limit == 0 || !cipher_state()->is_handshake_complete()) {
+      return false;
+   }
+
+   if(cipher_state()->current_write_sequence_number() >= limit) {
+      return true;
+   }
+
+   // For the read side all we can do is ask the peer to update its keys,
+   // and only if no earlier request is still outstanding. The threshold is
+   // set above the write-side limit so that a peer which tracks its own
+   // write limit will normally have rotated its keys already, avoiding a
+   // redundant key update crossing ours in flight.
+   const uint64_t read_limit = limit + limit / 2;
+   return !m_key_update_requested && cipher_state()->current_read_sequence_number() >= read_limit;
+}
+
+void Channel_IO::handle_key_update(const Key_Update& key_update) {
+   BOTAN_ASSERT_NONNULL(cipher_state());
+
+   // A non-requesting KeyUpdate received while our own request is outstanding
+   // is the reciprocation we solicited. It is exempt from rate limiting (and
+   // invisible to it), so that a peer whose own key update crossed ours in
+   // flight is not penalized for the resulting back to back KeyUpdates.
+   const bool solicited_reciprocation = m_key_update_requested && !key_update.expects_reciprocation();
+
+   if(const uint64_t min_interval = policy().minimum_key_update_interval_ms();
+      min_interval > 0 && !solicited_reciprocation) {
+      const uint64_t now = callbacks().tls_current_monotonic_clock_ms();
+
+      if(m_last_peer_key_update_ms != 0 && (now - m_last_peer_key_update_ms) < min_interval) {
+         throw TLS_Exception(Alert::UnexpectedMessage, "Peer is requesting KeyUpdates too frequently");
+      }
+
+      m_last_peer_key_update_ms = now;
+   }
+
+   cipher_state()->update_read_keys();
+
+   if(key_update.expects_reciprocation()) {
+      // RFC 9846 4.7.3
+      //    If the request_update field is set to "update_requested", then the
+      //    receiver MUST send a KeyUpdate of its own with request_update set to
+      //    "update_not_requested" prior to sending its next Application Data
+      //    record.
+      //
+      // This happens opportunistically in send_application_data().
+      m_key_update_reciprocation_pending = true;
+   } else {
+      // Only an actual reciprocation settles our outstanding request. RFC 9846
+      // 4.7.3 would allow requesting again after any KeyUpdate from the peer,
+      // but waiting for the reciprocation keeps the exemption above one-shot.
+      m_key_update_requested = false;
+   }
+}
+
+void Channel_IO::update_traffic_keys(bool request_peer_update) {
+   BOTAN_ASSERT_NONNULL(cipher_state());
+
+   // In DTLS we cannot send a KeyUpdate while a previous one is not yet
+   // acknowledged. In that case, we just skip the update silently.
+   if(!can_send_key_update()) {
+      return;
+   }
+
+   const auto key_update = Key_Update(request_peer_update);
+   callbacks().tls_inspect_handshake_msg(key_update);
+   send_key_update(key_update);
+
+   if(request_peer_update) {
+      m_key_update_requested = true;
+   } else {
+      // Any KeyUpdate with "update_not_requested" satisfies a pending request
+      // of the peer (RFC 9846 4.7.3).
+      m_key_update_reciprocation_pending = false;
+   }
 }
 
 void Channel_IO::send(const Alert& alert) {
@@ -189,8 +306,6 @@ class TLS_Channel_IO final : public Channel_IO {
 
       void send_flight(std::vector<Flight::Message> flight) override;
 
-      void send_key_update(Key_Update msg) override;
-
       void process(const Handshake_Record& record) override {
          std::ignore = m_handshake_layer.copy_data(policy(), record);
       }
@@ -207,6 +322,9 @@ class TLS_Channel_IO final : public Channel_IO {
       Handshake_Layer& handshake_layer() override { return m_handshake_layer; }
 
       const Handshake_Layer& handshake_layer() const override { return m_handshake_layer; }
+
+   private:
+      void send_key_update(const Key_Update& msg) override;
 
    private:
       TLS_Record_Layer m_record_layer;
@@ -324,16 +442,12 @@ void TLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
    prepare_and_flush_current_prepared(protect_current_msgs);
 }
 
-void TLS_Channel_IO::send_key_update(Key_Update msg) {
+void TLS_Channel_IO::send_key_update(const Key_Update& msg) {
    const auto msg_serialized_bytes = msg.serialize();
    const auto msg_marshalled_bytes = concat<MarshalledHandshakeMessage>(
       prepare_tls_handshake_header(Handshake_Type::KeyUpdate, msg_serialized_bytes), msg_serialized_bytes);
 
    send_data(Record_Type::Handshake, msg_marshalled_bytes, cipher_state());
-
-   // Immediately update the write keys after sending the
-   // KeyUpdate message (in contrast to DTLS, we have
-   // reliable transport and know it went through).
    cipher_state()->update_write_keys();
 }
 

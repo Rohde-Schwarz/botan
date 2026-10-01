@@ -68,22 +68,41 @@ class Channel_IO {
       /// @name Emission of outgoing data
       /// @{
 
+      /**
+       * Sends application data to the peer. If necessary, this first sends a
+       * KeyUpdate: either to reciprocate a KeyUpdate request of the peer or
+       * because the traffic limits of the current keys are approached.
+       */
       void send(std::span<const uint8_t> payload);
+
       void send(const Alert& alert);
       void send_dummy_change_cipher_spec();
       virtual void send_flight(std::vector<Flight::Message> flight) = 0;
-      virtual void send_key_update(Key_Update msg) = 0;
+
+      /// @}
+
+      /// @name Traffic key updates (RFC 8446 4.6.3, RFC 9147 8.)
+      /// @{
+
+      /**
+       * Processes a KeyUpdate message received from the peer: updates the read
+       * keys, and schedules a reciprocal KeyUpdate if the peer requested one.
+       */
+      void handle_key_update(const Key_Update& key_update);
+
+      /**
+       * Sends a KeyUpdate message to the peer and updates the write keys once
+       * the transport allows it. Silently does nothing if no KeyUpdate may be
+       * sent right now (see can_send_key_update()).
+       *
+       * @param request_peer_update  whether to request a reciprocal KeyUpdate
+       */
+      void update_traffic_keys(bool request_peer_update);
 
       /// @}
 
       /// @name DTLS-specific state management
       /// @{
-
-      /**
-       * Whether a previously sent KeyUpdate is still awaiting acknowledgement
-       * by the peer. This can only happen via DTLS, TLS always returns false.
-       */
-      virtual bool has_pending_key_update() const { return false; }
 
       /**
        * Notifies that the TLS state machine is sure that we're talking to a
@@ -154,6 +173,10 @@ class Channel_IO {
 
       virtual void send_data(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) = 0;
 
+      virtual bool can_send_key_update() const { return true; }
+
+      virtual void send_key_update(const Key_Update& msg) = 0;
+
       virtual Record_Layer& record_layer() = 0;
 
       virtual Handshake_Layer& handshake_layer() = 0;
@@ -172,7 +195,24 @@ class Channel_IO {
       Callbacks& callbacks() { return *m_callbacks; }
 
    private:
+      bool needs_traffic_based_key_update() const;
+
+   private:
       bool m_first_message_delivered = false;
+
+      /**
+       * True if the peer requested a KeyUpdate that we have yet to reciprocate
+       * before sending our next application data record.
+       */
+      bool m_key_update_reciprocation_pending = false;
+
+      /**
+       * True while a KeyUpdate with "update_requested" is outstanding, i.e.
+       * the peer has not yet replied with a KeyUpdate of its own.
+       */
+      bool m_key_update_requested = false;
+
+      uint64_t m_last_peer_key_update_ms = 0;
 
       std::shared_ptr<Cipher_State> m_cipher_state;
       std::shared_ptr<const Policy> m_policy;

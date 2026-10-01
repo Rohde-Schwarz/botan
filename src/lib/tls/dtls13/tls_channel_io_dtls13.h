@@ -41,8 +41,6 @@ class DTLS_Channel_IO final : public Channel_IO {
 
       void send_flight(std::vector<Flight::Message> flight) override;
 
-      void send_key_update(Key_Update msg) override;
-
       void send_acknowledgements();
 
       void notify_protocol_version_committed() override { m_dtls_version_committed = true; }
@@ -53,9 +51,13 @@ class DTLS_Channel_IO final : public Channel_IO {
 
       void notify_received_final_flight() override;
 
-      bool has_pending_key_update() const override { return m_pending_key_update_record.has_value(); }
-
    private:
+      bool can_send_key_update() const override;
+
+      void send_key_update(const Key_Update& msg) override;
+
+      bool has_unacknowledged_key_update() const { return m_pending_key_update_record.has_value(); }
+
       void maybe_clear_resend_buffer() {
          // If we're not sure that the peer is using DTLS 1.3, we must not clear
          // the resend buffer as soon as we received any fragment of the peer's

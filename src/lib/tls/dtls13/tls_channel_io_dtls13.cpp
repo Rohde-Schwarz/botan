@@ -8,9 +8,11 @@
 
 #include <botan/internal/tls_channel_io_dtls13.h>
 
+#include <botan/internal/stl_util.h>
 #include <botan/internal/tls_channel_impl_13.h>
 #include <botan/internal/tls_cipher_state_dtls13.h>
 
+#include <limits>
 #include <utility>
 
 namespace Botan::TLS {
@@ -141,8 +143,30 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
    m_ack_token.reset();
 }
 
-void DTLS_Channel_IO::send_key_update(Key_Update msg) {
-   BOTAN_STATE_CHECK(!has_pending_key_update());
+bool DTLS_Channel_IO::can_send_key_update() const {
+   // RFC 9147 8.
+   //    [...] implementations MUST NOT send [...] a new KeyUpdate until the
+   //    previous KeyUpdate has been acknowledged [...].
+   if(has_unacknowledged_key_update()) {
+      return false;
+   }
+
+   // RFC 9147 8. (Errata-ID 8050)
+   //    After the handshake, each epoch change consumes a message_seq value,
+   //    which is limited to 2^16-1. [...] In this case, the implementation MUST
+   //    check for this limit, if reached, terminate the association.
+   //
+   // We don't terminate the association but we reject any further key updates.
+   BOTAN_ASSERT_NONNULL(cipher_state());
+   if(to_underlying(cipher_state()->current_write_epoch_number()) == std::numeric_limits<uint16_t>::max()) {
+      throw Invalid_State("Cannot update keys: maximum DTLS epoch number reached");
+   }
+
+   return true;
+}
+
+void DTLS_Channel_IO::send_key_update(const Key_Update& msg) {
+   BOTAN_STATE_CHECK(!has_unacknowledged_key_update());
 
    // TODO: Let Handshake_Message::serialize() emit the strong type
    const auto serialized_key_update = SerializedHandshakeMessage(msg.serialize());
@@ -400,7 +424,8 @@ void DTLS_Channel_IO::process(const ACK_Record& ack_record) {
 
    auto* cs = as_dtls_cipher_state(cipher_state());
 
-   if(has_pending_key_update() && !record_layer().has_unacknowledged_record(m_pending_key_update_record.value())) {
+   if(has_unacknowledged_key_update() &&
+      !record_layer().has_unacknowledged_record(m_pending_key_update_record.value())) {
       BOTAN_ASSERT_NONNULL(cs);
       cs->update_write_keys();
       m_pending_key_update_record.reset();
