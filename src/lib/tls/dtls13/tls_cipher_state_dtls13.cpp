@@ -122,73 +122,46 @@ std::pair<MarshalledRecord, RecordNumber> DTLS_Cipher_State::protect_record(Reco
       }
    }();
 
-   // RFC 8446 5.2
-   //    type:  The TLSPlaintext.type value containing the content type of the record.
-   constexpr size_t content_type_tag_length = 1;
-
    // 1. Figure out how many encrypted bytes we will produce
    // RFC 9147 Figure 2 DTLSInnerPlaintext = content | type | zeros
 
-   size_t plaintext_size = 0;
-   size_t ciphertext_size = 0;
+   const size_t ciphertext_size = [&] {
+      while(true) {
+         const auto ciphertext_size = protected_record_length(epoch, payload.size(), padding_bytes);
 
-   // TODO: re-visit this with a clearer mind on another day
-   while(true) {
-      plaintext_size = payload.size() + content_type_tag_length + padding_bytes;
-      ciphertext_size = encrypt_output_length(plaintext_size);
-
-      // RFC 9147 Section 4.2.3
-      //      Senders MUST pad short plaintexts out (using the conventional
-      //      record padding mechanism) in order to make a suitable-length
-      //      ciphertext. Note that most of the DTLS AEAD algorithms have a 16
-      //      byte authentication tag and need no padding. However, some
-      //      algorithms, such as TLS_AES_128_CCM_8_SHA256, have a shorter
-      //      authentication tag and may require padding for short inputs.
-      if(ciphertext_size >= 16) {
-         break;
-      } else {
-         padding_bytes += 1;  // Increase padding until ciphertext is at least 16 bytes
+         // RFC 9147 Section 4.2.3
+         //      Senders MUST pad short plaintexts out (using the conventional
+         //      record padding mechanism) in order to make a suitable-length
+         //      ciphertext. Note that most of the DTLS AEAD algorithms have a 16
+         //      byte authentication tag and need no padding. However, some
+         //      algorithms, such as TLS_AES_128_CCM_8_SHA256, have a shorter
+         //      authentication tag and may require padding for short inputs.
+         if(ciphertext_size >= 16) {
+            return ciphertext_size;
+         } else {
+            padding_bytes += 1;  // Increase padding until ciphertext is at least 16 bytes
+         }
       }
-   }
+   }();
 
    // 2. Set up *pre-encryption* unified_hdr, which serves as
    //    Associated Data (AD).
 
-   const auto write_seq_no = epoch.sequence_number++;
-   const auto ct_len = checked_cast_to<uint16_t>(ciphertext_size);
    auto unified_header = UnifiedHeader_DTLS{
       .epoch_bits = static_cast<uint8_t>(to_underlying(epoch.number) & 0b00000011),
-      .connection_id = std::nullopt,                           // TODO: support CID
-      .sequence_number = static_cast<uint16_t>(write_seq_no),  // TODO: support 16 and 8 bit seq_no
-      .length = ct_len,                                        // TODO: support length field omission
+      .connection_id = std::nullopt,                                    // TODO: support CID
+      .sequence_number = static_cast<uint16_t>(epoch.sequence_number),  // TODO: support 16 and 8 bit seq_no
+      .length = checked_cast_to<uint16_t>(ciphertext_size),             // TODO: support length field omission
    };
 
-   const size_t header_size = unified_header.serialized_byte_length();
-   const size_t record_size = header_size + ciphertext_size;
+   // 3. Marshall and protect the record
 
-   // 3. Set up DTLSInnerPlaintext layout with headers, which is the plaintext
-   //    to be encrypted. The layout is DTLSInnerPlaintext = content || type || zeros
+   auto result = marshall_and_protect(epoch, unified_header.serialize(), payload, type, padding_bytes);
 
-   MarshalledRecord result;
-   result.reserve(record_size);
-   result.resize(header_size);
-
-   result.get().insert(result.end(), payload.begin(), payload.end());  // content
-   result.get().push_back(to_underlying(type));                        // type
-   result.get().insert(result.end(), padding_bytes, 0x00);             // zeros
-   BOTAN_ASSERT_NOMSG(result.size() == header_size + plaintext_size);
-
-   // 4. Encrypt the record.
-
-   epoch.cipher->set_associated_data(unified_header.serialize());
-   epoch.cipher->start(current_nonce(write_seq_no, epoch.iv));
-   epoch.cipher->finish(result, header_size);
-
-   BOTAN_ASSERT_NOMSG(result.size() == header_size + ciphertext_size);
-
-   // 5. Mask seq bytes (RFC 9147 Section 4.2.3 Record Number Encryption) and
+   // 4. Mask seq bytes (RFC 9147 Section 4.2.3 Record Number Encryption) and
    //    render the header into the output buffer
 
+   const size_t header_size = unified_header.serialized_byte_length();
    unified_header.sequence_number = xor_record_sequence_number(
       epoch, ciphersuite(), std::span{result}.subspan(header_size), unified_header.sequence_number);
    unified_header.serialize_to(std::span{result}.first(header_size));
@@ -196,7 +169,7 @@ std::pair<MarshalledRecord, RecordNumber> DTLS_Cipher_State::protect_record(Reco
    return std::make_pair(std::move(result),
                          RecordNumber{
                             .epoch = epoch.number,
-                            .sequence_number = write_seq_no,
+                            .sequence_number = epoch.sequence_number++,
                          });
 }
 
@@ -236,12 +209,8 @@ std::optional<Record> DTLS_Cipher_State::deprotect_record(ProtectedRecord_DTLS r
       .epoch = epoch->get().number,
    };
 
-   BOTAN_ASSERT_NOMSG(result.payload.size() <= MAX_CIPHERTEXT_SIZE_TLS13);
-
    try {
-      epoch->get().cipher->set_associated_data(record.header.serialize());
-      epoch->get().cipher->start(current_nonce(result.sequence_number.value(), epoch->get().iv));
-      epoch->get().cipher->finish(result.payload);
+      deprotect_and_hydrate_content_type(epoch->get(), record.header.serialize(), result, incoming_record_size_limit);
    } catch(const Invalid_Authentication_Tag&) {
       // RFC 9147 Section 4.5.2
       //    Unlike TLS, DTLS is resilient in the face of invalid records
@@ -275,20 +244,6 @@ std::optional<Record> DTLS_Cipher_State::deprotect_record(ProtectedRecord_DTLS r
    if(!std::exchange(epoch->get().used_successfully, true)) {
       retire_outdated_read_epochs(current_time_ms);
    }
-
-   // RFC 8449 Section 4
-   //    a DTLS endpoint that receives a record larger than its advertised
-   //    limit MAY either generate a fatal "record_overflow" alert or
-   //    discard the record.
-   //
-   // We choose to generate a fatal alert, given that this error is detected
-   // after decryption only. Records that are extensively too large are
-   // discarded in read_datagram already.
-   if(result.payload.size() > incoming_record_size_limit) {
-      throw TLS_Exception(Alert::RecordOverflow, "Received an encrypted record that exceeds maximum plaintext size");
-   }
-
-   strip_padding_and_hydrate_content_type(result);
 
    // RFC 9147 Section 4.1 Figure 5
    //    [...]

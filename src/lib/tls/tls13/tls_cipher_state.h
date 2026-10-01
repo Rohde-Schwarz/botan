@@ -73,16 +73,6 @@ class BOTAN_TEST_API Cipher_State {
          Imported,    // RFC 9258 PSK importer - uses "imp binder" label
       };
 
-      // RFC 8446 5.3
-      //    Each AEAD algorithm will specify a range of possible lengths for the
-      //    per-record nonce, from N_MIN bytes to N_MAX bytes of input [RFC5116].
-      //    The length of the TLS per-record nonce (iv_length) is set to the
-      //    larger of 8 bytes and N_MIN for the AEAD algorithm (see [RFC5116],
-      //    Section 4).
-      //
-      // N_MIN is 12 for AES_GCM and AES_CCM as per RFC 5116 and also 12 for ChaCha20 per RFC 8439.
-      static constexpr size_t NONCE_LENGTH = 12;
-
    public:
       struct Epoch {
             Epoch_Number number;
@@ -312,7 +302,16 @@ class BOTAN_TEST_API Cipher_State {
        */
       Cipher_State(Connection_Side whoami, std::string_view hash_function);
 
-      static std::array<uint8_t, NONCE_LENGTH> current_nonce(uint64_t seq_no, std::span<const uint8_t> iv);
+      static size_t protected_record_length(Epoch& epoch, size_t payload_length, size_t padding_bytes);
+      static MarshalledRecord marshall_and_protect(Epoch& epoch,
+                                                   std::span<const uint8_t> header,
+                                                   std::span<const uint8_t> payload,
+                                                   Record_Type type,
+                                                   size_t padding_bytes);
+      static void deprotect_and_hydrate_content_type(Epoch& epoch,
+                                                     std::span<const uint8_t> header,
+                                                     Record_Content& protected_record,
+                                                     size_t incoming_record_size_limit);
 
       /**
        * HKDF-Expand-Label from RFC 8446 7.1
