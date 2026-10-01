@@ -96,9 +96,8 @@ std::optional<Channel_IO::ReceiveEvent> Channel_IO::next_pending_handshake_messa
 }
 
 void Channel_IO::copy_data(std::span<const uint8_t> data) {
-   auto* cipher_state = channel()->cipher_state();
    const auto has_cryptographic_association =
-      (cipher_state != nullptr) && cipher_state->has_cryptographic_association();
+      (cipher_state() != nullptr) && cipher_state()->has_cryptographic_association();
 
    record_layer().copy_data(data, has_cryptographic_association);
 }
@@ -131,7 +130,7 @@ Channel_IO::ReceiveEvent Channel_IO::next_pending_event(Transcript_Hash_State* t
             },
             [](auto anything_else) -> std::optional<Channel_IO::ReceiveEvent> { return anything_else; },
          },
-         record_layer().next_record(channel()->cipher_state()));
+         record_layer().next_record(cipher_state()));
 
       if(res.has_value()) {
          return std::move(res).value();
@@ -140,11 +139,11 @@ Channel_IO::ReceiveEvent Channel_IO::next_pending_event(Transcript_Hash_State* t
 }
 
 void Channel_IO::send(std::span<const uint8_t> payload) {
-   send_data(Record_Type::ApplicationData, payload, channel()->cipher_state());
+   send_data(Record_Type::ApplicationData, payload, cipher_state());
 }
 
 void Channel_IO::send(const Alert& alert) {
-   send_data(Record_Type::Alert, alert.serialize(), channel()->cipher_state());
+   send_data(Record_Type::Alert, alert.serialize(), cipher_state());
 }
 
 void Channel_IO::send_dummy_change_cipher_spec() {
@@ -169,27 +168,20 @@ std::optional<Epoch0_SequenceNumbers> Channel_IO::epoch0_sequence_numbers() cons
    return record_layer().epoch0_sequence_numbers();
 }
 
-std::shared_ptr<const Channel_Impl_13> Channel_IO::channel() const {
-   auto channel = m_channel.lock();
-   BOTAN_ASSERT_NONNULL(channel);
-   return channel;
+const Cipher_State* Channel_IO::cipher_state() const {
+   return m_cipher_state.get();
 }
 
-std::shared_ptr<Channel_Impl_13> Channel_IO::channel() {
-   auto channel = m_channel.lock();
-   BOTAN_ASSERT_NONNULL(channel);
-   return channel;
+Cipher_State* Channel_IO::cipher_state() {
+   return m_cipher_state.get();
 }
 
 namespace {
 
 class TLS_Channel_IO final : public Channel_IO {
    public:
-      TLS_Channel_IO(Connection_Side side,
-                     std::weak_ptr<Channel_Impl_13> channel,
-                     std::shared_ptr<const Policy> policy,
-                     std::shared_ptr<Callbacks> callbacks) :
-            Channel_IO(std::move(channel), policy, std::move(callbacks)),
+      TLS_Channel_IO(Connection_Side side, std::shared_ptr<const Policy> policy, std::shared_ptr<Callbacks> callbacks) :
+            Channel_IO(policy, std::move(callbacks)),
             m_record_layer(side, std::move(policy)),
             m_handshake_layer(side) {}
 
@@ -225,19 +217,16 @@ class TLS_Channel_IO final : public Channel_IO {
 
 std::unique_ptr<Channel_IO> Channel_IO::create(TLS_Flavor flavor,
                                                Connection_Side side,
-                                               const std::shared_ptr<Channel_Impl>& channel,
                                                std::shared_ptr<const Policy> policy,
                                                std::shared_ptr<Callbacks> callbacks) {
-   auto channel_13 = std::dynamic_pointer_cast<Channel_Impl_13>(channel);
    if(flavor == TLS_Flavor::DTLS) {
 #if defined(BOTAN_HAS_DTLS_13)
-      return std::make_unique<DTLS_Channel_IO>(side, channel_13, std::move(policy), std::move(callbacks));
+      return std::make_unique<DTLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
 #else
       throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
 #endif
    } else {
-      BOTAN_UNUSED(channel);
-      return std::make_unique<TLS_Channel_IO>(side, channel_13, std::move(policy), std::move(callbacks));
+      return std::make_unique<TLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
    }
 }
 
@@ -275,8 +264,6 @@ void TLS_Channel_IO::send_data(Record_Type record_type, std::span<const uint8_t>
 void TLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
    // TODO: Pass the Flight straight into the record layer to optimize the number of data copies
 
-   auto* cipher_state = channel()->cipher_state();
-
    // Now, we go through all messages of the flight, grouping them into
    // two runs, one for the unprotected messages and one for the
    // protected messages.
@@ -289,8 +276,8 @@ void TLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
       }
 
       BOTAN_ASSERT_IMPLICATION(
-         protect, cipher_state != nullptr, "Cipher State is available when messages require protection");
-      auto* cs = protect ? cipher_state : nullptr;
+         protect, cipher_state() != nullptr, "Cipher State is available when messages require protection");
+      auto* cs = protect ? cipher_state() : nullptr;
 
       send_data(Record_Type::Handshake, msgs, cs);
 
@@ -342,13 +329,12 @@ void TLS_Channel_IO::send_key_update(Key_Update msg) {
    const auto msg_marshalled_bytes = concat<MarshalledHandshakeMessage>(
       prepare_tls_handshake_header(Handshake_Type::KeyUpdate, msg_serialized_bytes), msg_serialized_bytes);
 
-   auto ch = channel();
-   send_data(Record_Type::Handshake, msg_marshalled_bytes, ch->cipher_state());
+   send_data(Record_Type::Handshake, msg_marshalled_bytes, cipher_state());
 
    // Immediately update the write keys after sending the
    // KeyUpdate message (in contrast to DTLS, we have
    // reliable transport and know it went through).
-   ch->cipher_state()->update_write_keys(ch->secret_logger());
+   cipher_state()->update_write_keys();
 }
 
 }  // namespace Botan::TLS

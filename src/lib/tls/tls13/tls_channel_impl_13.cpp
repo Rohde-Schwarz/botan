@@ -68,12 +68,13 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
 }
 
 void Channel_Impl_13::setup_io() {
-   m_channel_io = Channel_IO::create(m_flavor, m_side, shared_from_this(), m_policy, m_callbacks);
+   m_channel_io = Channel_IO::create(m_flavor, m_side, m_policy, m_callbacks);
 }
 
 Cipher_State& Channel_Impl_13::setup_cipher_state(std::unique_ptr<Cipher_State> cipher_state) {
    BOTAN_ASSERT_NOMSG(cipher_state != nullptr);
    m_cipher_state = std::move(cipher_state);
+   m_channel_io->set_cipher_state(m_cipher_state);
    return *m_cipher_state;
 }
 
@@ -174,7 +175,7 @@ void Channel_Impl_13::handle(const Key_Update& key_update) {
    }
 
    BOTAN_ASSERT_NONNULL(m_cipher_state);
-   m_cipher_state->update_read_keys(*this);
+   m_cipher_state->update_read_keys();
 
    // Only an actual reciprocation settles our outstanding request. RFC 9846
    // 4.7.3 would allow requesting again after any KeyUpdate from the peer,
@@ -366,6 +367,14 @@ std::optional<std::chrono::milliseconds> Channel_Impl_13::next_retransmission_ti
    throw Not_Implemented(
       "next_retransmission_timeout() is not implemented for DTLS 1.3, please "
       "implement TLS::Callbacks::tls_register_deferred_operation() instead");
+}
+
+SecretLoggerFn Channel_Impl_13::secret_logger() const {
+   return [weak = weak_from_this()](std::string_view label, std::span<const uint8_t> secret) {
+      if(auto self = dynamic_pointer_cast<const Channel_Impl_13>(weak.lock())) {
+         self->maybe_log_secret(label, secret);
+      };
+   };
 }
 
 void Channel_Impl_13::send_flight(std::vector<Flight::Message> flight) {

@@ -18,8 +18,6 @@ namespace Botan::TLS {
 class Alert;
 class Record_Layer;
 class Handshake_Layer;
-class Channel_Impl;
-class Channel_Impl_13;
 class Cipher_State;
 struct RecordNumber;
 
@@ -34,15 +32,12 @@ class Channel_IO {
 
       static std::unique_ptr<Channel_IO> create(TLS_Flavor flavor,
                                                 Connection_Side side,
-                                                const std::shared_ptr<Channel_Impl>& channel,
                                                 std::shared_ptr<const Policy> policy,
                                                 std::shared_ptr<Callbacks> callbacks);
 
    protected:
-      Channel_IO(std::weak_ptr<Channel_Impl_13> channel,
-                 std::shared_ptr<const Policy> policy,
-                 std::shared_ptr<Callbacks> callbacks) :
-            m_channel(std::move(channel)), m_policy(std::move(policy)), m_callbacks(std::move(callbacks)) {}
+      Channel_IO(std::shared_ptr<const Policy> policy, std::shared_ptr<Callbacks> callbacks) :
+            m_policy(std::move(policy)), m_callbacks(std::move(callbacks)) {}
 
    public:
       Channel_IO(const Channel_IO&) = delete;
@@ -140,6 +135,8 @@ class Channel_IO {
 
       /// @}
 
+      void set_cipher_state(std::shared_ptr<Cipher_State> cipher_state) { m_cipher_state = std::move(cipher_state); }
+
       /**
        * Notifies that the channel is closed for reading (close_notify received).
        * The IO can discard any read-side state; no further data will be processed.
@@ -165,8 +162,8 @@ class Channel_IO {
 
       virtual const Handshake_Layer& handshake_layer() const = 0;
 
-      std::shared_ptr<const Channel_Impl_13> channel() const;
-      std::shared_ptr<Channel_Impl_13> channel();
+      const Cipher_State* cipher_state() const;
+      Cipher_State* cipher_state();
 
       const Policy& policy() const { return *m_policy; }
 
@@ -177,7 +174,7 @@ class Channel_IO {
    private:
       bool m_first_message_delivered = false;
 
-      std::weak_ptr<Channel_Impl_13> m_channel;
+      std::shared_ptr<Cipher_State> m_cipher_state;
       std::shared_ptr<const Policy> m_policy;
       std::shared_ptr<Callbacks> m_callbacks;
 };

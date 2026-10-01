@@ -2,6 +2,7 @@
 * TLS cipher state implementation for TLS 1.3
 * (C) 2022 Jack Lloyd
 *     2022 Hannes Rantzsch, René Meusel - neXenio GmbH
+*     2026 Amos Treiber, René Meusel - Rohde & Schwarz Networks and Cybersecurity GmbH
 *
 * Botan is released under the Simplified BSD License (see license.txt)
 */
@@ -33,7 +34,6 @@ class HKDF_Expand;
 namespace Botan::TLS {
 
 class Ciphersuite;
-class Secret_Logger;
 
 /**
  * This class implements the key schedule for TLS 1.3 as described in RFC 8446 7.1.
@@ -123,27 +123,26 @@ class BOTAN_TEST_API Cipher_State {
                                                                   secure_vector<uint8_t>&& shared_secret,
                                                                   const Ciphersuite& cipher,
                                                                   const Transcript_Hash& transcript_hash,
-                                                                  const Secret_Logger& channel,
-                                                                  TLS_Flavor flavor);
+                                                                  TLS_Flavor flavor,
+                                                                  SecretLoggerFn secret_logger);
 
       /**
        * Transition internal secrets/keys for transporting early application data.
        * Note that this state transition is legal only for handshakes using PSK.
        */
-      void advance_with_client_hello(const Transcript_Hash& transcript_hash, const Secret_Logger& channel);
+      void advance_with_client_hello(const Transcript_Hash& transcript_hash);
 
       /**
        * Transition internal secrets/keys for transporting handshake data.
        */
       void advance_with_server_hello(const Ciphersuite& cipher,
                                      secure_vector<uint8_t>&& shared_secret,
-                                     const Transcript_Hash& transcript_hash,
-                                     const Secret_Logger& channel);
+                                     const Transcript_Hash& transcript_hash);
 
       /**
        * Transition internal secrets/keys for transporting application data.
        */
-      void advance_with_server_finished(const Transcript_Hash& transcript_hash, const Secret_Logger& channel);
+      void advance_with_server_finished(const Transcript_Hash& transcript_hash);
 
       /**
        * Transition to the final internal state allowing to create resumptions.
@@ -263,7 +262,7 @@ class BOTAN_TEST_API Cipher_State {
        * Note that this must not be called before the connection is ready for
        * application traffic.
        */
-      void update_read_keys(const Secret_Logger& channel);
+      void update_read_keys();
 
       /**
        * Updates the key material used for encrypting data
@@ -272,7 +271,7 @@ class BOTAN_TEST_API Cipher_State {
        * Note that this must not be called before the connection is ready for
        * application traffic.
        */
-      void update_write_keys(const Secret_Logger& channel);
+      void update_write_keys();
 
       /**
        * Remove handshake/traffic secrets for decrypting data from peer
@@ -304,6 +303,8 @@ class BOTAN_TEST_API Cipher_State {
        */
       uint64_t current_read_sequence_number() const;
 
+      void set_secret_logger(SecretLoggerFn secret_logger) { m_secret_logger = std::move(secret_logger); }
+
    protected:
       /**
        * @param whoami         whether we play the Server or Client
@@ -320,6 +321,8 @@ class BOTAN_TEST_API Cipher_State {
                                                std::string_view label,
                                                const std::vector<uint8_t>& context,
                                                size_t length) const;
+
+      void strip_padding_and_hydrate_content_type(Record_Content& deprotected_record) const;
 
       Cipher_State::Epoch create_epoch(Epoch_Number epoch_number,
                                        Cipher_Dir direction,
@@ -357,6 +360,12 @@ class BOTAN_TEST_API Cipher_State {
                                            std::string_view label,
                                            const Transcript_Hash& messages_hash) const;
 
+      void maybe_log_secret(std::string_view label, std::span<const uint8_t> secret) const {
+         if(m_secret_logger) {
+            m_secret_logger(label, secret);
+         }
+      }
+
       std::vector<uint8_t> empty_hash() const;
 
    private:
@@ -373,6 +382,7 @@ class BOTAN_TEST_API Cipher_State {
       State m_state;
       Connection_Side m_connection_side;
       std::optional<Ciphersuite> m_ciphersuite;
+      SecretLoggerFn m_secret_logger;
 
       std::unique_ptr<HKDF_Extract> m_extract;
       std::unique_ptr<HKDF_Expand> m_expand;
@@ -471,6 +481,13 @@ class TLS_Cipher_State final : public Cipher_State {
       std::optional<Epoch> m_write_epoch;
       std::optional<Epoch> m_read_epoch;
 };
+
+inline TLS_Cipher_State* as_tls_cipher_state(Cipher_State* cs) {
+   auto* tls_cs = dynamic_cast<TLS_Cipher_State*>(cs);
+   BOTAN_ASSERT_IMPLICATION(
+      tls_cs == nullptr, cs == nullptr, "If the cipher state is not a TLS_Cipher_State, it must be null");
+   return tls_cs;
+}
 
 }  // namespace Botan::TLS
 

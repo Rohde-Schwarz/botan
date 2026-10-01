@@ -418,6 +418,7 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
          std::unique_ptr<Cipher_State> new_cipher_state;
          std::tie(m_handshake->psk_identity, new_cipher_state) =
             ch.extensions().get<PSK>()->take_selected_psk_info(*sh.extensions().get<PSK>(), cipher.value());
+         new_cipher_state->set_secret_logger(secret_logger());
 
          // If we offered a session for resumption *and* an externally provided PSK
          // and the latter was chosen by the server over the offered resumption, we
@@ -429,9 +430,9 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
          // TODO: When implementing early data, `advance_with_client_hello` must
          //       happen _before_ encrypting any early application data.
          //       Same when we want to support early key export.
-         new_cipher_state->advance_with_client_hello(m_transcript_hash->previous(), *this);
+         new_cipher_state->advance_with_client_hello(m_transcript_hash->previous());
          new_cipher_state->advance_with_server_hello(
-            cipher.value(), std::move(shared_secret), m_transcript_hash->current(), *this);
+            cipher.value(), std::move(shared_secret), m_transcript_hash->current());
 
          // TODO: Early data
 
@@ -439,7 +440,7 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
       } else {
          m_handshake->resumed_session.reset();  // might have been set if we attempted a resumption
          return Cipher_State::init_with_server_hello(
-            m_side, std::move(shared_secret), cipher.value(), m_transcript_hash->current(), *this, m_flavor);
+            m_side, std::move(shared_secret), cipher.value(), m_transcript_hash->current(), m_flavor, secret_logger());
       }
    }());
 
@@ -762,7 +763,7 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
 
    // Derives the secrets for receiving application data but defers
    // the derivation of sending application data.
-   cs->advance_with_server_finished(m_transcript_hash->current(), *this);
+   cs->advance_with_server_finished(m_transcript_hash->current());
 
    auto flight = Flight(*m_transcript_hash, callbacks());
 

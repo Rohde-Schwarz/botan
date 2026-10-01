@@ -162,7 +162,7 @@ class Channel_Impl_13 : public Channel_Impl,
       */
       std::optional<std::chrono::milliseconds> next_retransmission_timeout() const override;
 
-      const Secret_Logger& secret_logger() const { return *this; }
+      SecretLoggerFn secret_logger() const;
 
       const Cipher_State* cipher_state() const { return m_cipher_state.get(); }
 
@@ -274,7 +274,7 @@ class Channel_Impl_13 : public Channel_Impl,
       std::shared_ptr<Credentials_Manager> m_credentials_manager;
       std::shared_ptr<RandomNumberGenerator> m_rng;
       std::shared_ptr<const Policy> m_policy;
-      std::unique_ptr<Cipher_State> m_cipher_state;
+      std::shared_ptr<Cipher_State> m_cipher_state;
 
       bool m_can_read;
       bool m_can_write;
@@ -289,6 +289,7 @@ class Channel_Impl_13 : public Channel_Impl,
 
       uint64_t m_last_key_update_ms = 0;
 };
+
 }  // namespace Botan::TLS
 
 #endif

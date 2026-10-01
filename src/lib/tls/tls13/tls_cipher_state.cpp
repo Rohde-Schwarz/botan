@@ -121,11 +121,12 @@ std::unique_ptr<Cipher_State> Cipher_State::init_with_server_hello(const Connect
                                                                    secure_vector<uint8_t>&& shared_secret,
                                                                    const Ciphersuite& cipher,
                                                                    const Transcript_Hash& transcript_hash,
-                                                                   const Secret_Logger& logger,
-                                                                   TLS_Flavor flavor) {
+                                                                   TLS_Flavor flavor,
+                                                                   SecretLoggerFn secret_logger) {
    auto cs = Cipher_State::create(side, cipher.prf_algo(), flavor);
+   cs->set_secret_logger(std::move(secret_logger));
    cs->advance_without_psk();
-   cs->advance_with_server_hello(cipher, std::move(shared_secret), transcript_hash, logger);
+   cs->advance_with_server_hello(cipher, std::move(shared_secret), transcript_hash);
    return cs;
 }
 
@@ -139,7 +140,7 @@ std::unique_ptr<Cipher_State> Cipher_State::init_with_psk(const Connection_Side 
    return cs;
 }
 
-void Cipher_State::advance_with_client_hello(const Transcript_Hash& transcript_hash, const Secret_Logger& logger) {
+void Cipher_State::advance_with_client_hello(const Transcript_Hash& transcript_hash) {
    BOTAN_ASSERT_NOMSG(m_state == State::PskBinder);
 
    zap(m_binder_key);
@@ -156,7 +157,7 @@ void Cipher_State::advance_with_client_hello(const Transcript_Hash& transcript_h
    //    An implementation of TLS 1.3 use the label
    //    "EARLY_EXPORTER_MASTER_SECRET" to identify the secret that is using for
    //    early exporters
-   logger.maybe_log_secret("EARLY_EXPORTER_MASTER_SECRET", m_exporter_master_secret);
+   maybe_log_secret("EARLY_EXPORTER_MASTER_SECRET", m_exporter_master_secret);
 
    m_salt = derive_secret(m_early_secret, "derived", empty_hash());
    zap(m_early_secret);
@@ -164,7 +165,7 @@ void Cipher_State::advance_with_client_hello(const Transcript_Hash& transcript_h
    m_state = State::EarlyTraffic;
 }
 
-void Cipher_State::advance_with_server_finished(const Transcript_Hash& transcript_hash, const Secret_Logger& logger) {
+void Cipher_State::advance_with_server_finished(const Transcript_Hash& transcript_hash) {
    BOTAN_ASSERT_NOMSG(m_state == State::HandshakeTraffic);
    BOTAN_ASSERT_NONNULL(m_hash);
 
@@ -180,8 +181,8 @@ void Cipher_State::advance_with_server_finished(const Transcript_Hash& transcrip
    //    An implementation of TLS 1.3 use the label "CLIENT_TRAFFIC_SECRET_0"
    //    and "SERVER_TRAFFIC_SECRET_0" to identify the secrets are using to
    //    protect the connection.
-   logger.maybe_log_secret("CLIENT_TRAFFIC_SECRET_0", m_client_application_traffic_secret_0);
-   logger.maybe_log_secret("SERVER_TRAFFIC_SECRET_0", server_application_traffic_secret);
+   maybe_log_secret("CLIENT_TRAFFIC_SECRET_0", m_client_application_traffic_secret_0);
+   maybe_log_secret("SERVER_TRAFFIC_SECRET_0", server_application_traffic_secret);
 
    // Note: the secrets for processing client's application data
    //       are not derived before the client's Finished message
@@ -198,7 +199,7 @@ void Cipher_State::advance_with_server_finished(const Transcript_Hash& transcrip
    //    An implementation of TLS 1.3 use the label "EXPORTER_SECRET" to
    //    identify the secret that is used in generating exporters(rfc8446
    //    Section 7.5).
-   logger.maybe_log_secret("EXPORTER_SECRET", m_exporter_master_secret);
+   maybe_log_secret("EXPORTER_SECRET", m_exporter_master_secret);
 
    m_state = State::ServerApplicationTraffic;
 }
@@ -313,6 +314,48 @@ MarshalledRecordAndNumber TLS_Cipher_State::protect_record(Record_Type type,
                          });
 }
 
+void Cipher_State::strip_padding_and_hydrate_content_type(Record_Content& deprotected_record) const {
+   // Remove record padding (RFC 9846 5.4). The TLSInnerPlaintext layout is
+   //   content || content_type || zero_padding
+   auto seen_nonzero = CT::Mask<uint8_t>::cleared();
+   uint8_t content_type_byte = 0;
+   size_t content_index = 0;
+   for(size_t i = deprotected_record.payload.size(); i-- > 0;) {
+      const uint8_t b = deprotected_record.payload[i];
+      const auto byte_is_nonzero = CT::Mask<uint8_t>::expand(b);
+      // Set on the first non-zero byte we encounter scanning right-to-left.
+      const auto first_nonzero = byte_is_nonzero & ~seen_nonzero;
+      content_type_byte = first_nonzero.select(b, content_type_byte);
+      content_index = CT::Mask<size_t>::expand(first_nonzero.value()).select(i, content_index);
+      seen_nonzero |= byte_is_nonzero;
+   }
+
+   // RFC 9846 5.4
+   //   If a receiving implementation does not find a non-zero octet in the
+   //   cleartext, it MUST terminate the connection with an
+   //   "unexpected_message" alert.
+   if(!seen_nonzero.as_bool()) {
+      throw TLS_Exception(Alert::UnexpectedMessage, "No content type found in encrypted record");
+   }
+
+   // hydrate the actual content type from TLSInnerPlaintext
+   deprotected_record.type = static_cast<Record_Type>(content_type_byte);
+
+   // Truncate to drop the content_type byte and padding. resize() on a
+   // vector of trivially-destructible elements is bookkeeping-only and
+   // does not allocate or iterate over the dropped suffix.
+   deprotected_record.payload.resize(content_index);
+
+   // RFC 9846 5.4
+   //    Implementations MUST NOT send Handshake and Alert records that have
+   //    a zero-length TLSInnerPlaintext.content; if such a message is
+   //    received, the receiving implementation MUST terminate the connection
+   //    with an "unexpected_message" alert.
+   if(deprotected_record.payload.empty() && deprotected_record.type != Record_Type::ApplicationData) {
+      throw TLS_Exception(Alert::UnexpectedMessage, "Received a protected record with empty TLSInnerPlaintext content");
+   }
+}
+
 Record TLS_Cipher_State::deprotect_record(Record_TLS record, size_t incoming_record_size_limit) {
    BOTAN_ASSERT_NOMSG(m_read_epoch.has_value());
    BOTAN_ARG_CHECK(record.type() == Record_Type::ApplicationData, "Record type must be ApplicationData");
@@ -362,31 +405,7 @@ Record TLS_Cipher_State::deprotect_record(Record_TLS record, size_t incoming_rec
    m_read_epoch->cipher->finish(result.payload);
    BOTAN_ASSERT_NOMSG(result.payload.size() <= MAX_PLAINTEXT_SIZE + 1 /* content_type byte */);
 
-   // Remove record padding (RFC 9846 5.4). The TLSInnerPlaintext layout is
-   //   content || content_type || zero_padding
-   auto seen_nonzero = CT::Mask<uint8_t>::cleared();
-   uint8_t content_type_byte = 0;
-   size_t content_index = 0;
-   for(size_t i = result.payload.size(); i-- > 0;) {
-      const uint8_t b = result.payload[i];
-      const auto byte_is_nonzero = CT::Mask<uint8_t>::expand(b);
-      // Set on the first non-zero byte we encounter scanning right-to-left.
-      const auto first_nonzero = byte_is_nonzero & ~seen_nonzero;
-      content_type_byte = first_nonzero.select(b, content_type_byte);
-      content_index = CT::Mask<size_t>::expand(first_nonzero.value()).select(i, content_index);
-      seen_nonzero |= byte_is_nonzero;
-   }
-
-   // RFC 9846 5.4
-   //   If a receiving implementation does not find a non-zero octet in the
-   //   cleartext, it MUST terminate the connection with an
-   //   "unexpected_message" alert.
-   if(!seen_nonzero.as_bool()) {
-      throw TLS_Exception(Alert::UnexpectedMessage, "No content type found in encrypted record");
-   }
-
-   // hydrate the actual content type from TLSInnerPlaintext
-   result.type = static_cast<Record_Type>(content_type_byte);
+   strip_padding_and_hydrate_content_type(result);
 
    // RFC 9846 5.
    //    An implementation [...] which receives a protected change_cipher_spec
@@ -408,20 +427,6 @@ Record TLS_Cipher_State::deprotect_record(Record_TLS record, size_t incoming_rec
       result.type != Record_Type::Handshake &&        //
       result.type != Record_Type::Alert) {
       throw TLS_Exception(Alert::UnexpectedMessage, "protected TLS record type had unexpected value");
-   }
-
-   // Truncate to drop the content_type byte and padding. resize() on a
-   // vector of trivially-destructible elements is bookkeeping-only and
-   // does not allocate or iterate over the dropped suffix.
-   result.payload.resize(content_index);
-
-   // RFC 9846 5.4
-   //    Implementations MUST NOT send Handshake and Alert records that have
-   //    a zero-length TLSInnerPlaintext.content; if such a message is
-   //    received, the receiving implementation MUST terminate the connection
-   //    with an "unexpected_message" alert.
-   if(result.payload.empty() && result.type != Record_Type::ApplicationData) {
-      throw TLS_Exception(Alert::UnexpectedMessage, "Received a protected record with empty TLSInnerPlaintext content");
    }
 
    return annotate_record_type(std::move(result));
@@ -665,8 +670,7 @@ void Cipher_State::advance_with_psk(PSK_Type type, secure_vector<uint8_t>&& psk)
 
 void Cipher_State::advance_with_server_hello(const Ciphersuite& cipher,
                                              secure_vector<uint8_t>&& shared_secret,
-                                             const Transcript_Hash& transcript_hash,
-                                             const Secret_Logger& logger) {
+                                             const Transcript_Hash& transcript_hash) {
    BOTAN_ASSERT_NOMSG(m_state == State::EarlyTraffic);
    BOTAN_STATE_CHECK(is_compatible_with(cipher));
    BOTAN_STATE_CHECK(!m_ciphersuite.has_value());
@@ -682,8 +686,8 @@ void Cipher_State::advance_with_server_hello(const Ciphersuite& cipher,
    //    An implementation of TLS 1.3 use the label
    //    "CLIENT_HANDSHAKE_TRAFFIC_SECRET" and "SERVER_HANDSHAKE_TRAFFIC_SECRET"
    //    to identify the secrets are using to protect handshake messages.
-   logger.maybe_log_secret("CLIENT_HANDSHAKE_TRAFFIC_SECRET", client_handshake_traffic_secret);
-   logger.maybe_log_secret("SERVER_HANDSHAKE_TRAFFIC_SECRET", server_handshake_traffic_secret);
+   maybe_log_secret("CLIENT_HANDSHAKE_TRAFFIC_SECRET", client_handshake_traffic_secret);
+   maybe_log_secret("SERVER_HANDSHAKE_TRAFFIC_SECRET", server_handshake_traffic_secret);
 
    if(m_connection_side == Connection_Side::Server) {
       advance_read_epoch(client_handshake_traffic_secret, Epoch_Number::HandshakeTraffic);
@@ -805,7 +809,7 @@ std::vector<uint8_t> Cipher_State::empty_hash() const {
    return m_hash->final_stdvec();
 }
 
-void Cipher_State::update_read_keys(const Secret_Logger& logger) {
+void Cipher_State::update_read_keys() {
    BOTAN_ASSERT_NOMSG(m_state == State::ServerApplicationTraffic || m_state == State::Completed);
    BOTAN_ASSERT_NONNULL(m_hash);
 
@@ -819,12 +823,12 @@ void Cipher_State::update_read_keys(const Secret_Logger& logger) {
    const auto secret_label = fmt("{}_TRAFFIC_SECRET_{}",
                                  m_connection_side == Connection_Side::Server ? "CLIENT" : "SERVER",
                                  to_underlying(app_key_index));
-   logger.maybe_log_secret(secret_label, new_read_application_traffic_secret);
+   maybe_log_secret(secret_label, new_read_application_traffic_secret);
 
    advance_read_epoch(new_read_application_traffic_secret);
 }
 
-void Cipher_State::update_write_keys(const Secret_Logger& logger) {
+void Cipher_State::update_write_keys() {
    BOTAN_ASSERT_NOMSG(m_state == State::ServerApplicationTraffic || m_state == State::Completed);
    BOTAN_ASSERT_NONNULL(m_hash);
 
@@ -838,7 +842,7 @@ void Cipher_State::update_write_keys(const Secret_Logger& logger) {
    const auto secret_label = fmt("{}_TRAFFIC_SECRET_{}",
                                  m_connection_side == Connection_Side::Server ? "SERVER" : "CLIENT",
                                  to_underlying(app_key_index));
-   logger.maybe_log_secret(secret_label, new_write_application_traffic_secret);
+   maybe_log_secret(secret_label, new_write_application_traffic_secret);
 
    advance_write_epoch(new_write_application_traffic_secret);
 }

@@ -11,11 +11,14 @@
 
 #include <botan/secmem.h>
 #include <botan/strong_type.h>
+#include <functional>
 #include <vector>
 
 namespace Botan::TLS {
 
 using BytesNeeded = size_t;
+
+using SecretLoggerFn = std::function<void(std::string_view label, std::span<const uint8_t> secret)>;
 
 enum class Epoch_Number /* NOLINT(*-enum-size) */ : uint64_t {
    Unprotected = 0,

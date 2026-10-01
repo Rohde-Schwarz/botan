@@ -29,7 +29,6 @@ class DTLS_Channel_IO final : public Channel_IO {
 
    public:
       DTLS_Channel_IO(Connection_Side side,
-                      std::weak_ptr<Channel_Impl_13> channel,
                       std::shared_ptr<const Policy> policy_ptr,
                       std::shared_ptr<Callbacks> callbacks);
 

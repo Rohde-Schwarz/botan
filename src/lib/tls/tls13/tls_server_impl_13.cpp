@@ -318,6 +318,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
                           Connection_Side::Server, psk_type, psk.extract_master_secret(), cipher.prf_algo(), m_flavor);
                     }},
          psk_extension->take_session_to_resume_or_psk());
+      psk_cipher_state->set_secret_logger(secret_logger());
 
       // RFC 8446 4.2.11
       //    Prior to accepting PSK key establishment, the server MUST validate
@@ -379,14 +380,14 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
 
       if(uses_psk) {
          BOTAN_ASSERT_NONNULL(psk_cipher_state);
-         psk_cipher_state->advance_with_client_hello(m_transcript_hash->previous(), *this);
+         psk_cipher_state->advance_with_client_hello(m_transcript_hash->previous());
          psk_cipher_state->advance_with_server_hello(
-            cipher, my_keyshare->take_shared_secret(), m_transcript_hash->current(), *this);
+            cipher, my_keyshare->take_shared_secret(), m_transcript_hash->current());
 
          return std::move(psk_cipher_state);
       } else {
          return Cipher_State::init_with_server_hello(
-            m_side, my_keyshare->take_shared_secret(), cipher, m_transcript_hash->current(), *this, m_flavor);
+            m_side, my_keyshare->take_shared_secret(), cipher, m_transcript_hash->current(), m_flavor, secret_logger());
       }
    }();
 
@@ -481,7 +482,7 @@ void Server_Impl_13::handle_reply_to_client_hello(Server_Hello_13 server_hello) 
    auto& cs = setup_cipher_state(std::move(new_cipher_state));
    send_flight(flight.commit());
 
-   cs.advance_with_server_finished(m_transcript_hash->current(), *this);
+   cs.advance_with_server_finished(m_transcript_hash->current());
 
    if(m_handshake->state.has_certificate_request()) {
       // RFC 8446 4.4.2

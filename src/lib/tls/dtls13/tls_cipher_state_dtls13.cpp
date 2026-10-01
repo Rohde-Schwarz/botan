@@ -193,7 +193,11 @@ std::pair<MarshalledRecord, RecordNumber> DTLS_Cipher_State::protect_record(Reco
       epoch, ciphersuite(), std::span{result}.subspan(header_size), unified_header.sequence_number);
    unified_header.serialize_to(std::span{result}.first(header_size));
 
-   return {result, {.epoch = epoch.number, .sequence_number = write_seq_no}};
+   return std::make_pair(std::move(result),
+                         RecordNumber{
+                            .epoch = epoch.number,
+                            .sequence_number = write_seq_no,
+                         });
 }
 
 std::optional<Record> DTLS_Cipher_State::deprotect_record(ProtectedRecord_DTLS record,
@@ -284,35 +288,7 @@ std::optional<Record> DTLS_Cipher_State::deprotect_record(ProtectedRecord_DTLS r
       throw TLS_Exception(Alert::RecordOverflow, "Received an encrypted record that exceeds maximum plaintext size");
    }
 
-   // Remove record padding (RFC 8446 5.4). The TLSInnerPlaintext layout is
-   //   content || content_type || zero_padding
-   auto seen_nonzero = CT::Mask<uint8_t>::cleared();
-   uint8_t content_type_byte = 0;
-   size_t content_index = 0;
-   for(size_t i = result.payload.size(); i-- > 0;) {
-      const uint8_t b = result.payload[i];
-      const auto byte_is_nonzero = CT::Mask<uint8_t>::expand(b);
-      // Set on the first non-zero byte we encounter scanning right-to-left.
-      const auto first_nonzero = byte_is_nonzero & ~seen_nonzero;
-      content_type_byte = first_nonzero.select(b, content_type_byte);
-      content_index = CT::Mask<size_t>::expand(first_nonzero.value()).select(i, content_index);
-      seen_nonzero |= byte_is_nonzero;
-   }
-
-   if(!seen_nonzero.as_bool()) {
-      // RFC 8446 5.4
-      //   If a receiving implementation does not
-      //   find a non-zero octet in the cleartext, it MUST terminate the
-      //   connection with an "unexpected_message" alert.
-      throw TLS_Exception(Alert::UnexpectedMessage, "No content type found in encrypted record");
-   }
-
-   result.type = static_cast<Record_Type>(content_type_byte);
-
-   // Truncate to drop the content_type byte and padding. resize() on a
-   // vector of trivially-destructible elements is bookkeeping-only and
-   // does not allocate or iterate over the dropped suffix.
-   result.payload.resize(content_index);
+   strip_padding_and_hydrate_content_type(result);
 
    // RFC 9147 Section 4.1 Figure 5
    //    [...]

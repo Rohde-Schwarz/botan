@@ -25,7 +25,6 @@
 #include <botan/internal/int_utils.h>
 #include <botan/internal/loadstor.h>
 #include <botan/internal/stl_util.h>
-#include <botan/internal/tls_cipher_state.h>
 #include <botan/internal/tls_cipher_state_dtls13.h>
 
 namespace Botan::TLS {
@@ -36,7 +35,7 @@ namespace {
 //    type:  The TLSPlaintext.type value containing the content type of the record.
 constexpr size_t content_type_tag_length = 1;
 
-bool protection_desired(Cipher_State* cipher_state, std::optional<Epoch_Number> record_epoch) {
+bool protection_desired(DTLS_Cipher_State* cipher_state, std::optional<Epoch_Number> record_epoch) {
    // If the user provided a specific epoch, we protect (or not) based on that
    // wish. Otherwise, we protect if a cipher_state is provided.
    if(record_epoch.has_value()) {
@@ -233,10 +232,10 @@ Replay_Window_13& DTLS_Record_Layer::replay_window_for_epoch(Epoch_Number epoch)
 }
 
 Record_Layer::ReadResult DTLS_Record_Layer::next_record(Cipher_State* cipher_state) {
+   auto* cs = as_dtls_cipher_state(cipher_state);
+
    while(!m_incoming_records.empty()) {
-      const auto current_read_epoch = cipher_state != nullptr  //
-                                         ? cipher_state->current_read_epoch_number()
-                                         : Epoch_Number::Unprotected;
+      const auto current_read_epoch = cs != nullptr ? cs->current_read_epoch_number() : Epoch_Number::Unprotected;
 
       auto maybe_next_record = std::visit(
          overloaded{
@@ -285,9 +284,8 @@ Record_Layer::ReadResult DTLS_Record_Layer::next_record(Cipher_State* cipher_sta
                   return std::nullopt;
                }
 
-               return dynamic_cast<DTLS_Cipher_State*>(cipher_state)
-                  ->deprotect_record(
-                     std::move(record), incoming_record_size_limit(), m_callbacks->tls_current_monotonic_clock_ms());
+               return cs->deprotect_record(
+                  std::move(record), incoming_record_size_limit(), m_callbacks->tls_current_monotonic_clock_ms());
             },
          },
          next_incoming_record());
@@ -324,6 +322,8 @@ MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(Record_Type type,
                                                             std::span<const uint8_t> data,
                                                             Cipher_State* cipher_state,
                                                             std::optional<Epoch_Number> epoch) {
+   auto* cs = as_dtls_cipher_state(cipher_state);
+
    // RFC 8446 5.1
    //    The length MUST NOT exceed 2^14 bytes.
    //
@@ -333,12 +333,12 @@ MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(Record_Type type,
    BOTAN_ASSERT_NOMSG(data.size() <= MAX_PLAINTEXT_SIZE);
    BOTAN_ASSERT_NOMSG(type != Record_Type::ChangeCipherSpec);
 
-   const bool protect = protection_desired(cipher_state, epoch);
+   const bool protect = protection_desired(cs, epoch);
 
    // RFC 9846 5.1
    //    Application Data messages are always protected.
    BOTAN_ASSERT_IMPLICATION(type == Record_Type::ApplicationData,
-                            cipher_state != nullptr,
+                            cs != nullptr,
                             "Application Data records MUST NOT be written to the wire unprotected");
 
    // RFC 9846 5.1
@@ -398,7 +398,7 @@ MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(Record_Type type,
             : 0;
       BOTAN_ASSERT_NOMSG(pt_size_with_type_tag + padding_length <= max_record_size);
 
-      return dynamic_cast<DTLS_Cipher_State*>(cipher_state)->protect_record(type, data, padding_length, epoch);
+      return cs->protect_record(type, data, padding_length, epoch);
    }
 }
 
@@ -433,15 +433,17 @@ std::vector<MarshalledRecord> DTLS_Record_Layer::prepare_unacknowledged_records(
 uint16_t DTLS_Record_Layer::record_payload_size_limit(const Policy& policy,
                                                       Cipher_State* cipher_state,
                                                       std::optional<Epoch_Number> epoch) const {
+   auto* cs = as_dtls_cipher_state(cipher_state);
+
    const auto mtu = policy.dtls_default_mtu();
    const auto overhead = [&]() -> size_t {
-      if(!protection_desired(cipher_state, epoch)) {
+      if(!protection_desired(cs, epoch)) {
          return DTLS_HEADER_SIZE;
       } else {
          constexpr size_t content_type_length = 1;
          // This assumes no padding is needed for the cipher, so for CCM we lose a
          // few bytes of the maximum possible size limit.
-         const size_t tag_length = cipher_state->encrypt_output_length(0);
+         const size_t tag_length = cs->encrypt_output_length(0);
          return UnifiedHeader_DTLS::expected_length(policy, std::nullopt /* TODO: support CID */) +
                 content_type_length + tag_length;
       }

@@ -119,6 +119,13 @@ class DTLS_Cipher_State final : public Cipher_State {
       std::vector<Epoch> m_read_epochs;
 };
 
+inline DTLS_Cipher_State* as_dtls_cipher_state(Cipher_State* cs) {
+   auto* dtls_cs = dynamic_cast<DTLS_Cipher_State*>(cs);
+   BOTAN_ASSERT_IMPLICATION(
+      dtls_cs == nullptr, cs == nullptr, "If the cipher state is not a DTLS_Cipher_State, it must be null");
+   return dtls_cs;
+}
+
 }  // namespace Botan::TLS
 
 #endif
