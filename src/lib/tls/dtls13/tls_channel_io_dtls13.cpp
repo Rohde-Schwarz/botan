@@ -140,7 +140,7 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
 
    m_retransmission_timer.flight_sent();
    arm_dtls_retransmission_timer();
-   m_ack_token.reset();
+   m_ack_timer.cancel();
 }
 
 bool DTLS_Channel_IO::can_send_key_update() const {
@@ -331,28 +331,16 @@ void DTLS_Channel_IO::on_retransmission_timer() {
 }
 
 void DTLS_Channel_IO::maybe_arm_dtls_acknowledgement_timer() {
-   const auto ack_time = policy().dtls_initial_timeout() / 4;
-
-   if(!m_ack_token && m_dtls_version_committed) {
-      m_ack_token = std::make_shared<TimerToken>(*this);
-
-      callbacks().tls_register_deferred_operation(ack_time, [token = std::weak_ptr(m_ack_token)] {
-         auto handle = token.lock();
-         if(!handle) {
-            return;
-         }
-
-         auto& channel_io = handle->channel_io();
-
-         // The ACK timer is meant to be single-shot. We reset the ACK timer
-         // handle to let belated or resent fragments start a new ACK timer.
-         // Note the difference to the retransmission timer, where any new
-         // armament supersedes and invalidates any prior deferred op.
-         channel_io.m_ack_token.reset();
-
-         channel_io.send_acknowledgements();
-      });
+   if(!m_dtls_version_committed || m_ack_timer.armed()) {
+      return;
    }
+
+   const auto ack_time = std::chrono::milliseconds(policy().dtls_initial_timeout() / 4);
+   m_ack_timer = SingleshotTimer::start(callbacks(), ack_time, [weak = weak_from_this()] {
+      if(auto self = weak.lock()) {
+         self->send_acknowledgements();
+      }
+   });
 }
 
 void DTLS_Channel_IO::process(const Handshake_Record& record) {

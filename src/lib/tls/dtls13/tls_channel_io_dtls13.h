@@ -106,9 +106,9 @@ class DTLS_Channel_IO final : public Channel_IO,
       DTLS_Record_Layer m_record_layer;
       DTLS_Handshake_Layer m_handshake_layer;
 
-      std::shared_ptr<TimerToken> m_ack_token;
-
+      SingleshotTimer m_ack_timer;
       std::shared_ptr<TimerToken> m_retransmission_token;
+
       DTLS_Retransmission_Timer m_retransmission_timer;
 
       std::optional<RecordNumber> m_pending_key_update_record;

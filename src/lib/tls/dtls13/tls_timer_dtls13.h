@@ -18,6 +18,64 @@
 
 namespace Botan::TLS {
 
+class Callbacks;
+
+/**
+ * A convenience wrapper for Callbacks::tls_register_deferred_operation() that
+ * allows modelling a cancellable asynchronous operation. This is achieved by
+ * storing an internal token that is shared with the deferred operation. If the
+ * token is destroyed before the operation is executed, it will act as a no-op.
+ *
+ * Cancelling the operation can be done by explicitly calling cancel() on the
+ * TimerToken object or simply by destroying/overwriting the TimerToken object.
+ */
+class SingleshotTimer final {
+   private:
+      struct Token {
+            bool executed = false;
+      };
+
+      explicit SingleshotTimer(std::shared_ptr<Token> token) : m_token(std::move(token)) {}
+
+   public:
+      using DeferredOperation = std::function<void()>;
+
+      SingleshotTimer() = default;
+      ~SingleshotTimer() = default;
+
+      SingleshotTimer(const SingleshotTimer&) = delete;
+      SingleshotTimer& operator=(const SingleshotTimer&) = delete;
+      SingleshotTimer(SingleshotTimer&&) = default;
+      SingleshotTimer& operator=(SingleshotTimer&&) = default;
+
+   public:
+      static SingleshotTimer start(Callbacks& callbacks, std::chrono::milliseconds delay, DeferredOperation operation) {
+         auto token = std::make_shared<Token>();
+         callbacks.tls_register_deferred_operation(
+            delay.count(), [weak_token = std::weak_ptr(token), operation = std::move(operation)]() mutable {
+               if(auto handle = weak_token.lock()) {
+                  operation();
+                  handle->executed = true;
+               }
+            });
+
+         return SingleshotTimer(std::move(token));
+      }
+
+      /// Cancel the deferred operation if it has not yet been executed.
+      void cancel() { m_token.reset(); }
+
+      /// @returns true if the deferred operation is currently armed and was
+      ///          not yet executed; false otherwise
+      bool armed() const { return m_token != nullptr && !m_token->executed; }
+
+      // NOLINTNEXTLINE(*-explicit-conversions)
+      operator bool() const { return armed(); }
+
+   private:
+      std::shared_ptr<Token> m_token;
+};
+
 /**
  * DTLS retransmission timer implementing the schedule of RFC 6347 sec 4.2.4.1:
  * the timeout starts at the policy's initial value and doubles with each
