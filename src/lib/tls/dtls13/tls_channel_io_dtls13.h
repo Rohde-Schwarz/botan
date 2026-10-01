@@ -23,7 +23,8 @@ namespace Botan::TLS {
 
 class Channel_Impl_13;
 
-class DTLS_Channel_IO final : public Channel_IO {
+class DTLS_Channel_IO final : public Channel_IO,
+                              public std::enable_shared_from_this<DTLS_Channel_IO> {
    private:
       class TimerToken;
 
@@ -55,6 +56,8 @@ class DTLS_Channel_IO final : public Channel_IO {
       bool can_send_key_update() const override;
 
       void send_key_update(const Key_Update& msg) override;
+
+      void schedule_read_epoch_pruning(Epoch_Number latest_epoch) override;
 
       bool has_unacknowledged_key_update() const { return m_pending_key_update_record.has_value(); }
 

@@ -18,9 +18,7 @@ namespace Botan::TLS {
 class DTLS_Cipher_State final : public Cipher_State {
    public:
       struct Epoch : Cipher_State::Epoch {
-            secure_vector<uint8_t> sequence_number_key = {};    // NOLINT(*-member-init)
-            bool used_successfully = false;                     // NOLINT(*-member-init)
-            std::optional<uint64_t> expiration_timestamp = {};  // NOLINT(*-member-init)
+            secure_vector<uint8_t> sequence_number_key;
       };
 
    public:
@@ -59,21 +57,16 @@ class DTLS_Cipher_State final : public Cipher_State {
        *
        * @param record                      the record to be deprotected in-place
        * @param incoming_record_size_limit  the maximum allowed size for the incoming record
-       * @param current_time_ms             the current timestamp in milliseconds
        *
        * @returns the record payload and deprotected content type
        */
-
-      std::optional<Record> deprotect_record(ProtectedRecord_DTLS record,
-                                             size_t incoming_record_size_limit,
-                                             uint64_t current_time_ms);
-
-      void prune_outdated_read_epochs(uint64_t current_time_ms);
-      void prune_outdated_write_epochs();
+      std::optional<Record> deprotect_record(ProtectedRecord_DTLS record, size_t incoming_record_size_limit);
 
       void clear_write_keys() override;
-
       void clear_read_keys() override;
+
+      void prune_write_epochs_older_than(Epoch_Number epoch_number);
+      void prune_read_epochs_older_than(Epoch_Number epoch_number);
 
    private:
       Epoch create_dtls_epoch(Epoch_Number epoch_number,
@@ -82,10 +75,10 @@ class DTLS_Cipher_State final : public Cipher_State {
 
       std::array<uint8_t, 6> expansion_label_prefix() const override;
 
-      void advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
-                               std::optional<Epoch_Number> epoch_number = {}) override;
-      void advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
-                              std::optional<Epoch_Number> epoch_number = {}) override;
+      Epoch_Number advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                       std::optional<Epoch_Number> epoch_number = {}) override;
+      Epoch_Number advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                      std::optional<Epoch_Number> epoch_number = {}) override;
 
       bool has_write_epoch() const override { return !m_write_epochs.empty(); }
 
@@ -112,7 +105,6 @@ class DTLS_Cipher_State final : public Cipher_State {
       }
 
       std::optional<std::reference_wrapper<Epoch>> latest_epoch_matching_epoch_hint(uint8_t epoch_hint);
-      void retire_outdated_read_epochs(uint64_t current_time_ms);
 
    private:
       std::vector<Epoch> m_write_epochs;

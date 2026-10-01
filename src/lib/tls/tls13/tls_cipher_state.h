@@ -257,8 +257,10 @@ class BOTAN_TEST_API Cipher_State {
        *
        * Note that this must not be called before the connection is ready for
        * application traffic.
+       *
+       * @returns the epoch number of the new read epoch
        */
-      void update_read_keys();
+      Epoch_Number update_read_keys();
 
       /**
        * Updates the key material used for encrypting data
@@ -266,8 +268,10 @@ class BOTAN_TEST_API Cipher_State {
        *
        * Note that this must not be called before the connection is ready for
        * application traffic.
+       *
+       * @returns the epoch number of the new write epoch
        */
-      void update_write_keys();
+      Epoch_Number update_write_keys();
 
       /**
        * Remove handshake/traffic secrets for decrypting data from peer
@@ -337,10 +341,10 @@ class BOTAN_TEST_API Cipher_State {
 
       virtual std::array<uint8_t, 6> expansion_label_prefix() const = 0;
 
-      virtual void advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
-                                       std::optional<Epoch_Number> epoch_number = {}) = 0;
-      virtual void advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
-                                      std::optional<Epoch_Number> epoch_number = {}) = 0;
+      virtual Epoch_Number advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                               std::optional<Epoch_Number> epoch_number = {}) = 0;
+      virtual Epoch_Number advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                              std::optional<Epoch_Number> epoch_number = {}) = 0;
 
       virtual bool has_write_epoch() const = 0;
       virtual bool has_read_epoch() const = 0;
@@ -453,10 +457,10 @@ class TLS_Cipher_State final : public Cipher_State {
    private:
       std::array<uint8_t, 6> expansion_label_prefix() const override;
 
-      void advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
-                               std::optional<Epoch_Number> epoch_number = {}) override;
-      void advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
-                              std::optional<Epoch_Number> epoch_number = {}) override;
+      Epoch_Number advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                       std::optional<Epoch_Number> epoch_number = {}) override;
+      Epoch_Number advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                      std::optional<Epoch_Number> epoch_number = {}) override;
 
       bool has_write_epoch() const override { return m_write_epoch.has_value(); }
 

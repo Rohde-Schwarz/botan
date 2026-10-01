@@ -720,7 +720,7 @@ Epoch_Number operator-(Epoch_Number current, Epoch_Number offset) {
 
 }  // namespace
 
-void Cipher_State::update_read_keys() {
+Epoch_Number Cipher_State::update_read_keys() {
    BOTAN_ASSERT_NOMSG(m_state == State::ServerApplicationTraffic || m_state == State::Completed);
    BOTAN_ASSERT_NONNULL(m_hash);
 
@@ -736,10 +736,10 @@ void Cipher_State::update_read_keys() {
                                  to_underlying(app_key_index));
    maybe_log_secret(secret_label, new_read_application_traffic_secret);
 
-   advance_read_epoch(new_read_application_traffic_secret);
+   return advance_read_epoch(new_read_application_traffic_secret);
 }
 
-void Cipher_State::update_write_keys() {
+Epoch_Number Cipher_State::update_write_keys() {
    BOTAN_ASSERT_NOMSG(m_state == State::ServerApplicationTraffic || m_state == State::Completed);
    BOTAN_ASSERT_NONNULL(m_hash);
 
@@ -755,7 +755,7 @@ void Cipher_State::update_write_keys() {
                                  to_underlying(app_key_index));
    maybe_log_secret(secret_label, new_write_application_traffic_secret);
 
-   advance_write_epoch(new_write_application_traffic_secret);
+   return advance_write_epoch(new_write_application_traffic_secret);
 }
 
 uint64_t Cipher_State::current_write_sequence_number() const {
@@ -885,16 +885,18 @@ Record TLS_Cipher_State::deprotect_record(Record_TLS record, size_t incoming_rec
    return annotate_record_type(std::move(result));
 }
 
-void TLS_Cipher_State::advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
-                                           std::optional<Epoch_Number> epoch_number) {
+Epoch_Number TLS_Cipher_State::advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                                   std::optional<Epoch_Number> epoch_number) {
    const auto next_epoch_number = epoch_number.value_or(current_write_epoch_number() + 1);
    m_write_epoch = create_epoch(next_epoch_number, Cipher_Dir::Encryption, traffic_secret);
+   return m_write_epoch->number;
 }
 
-void TLS_Cipher_State::advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
-                                          std::optional<Epoch_Number> epoch_number) {
+Epoch_Number TLS_Cipher_State::advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                                  std::optional<Epoch_Number> epoch_number) {
    const auto next_epoch_number = epoch_number.value_or(current_read_epoch_number() + 1);
    m_read_epoch = create_epoch(next_epoch_number, Cipher_Dir::Decryption, traffic_secret);
+   return m_read_epoch->number;
 }
 
 std::array<uint8_t, 6> TLS_Cipher_State::expansion_label_prefix() const {

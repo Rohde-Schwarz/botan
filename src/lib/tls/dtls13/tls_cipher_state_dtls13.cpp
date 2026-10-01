@@ -174,11 +174,8 @@ std::pair<MarshalledRecord, RecordNumber> DTLS_Cipher_State::protect_record(Reco
 }
 
 std::optional<Record> DTLS_Cipher_State::deprotect_record(ProtectedRecord_DTLS record,
-                                                          size_t incoming_record_size_limit,
-                                                          uint64_t current_time_ms) {
+                                                          size_t incoming_record_size_limit) {
    BOTAN_STATE_CHECK(current_read_epoch_number() > Epoch_Number::Unprotected);
-
-   prune_outdated_read_epochs(current_time_ms);
 
    // RFC 9147 4.2.2
    //    When receiving protected DTLS records, the recipient does not have a
@@ -234,17 +231,6 @@ std::optional<Record> DTLS_Cipher_State::deprotect_record(ProtectedRecord_DTLS r
    // than the previous highest.
    epoch->get().sequence_number = std::max(epoch->get().sequence_number, result.sequence_number.value());
 
-   // RFC 9147 8.
-   //    Implementations SHOULD discard records from earlier epochs but MAY
-   //    choose to retain keying material from previous epochs [...].
-   //
-   // Once an epoch was successfully used for deprotection for the first time,
-   // all previous epochs can be retired. After some time, these epochs will be
-   // discarded (see `prune_outdated_read_epochs()`).
-   if(!std::exchange(epoch->get().used_successfully, true)) {
-      retire_outdated_read_epochs(current_time_ms);
-   }
-
    // RFC 9147 Section 4.1 Figure 5
    //    [...]
    //
@@ -288,9 +274,12 @@ Epoch_Number operator+(Epoch_Number current, size_t offset) {
 DTLS_Cipher_State::Epoch DTLS_Cipher_State::create_dtls_epoch(Epoch_Number epoch_number,
                                                               Cipher_Dir direction,
                                                               const secure_vector<uint8_t>& traffic_secret) {
-   auto epoch = DTLS_Cipher_State::Epoch{create_epoch(epoch_number, direction, traffic_secret)};
-   epoch.sequence_number_key = hkdf_expand_label(traffic_secret, "sn", {}, epoch.cipher->minimum_keylength());
-   return epoch;
+   auto base_epoch = create_epoch(epoch_number, direction, traffic_secret);
+   auto seqno_key = hkdf_expand_label(traffic_secret, "sn", {}, base_epoch.cipher->minimum_keylength());
+   return {
+      std::move(base_epoch),
+      std::move(seqno_key),
+   };
 }
 
 std::array<uint8_t, 6> DTLS_Cipher_State::expansion_label_prefix() const {
@@ -302,30 +291,18 @@ std::array<uint8_t, 6> DTLS_Cipher_State::expansion_label_prefix() const {
    return {'d', 't', 'l', 's', '1', '3'};
 }
 
-void DTLS_Cipher_State::advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
-                                            std::optional<Epoch_Number> epoch_number) {
+Epoch_Number DTLS_Cipher_State::advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                                    std::optional<Epoch_Number> epoch_number) {
    const auto next_epoch_number = epoch_number.value_or(current_write_epoch_number() + 1);
    m_write_epochs.push_back(create_dtls_epoch(next_epoch_number, Cipher_Dir::Encryption, traffic_secret));
-
-   // TODO: How many epochs should we keep around for DTLS?
-   const size_t epochs_to_keep = 2;
-   BOTAN_ASSERT_NOMSG(m_write_epochs.size() <= epochs_to_keep + 1);
-   if(m_write_epochs.size() > epochs_to_keep) {
-      m_write_epochs.erase(m_write_epochs.begin());
-   }
+   return next_epoch_number;
 }
 
-void DTLS_Cipher_State::advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
-                                           std::optional<Epoch_Number> epoch_number) {
+Epoch_Number DTLS_Cipher_State::advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                                   std::optional<Epoch_Number> epoch_number) {
    const auto next_epoch_number = epoch_number.value_or(current_read_epoch_number() + 1);
    m_read_epochs.push_back(create_dtls_epoch(next_epoch_number, Cipher_Dir::Decryption, traffic_secret));
-
-   // TODO: How many epochs should we keep around for DTLS?
-   const size_t epochs_to_keep = 2;
-   BOTAN_ASSERT_NOMSG(m_read_epochs.size() <= epochs_to_keep + 1);
-   if(m_read_epochs.size() > epochs_to_keep) {
-      m_read_epochs.erase(m_read_epochs.begin());
-   }
+   return next_epoch_number;
 }
 
 void DTLS_Cipher_State::clear_write_keys() {
@@ -363,47 +340,12 @@ std::optional<std::reference_wrapper<DTLS_Cipher_State::Epoch>> DTLS_Cipher_Stat
    return std::nullopt;
 }
 
-void DTLS_Cipher_State::retire_outdated_read_epochs(uint64_t current_time_ms) {
-   // RFC 9147 Section 4.2.1
-   //    Implementations [...] MAY choose to retain keying material from
-   //    previous epochs for up to the default MSL specified for TCP [RFC0793]
-   //    to allow for packet reordering.
-   //
-   // RFC 9293 4.
-   //    MSL: Maximum Segment Lifetime, the time a TCP segment can exist in the
-   //         internetwork system. Arbitrarily defined to be 2 minutes.
-   constexpr uint64_t expiration_time = 2 * 60 * 1000;
-
-   if(m_read_epochs.empty() || !m_read_epochs.back().used_successfully) {
-      return;
-   }
-
-   for(auto it = m_read_epochs.begin(); it != std::prev(m_read_epochs.end()); ++it) {
-      auto& epoch = *it;
-      if(!epoch.expiration_timestamp.has_value()) {
-         epoch.expiration_timestamp = current_time_ms + expiration_time;
-      }
-   }
+void DTLS_Cipher_State::prune_write_epochs_older_than(Epoch_Number epoch_number) {
+   std::erase_if(m_write_epochs, [&](const auto& epoch) { return epoch.number < epoch_number; });
 }
 
-void DTLS_Cipher_State::prune_outdated_read_epochs(uint64_t current_time_ms) {
-   for(auto it = m_read_epochs.begin(); it != std::prev(m_read_epochs.end());) {
-      auto& epoch = *it;
-      if(epoch.expiration_timestamp.has_value() && current_time_ms >= *epoch.expiration_timestamp) {
-         it = m_read_epochs.erase(it);
-      } else {
-         ++it;
-      }
-   }
-}
-
-void DTLS_Cipher_State::prune_outdated_write_epochs() {
-   if(m_write_epochs.empty()) {
-      return;
-   }
-
-   // Clear all but the last entry in the m_write_epochs list
-   m_write_epochs.erase(m_write_epochs.begin(), std::prev(m_write_epochs.end()));
+void DTLS_Cipher_State::prune_read_epochs_older_than(Epoch_Number epoch_number) {
+   std::erase_if(m_read_epochs, [&](const auto& epoch) { return epoch.number < epoch_number; });
 }
 
 }  // namespace Botan::TLS

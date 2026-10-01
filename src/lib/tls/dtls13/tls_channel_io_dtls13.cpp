@@ -165,6 +165,26 @@ bool DTLS_Channel_IO::can_send_key_update() const {
    return true;
 }
 
+void DTLS_Channel_IO::schedule_read_epoch_pruning(Epoch_Number latest_epoch) {
+   // RFC 9147 Section 4.2.1
+   //    Implementations [...] MAY choose to retain keying material from
+   //    previous epochs for up to the default MSL specified for TCP [RFC0793]
+   //    to allow for packet reordering.
+   //
+   // RFC 9293 4.
+   //    MSL: Maximum Segment Lifetime, the time a TCP segment can exist in the
+   //         internetwork system. Arbitrarily defined to be 2 minutes.
+   constexpr uint64_t expiration_time_ms = 2 * 60 * 1000;
+   callbacks().tls_register_deferred_operation(expiration_time_ms, [weak = weak_from_this(), latest_epoch] {
+      if(auto self = weak.lock()) {
+         if(auto* cs = as_dtls_cipher_state(self->cipher_state())) {
+            BOTAN_ASSERT_NONNULL(cs);
+            cs->prune_read_epochs_older_than(latest_epoch);
+         }
+      }
+   });
+}
+
 void DTLS_Channel_IO::send_key_update(const Key_Update& msg) {
    BOTAN_STATE_CHECK(!has_unacknowledged_key_update());
 
@@ -434,7 +454,7 @@ void DTLS_Channel_IO::process(const ACK_Record& ack_record) {
    // If there's nothing left to retransmit, we can safely discard any
    // outdated write epochs.
    if(cs != nullptr && !record_layer().has_unacknowledged_records()) {
-      cs->prune_outdated_write_epochs();
+      cs->prune_write_epochs_older_than(cs->current_write_epoch_number());
    }
 
    // RFC 9147 7.2

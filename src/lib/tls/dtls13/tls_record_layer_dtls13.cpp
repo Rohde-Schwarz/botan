@@ -237,7 +237,7 @@ Record_Layer::ReadResult DTLS_Record_Layer::next_record(Cipher_State* cipher_sta
    while(!m_incoming_records.empty()) {
       const auto current_read_epoch = cs != nullptr ? cs->current_read_epoch_number() : Epoch_Number::Unprotected;
 
-      auto maybe_next_record = std::visit(
+      auto maybe_next_record = std::visit(  //
          overloaded{
             [&](PlaintextRecord_DTLS record) -> std::optional<Record> {
                // RFC 9147 4.2.1
@@ -284,8 +284,7 @@ Record_Layer::ReadResult DTLS_Record_Layer::next_record(Cipher_State* cipher_sta
                   return std::nullopt;
                }
 
-               return cs->deprotect_record(
-                  std::move(record), incoming_record_size_limit(), m_callbacks->tls_current_monotonic_clock_ms());
+               return cs->deprotect_record(std::move(record), incoming_record_size_limit());
             },
          },
          next_incoming_record());

@@ -222,7 +222,7 @@ void Channel_IO::handle_key_update(const Key_Update& key_update) {
       m_last_peer_key_update_ms = now;
    }
 
-   cipher_state()->update_read_keys();
+   schedule_read_epoch_pruning(cipher_state()->update_read_keys());
 
    if(key_update.expects_reciprocation()) {
       // RFC 9846 4.7.3
@@ -330,6 +330,8 @@ class TLS_Channel_IO final : public Channel_IO {
    private:
       void send_key_update(const Key_Update& msg) override;
 
+      void schedule_read_epoch_pruning(Epoch_Number /* latest_epoch */) override { /* don't care */ }
+
    private:
       TLS_Record_Layer m_record_layer;
       TLS_Handshake_Layer m_handshake_layer;
@@ -337,18 +339,18 @@ class TLS_Channel_IO final : public Channel_IO {
 
 }  // namespace
 
-std::unique_ptr<Channel_IO> Channel_IO::create(TLS_Flavor flavor,
+std::shared_ptr<Channel_IO> Channel_IO::create(TLS_Flavor flavor,
                                                Connection_Side side,
                                                std::shared_ptr<const Policy> policy,
                                                std::shared_ptr<Callbacks> callbacks) {
    if(flavor == TLS_Flavor::DTLS) {
 #if defined(BOTAN_HAS_DTLS_13)
-      return std::make_unique<DTLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
+      return std::make_shared<DTLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
 #else
       throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
 #endif
    } else {
-      return std::make_unique<TLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
+      return std::make_shared<TLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
    }
 }
 

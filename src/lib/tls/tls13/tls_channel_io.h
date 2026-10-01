@@ -30,7 +30,7 @@ class Channel_IO {
                                         Alert_Record,
                                         ApplicationData_Record>;
 
-      static std::unique_ptr<Channel_IO> create(TLS_Flavor flavor,
+      static std::shared_ptr<Channel_IO> create(TLS_Flavor flavor,
                                                 Connection_Side side,
                                                 std::shared_ptr<const Policy> policy,
                                                 std::shared_ptr<Callbacks> callbacks);
@@ -180,6 +180,8 @@ class Channel_IO {
       virtual void send_flight(std::vector<Flight::Message> flight) = 0;
 
       virtual void send_key_update(const Key_Update& msg) = 0;
+
+      virtual void schedule_read_epoch_pruning(Epoch_Number latest_epoch) = 0;
 
       virtual Record_Layer& record_layer() = 0;
 

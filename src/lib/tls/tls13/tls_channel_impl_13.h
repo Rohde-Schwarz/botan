@@ -254,7 +254,7 @@ class Channel_Impl_13 : public Channel_Impl,
 
    protected:
       /* IO Handling */
-      std::unique_ptr<Channel_IO> m_channel_io;  // NOLINT(*-non-private-member-*)
+      std::shared_ptr<Channel_IO> m_channel_io;  // NOLINT(*-non-private-member-*)
 
    private:
       /* callbacks */
