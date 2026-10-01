@@ -36,7 +36,6 @@ std::shared_ptr<Client_Impl_13> Client_Impl_13::create(const std::shared_ptr<Cal
                                                        const std::vector<std::string>& next_protocols) {
    auto self = std::make_shared<Client_Impl_13>(
       Private{}, callbacks, session_manager, creds, policy, rng, flavor, std::move(server_info));
-   self->setup_io();
 
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
    if(self->is_datagram() ? policy->allow_dtls12() : policy->allow_tls12()) {

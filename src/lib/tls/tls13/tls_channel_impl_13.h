@@ -167,16 +167,6 @@ class Channel_Impl_13 : public Channel_Impl,
       Cipher_State* cipher_state() { return m_cipher_state.get(); }
 
    protected:
-      /**
-       * Set up the internal Channel I/O object. This can't be done in the
-       * constructor, because it requires shared_from_this() to be valid,
-       * which is not the case before the constructor has finished and the
-       * object is wrapped into a shared_ptr.
-       *
-       * See {Client/Server}_Impl_13::create() for usage
-       */
-      void setup_io();
-
       Cipher_State& setup_cipher_state(std::unique_ptr<Cipher_State> cipher_state);
 
       virtual void process_handshake_msg(Handshake_Message_13 msg) = 0;
@@ -216,11 +206,6 @@ class Channel_Impl_13 : public Channel_Impl,
       void shutdown();
 
    protected:
-      const Connection_Side m_side;                              // NOLINT(*non-private-member-variable*)
-      std::unique_ptr<Transcript_Hash_State> m_transcript_hash;  // NOLINT(*non-private-member-variable*)
-      std::optional<Active_Connection_State_13> m_active_state;  // NOLINT(*non-private-member-variable*)
-      TLS_Flavor m_flavor;                                       // NOLINT(*-non-private-member-*)
-
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
       /**
        * Indicate that we have to expect a downgrade to TLS 1.2. In which case the current
@@ -253,7 +238,15 @@ class Channel_Impl_13 : public Channel_Impl,
       void set_selected_certificate_type(Certificate_Type cert_type);
 
    protected:
-      /* IO Handling */
+      /* basic channel informatio */
+      const Connection_Side m_side;  // NOLINT(*non-private-member-variable*)
+      TLS_Flavor m_flavor;           // NOLINT(*-non-private-member-*)
+
+      /* handshake state */
+      std::unique_ptr<Transcript_Hash_State> m_transcript_hash;  // NOLINT(*non-private-member-variable*)
+      std::optional<Active_Connection_State_13> m_active_state;  // NOLINT(*non-private-member-variable*)
+
+      /* I/O handling */
       std::shared_ptr<Channel_IO> m_channel_io;  // NOLINT(*-non-private-member-*)
 
    private:

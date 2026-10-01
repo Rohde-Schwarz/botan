@@ -48,8 +48,9 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
                                  Connection_Side connection_side,
                                  TLS_Flavor flavor) :
       m_side(connection_side),
-      m_transcript_hash(std::make_unique<Transcript_Hash_State>(flavor)),
       m_flavor(flavor),
+      m_transcript_hash(std::make_unique<Transcript_Hash_State>(flavor)),
+      m_channel_io(Channel_IO::create(m_flavor, m_side, policy, callbacks)),
       m_callbacks(callbacks),
       m_session_manager(session_manager),
       m_credentials_manager(credentials_manager),
@@ -62,10 +63,6 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
    BOTAN_ASSERT_NONNULL(m_credentials_manager);
    BOTAN_ASSERT_NONNULL(m_rng);
    BOTAN_ASSERT_NONNULL(m_policy);
-}
-
-void Channel_Impl_13::setup_io() {
-   m_channel_io = Channel_IO::create(m_flavor, m_side, m_policy, m_callbacks);
 }
 
 Cipher_State& Channel_Impl_13::setup_cipher_state(std::unique_ptr<Cipher_State> cipher_state) {
