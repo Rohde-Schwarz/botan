@@ -258,7 +258,7 @@ void Channel_Impl_13::send_flight(std::vector<Flight::Message> flight) {
    BOTAN_STATE_CHECK(!is_downgrading());
    BOTAN_STATE_CHECK(m_can_write);
 
-   m_channel_io->send_flight(std::move(flight));
+   m_channel_io->send(std::move(flight));
 }
 
 std::optional<BytesNeeded> Channel_Impl_13::process(Handshake_Message_13 handshake_msg) {

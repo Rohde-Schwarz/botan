@@ -140,6 +140,10 @@ Channel_IO::ReceiveEvent Channel_IO::next_pending_event(Transcript_Hash_State* t
    }
 }
 
+void Channel_IO::send(std::vector<Flight::Message> flight) {
+   send_flight(std::move(flight));
+}
+
 void Channel_IO::send(std::span<const uint8_t> payload) {
    // RFC 9846 4.7.3
    //    If the request_update field [of a received KeyUpdate] is set to

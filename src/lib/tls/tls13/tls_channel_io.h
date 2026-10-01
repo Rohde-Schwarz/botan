@@ -68,16 +68,17 @@ class Channel_IO {
       /// @name Emission of outgoing data
       /// @{
 
-      /**
-       * Sends application data to the peer. If necessary, this first sends a
-       * KeyUpdate: either to reciprocate a KeyUpdate request of the peer or
-       * because the traffic limits of the current keys are approached.
-       */
+      /// Sends a flight of handshake messages to the peer.
+      void send(std::vector<Flight::Message> flight);
+
+      /// Sends application data to the peer.
       void send(std::span<const uint8_t> payload);
 
+      /// Sends an alert to the peer.
       void send(const Alert& alert);
+
+      /// Sends a dummy ChangeCipherSpec record to the peer.
       void send_dummy_change_cipher_spec();
-      virtual void send_flight(std::vector<Flight::Message> flight) = 0;
 
       /// @}
 
@@ -154,13 +155,14 @@ class Channel_IO {
 
       /// @}
 
-      void set_cipher_state(std::shared_ptr<Cipher_State> cipher_state) { m_cipher_state = std::move(cipher_state); }
-
       /**
        * Notifies that the channel is closed for reading (close_notify received).
        * The IO can discard any read-side state; no further data will be processed.
        */
       void notify_closed_for_reading();
+
+      void set_cipher_state(std::shared_ptr<Cipher_State> cipher_state) { m_cipher_state = std::move(cipher_state); }
+
       void set_record_size_limits(uint16_t out, uint16_t in);
       void set_selected_certificate_type(Certificate_Type t);
 
@@ -174,6 +176,8 @@ class Channel_IO {
       virtual void send_data(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) = 0;
 
       virtual bool can_send_key_update() const { return true; }
+
+      virtual void send_flight(std::vector<Flight::Message> flight) = 0;
 
       virtual void send_key_update(const Key_Update& msg) = 0;
 
