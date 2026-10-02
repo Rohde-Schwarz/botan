@@ -182,10 +182,7 @@ Handshake_Layer::CopyDataResult DTLS_Handshake_Layer::copy_data(const Policy& po
       copy_mem(std::span(reassembled.payload).subspan(header.fragment_offset, header.fragment_length),
                bs.take(header.fragment_length));
 
-      for(size_t i = header.fragment_offset; i < header.fragment_offset + header.fragment_length; ++i) {
-         reassembled.received_bytes.set(i);  // TODO: an efficient way to set a range of bits
-      }
-
+      reassembled.received_bytes.set_range(header.fragment_offset, header.fragment_length);
       if(reassembled.received_bytes.all_vartime()) {
          reassembled.complete = true;
       }
