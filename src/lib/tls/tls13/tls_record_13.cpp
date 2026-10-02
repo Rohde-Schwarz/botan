@@ -17,6 +17,23 @@
 
 namespace Botan::TLS {
 
+Record annotate_record_type(Record_Content&& record) {
+   switch(record.type) {
+      case Record_Type::ChangeCipherSpec:
+         return ChangeCipherSpec_Record{std::move(record)};
+      case Record_Type::Alert:
+         return Alert_Record{std::move(record)};
+      case Record_Type::Handshake:
+         return Handshake_Record{std::move(record)};
+      case Record_Type::ApplicationData:
+         return ApplicationData_Record{std::move(record)};
+      case Record_Type::ACK:
+         return ACK_Record{std::move(record)};
+      default:
+         throw TLS_Exception(Alert::UnexpectedMessage, "TLS record type had unexpected value");
+   }
+}
+
 std::array<uint8_t, TLS_HEADER_SIZE> Record_TLS::serialize_header(Record_Type type,
                                                                   Protocol_Version legacy_version,
                                                                   uint16_t payload_length) {

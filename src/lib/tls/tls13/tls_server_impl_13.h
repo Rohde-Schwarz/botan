@@ -24,15 +24,18 @@ class Server_Impl_13 final : public Channel_Impl_13 {
                                                     const std::shared_ptr<Session_Manager>& session_manager,
                                                     const std::shared_ptr<Credentials_Manager>& credentials_manager,
                                                     const std::shared_ptr<const Policy>& policy,
-                                                    const std::shared_ptr<RandomNumberGenerator>& rng);
+                                                    const std::shared_ptr<RandomNumberGenerator>& rng,
+                                                    TLS_Flavor flavor);
 
       Server_Impl_13([[maybe_unused]] Private dont_call_me,
                      const std::shared_ptr<Callbacks>& callbacks,
                      const std::shared_ptr<Session_Manager>& session_manager,
                      const std::shared_ptr<Credentials_Manager>& credentials_manager,
                      const std::shared_ptr<const Policy>& policy,
-                     const std::shared_ptr<RandomNumberGenerator>& rng) :
-            Channel_Impl_13(callbacks, session_manager, credentials_manager, rng, policy, true /* is_server */),
+                     const std::shared_ptr<RandomNumberGenerator>& rng,
+                     TLS_Flavor flavor) :
+            Channel_Impl_13(
+               callbacks, session_manager, credentials_manager, rng, policy, Connection_Side::Server, flavor),
             m_handshake(std::make_unique<Pending_Handshake>()) {}
 
       std::string application_protocol() const override;
@@ -60,7 +63,9 @@ class Server_Impl_13 final : public Channel_Impl_13 {
       void handle_reply_to_client_hello(Server_Hello_13 server_hello);
       void handle_reply_to_client_hello(Hello_Retry_Request hello_retry_request);
 
-      void maybe_handle_compatibility_mode(Compat_Mode_Situation situation) override;
+      bool compat_mode_ccs_requested() const override;
+      bool compat_mode_ccs_needed_before_alert() const override;
+
       void maybe_log_secret(std::string_view label, std::span<const uint8_t> secret) const override;
 
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)

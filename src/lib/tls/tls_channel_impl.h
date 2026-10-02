@@ -23,6 +23,7 @@
 
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
    #include <botan/tls_messages_13.h>
+   #include <botan/internal/tls_types_13.h>
 #endif
 
 namespace Botan {
@@ -229,9 +230,12 @@ class Channel_Impl : public std::enable_shared_from_this<Channel_Impl> {
             std::shared_ptr<Credentials_Manager> creds;
             std::shared_ptr<RandomNumberGenerator> rng;
             std::shared_ptr<const Policy> policy;
+            TLS_Flavor flavor;
 
             bool received_tls_13_error_alert;
             bool will_downgrade;
+
+            std::optional<Epoch0_SequenceNumbers> epoch0_sequence_numbers;  // only relevant in DTLS
       };
 
       std::unique_ptr<Downgrade_Information> m_downgrade_info;  // NOLINT(*non-private-member-variable*)
@@ -244,6 +248,11 @@ class Channel_Impl : public std::enable_shared_from_this<Channel_Impl> {
       void preserve_client_hello(Client_Hello_13 client_hello) {
          BOTAN_STATE_CHECK(m_downgrade_info);
          m_downgrade_info->client_hello.emplace(std::move(client_hello));
+      }
+
+      void preserve_sequence_numbers(std::optional<Epoch0_SequenceNumbers> epoch0_sec_nums) {
+         BOTAN_STATE_CHECK(m_downgrade_info);
+         m_downgrade_info->epoch0_sequence_numbers = epoch0_sec_nums;
       }
 
       friend class Client;

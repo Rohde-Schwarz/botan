@@ -12,14 +12,75 @@
 #include <botan/secmem.h>
 #include <botan/strong_type.h>
 #include <functional>
+#include <vector>
 
 namespace Botan::TLS {
 
+using BytesNeeded = size_t;
+
 using SecretLoggerFn = std::function<void(std::string_view label, std::span<const uint8_t> secret)>;
+
+enum class Epoch_Number /* NOLINT(*-enum-size) */ : uint64_t {
+   Unprotected = 0,
+   EarlyTraffic = 1,
+   HandshakeTraffic = 2,
+   ApplicationTraffic_0 = 3,
+   // ApplicationTrafic_1 = 4
+   // ApplicationTraffic_2 = 5
+   // ...
+   // ApplicationTraffic_N = N + 3
+};
+
+/**
+ * RFC 9147 Section 4
+ */
+struct RecordNumber {
+      Epoch_Number epoch;        // NOLINT(*-non-private-member-variable*)
+      uint64_t sequence_number;  // NOLINT(*-non-private-member-variable*)
+
+      auto operator<=>(const RecordNumber&) const = default;
+};
+
+/// Holds the serialization of a single TLS 1.3 handshake message without the
+/// handshake protocol header.
+using SerializedHandshakeMessage = Strong<std::vector<uint8_t>, struct SerializedHandshakeMessage_>;
+
+/// Holds the serialization of a TLS 1.3 handshake protocol header.
+using HandshakeProtocolHeader = Strong<std::array<uint8_t, 4>, struct HandshakeProtocolHeader_>;
+
+/// Holds the serialization of a single TLS 1.3 handshake message along
+/// with the handshake protocol header.
+using MarshalledHandshakeMessage = Strong<std::vector<uint8_t>, struct MarshalledHandshakeMessage_>;
+
+/// Holds the serialization of a TLS 1.3 handshake message flight containing
+/// multiple handshake messages along with their handshake protocol headers.
+using MarshalledHandshakeMessageFlight = Strong<std::vector<uint8_t>, struct MarshalledHandshakeMessageFlight_>;
+
+/// Holds the serialization of a single TLS 1.3 handshake message fragment along
+/// with the handshake protocol header. This is used in DTLS' fragmentation.
+using MarshalledHandshakeMessageFragment = Strong<std::vector<uint8_t>, struct MarshalledHandshakeMessageFragment_>;
+
+/// Holds a bunch of marshalled handshake message fragments that are packed into
+/// a single record payload. This is used in DTLS' fragmentation.
+using PackedHandshakeMessageFragments = Strong<std::vector<uint8_t>, struct PackedHandshakeMessageFragments_>;
 
 /// Holds the serialization of a single TLS 1.3 record along with the record
 /// protocol header. Protected records hold the encrypted payload and AEAD tag.
 using MarshalledRecord = Strong<secure_vector<uint8_t>, struct MarshalledRecord_>;
+
+/// Holds the serialization of a single TLS 1.3 record along with its record
+/// protocol header and the record number used for this records. Typically, the
+/// record number is used in DTLS to track when records have been acknowledged.
+using MarshalledRecordAndNumber = std::pair<MarshalledRecord, RecordNumber>;
+
+/**
+ * Wraps the epoch0 (unprotected) sequence numbers that are being handed down
+ * from a DTLS 1.3 handshake to a DTLS 1.2 handshake during protocol downgrade.
+ */
+struct Epoch0_SequenceNumbers {
+      uint64_t read;
+      uint64_t write;
+};
 
 }  // namespace Botan::TLS
 

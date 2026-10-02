@@ -10,10 +10,14 @@
 #define BOTAN_TLS_HANDSHAKE_LAYER_13_H_
 
 #include <optional>
-#include <vector>
 
 #include <botan/tls_magic.h>
 #include <botan/tls_messages_13.h>
+
+#include <botan/internal/concat_util.h>
+#include <botan/internal/loadstor.h>
+#include <botan/internal/tls_record_13.h>
+#include <botan/internal/tls_types_13.h>
 
 namespace Botan::TLS {
 
@@ -26,7 +30,7 @@ class Transcript_Hash_State;
  * from the peer into parsed handshake messages and vice versa.
  */
 class BOTAN_TEST_API Handshake_Layer {
-   public:
+   protected:
       explicit Handshake_Layer(Connection_Side whoami) :
             m_peer(whoami == Connection_Side::Server ? Connection_Side::Client : Connection_Side::Server)
             // RFC 8446 4.4.2
@@ -40,13 +44,53 @@ class BOTAN_TEST_API Handshake_Layer {
             ,
             m_certificate_type(Certificate_Type::X509) {}
 
+   public:
+      /**
+       * The outcome of ingesting handshake data via copy_data(). This
+       * information is relevant for DTLS, where handshake messages can be
+       * fragmented and fragments may be maliciously forged or arrive
+       * out of order.
+       */
+      enum class [[nodiscard]] CopyDataResult : uint8_t {
+         /// The passed-in data was discarded without being processed or buffered
+         Discarded,
+
+         /// The passed-in data consisted solely of retransmitted fragments
+         DiscardedDuplicate,
+
+         /// Some of the passed-in data was discarded, but some was buffered
+         ConsumedPartially,
+
+         /// All of the passed-in data was successfully consumed
+         Consumed,
+      };
+
+      static SerializedHandshakeMessage serialize(const Handshake_Message& message) {
+         return SerializedHandshakeMessage(message.serialize());
+      }
+
+   public:
+      Handshake_Layer(const Handshake_Layer&) = delete;
+      Handshake_Layer(Handshake_Layer&&) = delete;
+      Handshake_Layer& operator=(const Handshake_Layer&) = delete;
+      Handshake_Layer& operator=(Handshake_Layer&&) = delete;
+
+      virtual ~Handshake_Layer() = default;
+
       /**
        * Reads data that was received in handshake records and stores it internally for further
        * processing during the invocation of `next_message()`.
        *
-       * @param data_from_peer  The data to be parsed.
+       * @param policy          The TLS policy
+       * @param data_from_peer  The data to be parsed. In DTLS this is assumed to be one or
+       *                        more full handshake message fragments. In TLS it might be a
+       *                        an in-order portion of any size
+       *
+       * @returns a CopyDataResult indicating whether the data contained new
+       *          handshake information and/or fragments that had to be
+       *          discarded (relevant for DTLS only).
        */
-      void copy_data(std::span<const uint8_t> data_from_peer);
+      virtual CopyDataResult copy_data(const Policy& policy, const Handshake_Record& data_from_peer) = 0;
 
       /**
        * Parses one handshake message off the internal buffer that is being filled using `copy_data`.
@@ -56,7 +100,8 @@ class BOTAN_TEST_API Handshake_Layer {
        *
        * @return the parsed handshake message, or nullopt if more data is needed to complete the message
        */
-      std::optional<Handshake_Message_13> next_message(const Policy& policy, Transcript_Hash_State& transcript_hash);
+      virtual std::optional<Handshake_Message_13> next_message(const Policy& policy,
+                                                               Transcript_Hash_State& transcript_hash) = 0;
 
       /**
        * Parses one post-handshake message off the internal buffer that is being filled using `copy_data`.
@@ -65,34 +110,23 @@ class BOTAN_TEST_API Handshake_Layer {
        *
        * @return the parsed post-handshake message, or nullopt if more data is needed to complete the message
        */
-      std::optional<Post_Handshake_Message_13> next_post_handshake_message(const Policy& policy);
+      virtual std::optional<Post_Handshake_Message_13> next_post_handshake_message(const Policy& policy) = 0;
 
       /**
-       * Marshals one handshake message for sending in an (encrypted) record and updates the
-       * provided transcript hash state accordingly.
+       * Marshals a ClientHello prematurely for a truncated transcript hash
+       * calculation (cf. RFC 8446 Section 4.2.11.2).
        *
-       * @param message the handshake message to be marshalled
+       * @param message the ClientHello message to be marshalled
        * @param transcript_hash the transcript hash state to be updated
-       *
-       * @return the marshalled handshake message
        */
-      static std::vector<uint8_t> prepare_message(Handshake_Message_13_Ref message,
-                                                  Transcript_Hash_State& transcript_hash);
-
-      /**
-       * Marshals one post-handshake message for sending in an (encrypted) record.
-       *
-       * @param message the post handshake message to be marshalled
-       *
-       * @return the marshalled post-handshake message
-       */
-      static std::vector<uint8_t> prepare_post_handshake_message(const Post_Handshake_Message_13& message);
+      static void update_transcript_for_psk_binder_calc(const Client_Hello_13& message,
+                                                        Transcript_Hash_State& transcript_hash);
 
       /**
        * Check if the Handshake_Layer has stored a partial message in its internal buffer.
        * This can happen if a handshake message spans multiple records.
        */
-      bool has_pending_data() const { return m_read_offset < m_read_buffer.size(); }
+      virtual bool has_pending_data() const = 0;
 
       /**
        * Set the certificate_type used for parsing Certificate messages. This
@@ -111,11 +145,81 @@ class BOTAN_TEST_API Handshake_Layer {
        */
       void set_selected_certificate_type(Certificate_Type cert_type) { m_certificate_type = cert_type; }
 
+   protected:
+      static Handshake_Type read_handshake_message_type(uint8_t value);
+
+      /// Could not process a message because not enough bytes were available.
+      /// The read offset must not be advanced.
+      using IncompleteNotProcessed = std::monostate;
+
+      /// Relevant for DTLS (a fragment was processed, but the message is not
+      /// complete yet). We now have to advance the read offset
+      struct IncompleteProcessed {
+            size_t bytes_consumed;
+      };
+
+      struct NextMessageResult {
+            Handshake_Type type;
+            HandshakeProtocolHeader tls_header_bytes;
+            StrongSpan<const SerializedHandshakeMessage> message_bytes;
+            size_t bytes_consumed;  // only includes the bytes processed by the last next_message_buffer() call
+      };
+
+      using NextMessageStep = std::variant<IncompleteNotProcessed, IncompleteProcessed, NextMessageResult>;
+
+      virtual TLS_Flavor tls_flavor() const = 0;
+
+      Connection_Side peer() const { return m_peer; }
+
+      Certificate_Type certificate_type() const { return m_certificate_type; }
+
+      virtual Handshake_Message_13 parse_handshake_message(Handshake_Type type,
+                                                           std::span<const uint8_t> msg,
+                                                           const Policy& policy) const;
+
+      Post_Handshake_Message_13 parse_post_handshake_message(Handshake_Type type, std::span<const uint8_t> msg) const;
+
+   private:
+      Connection_Side m_peer;
+      Certificate_Type m_certificate_type;
+};
+
+class TLS_Handshake_Layer final : public Handshake_Layer {
+   public:
+      explicit TLS_Handshake_Layer(Connection_Side whoami) : Handshake_Layer(whoami) {}
+
+      /**
+       * Prepare the TLS message header according to RFC9846 Section 4
+       */
+      static HandshakeProtocolHeader prepare_header(Handshake_Type type, size_t payload_length) {
+         BOTAN_ASSERT_NOMSG(payload_length <= 0xFFFFFF);
+         auto header = HandshakeProtocolHeader(store_be(static_cast<uint32_t>(payload_length)));
+         header[0] = static_cast<uint8_t>(type);
+         return header;
+      }
+
+      bool has_pending_data() const override { return m_read_offset < m_read_buffer.size(); }
+
+      CopyDataResult copy_data(const Policy& policy, const Handshake_Record& data_from_peer) override;
+
+      std::optional<Handshake_Message_13> next_message(const Policy& policy,
+                                                       Transcript_Hash_State& transcript_hash) override;
+
+      std::optional<Post_Handshake_Message_13> next_post_handshake_message(const Policy& policy) override;
+
+      static auto marshal(const Handshake_Message& message) {
+         const auto bytes = serialize(message);
+         return concat<MarshalledHandshakeMessage>(prepare_header(message.wire_type(), bytes.size()), bytes);
+      }
+
+   protected:
+      NextMessageStep next_message_buffer(std::span<const uint8_t> bytes, const Policy& policy);
+
+      TLS_Flavor tls_flavor() const override { return TLS_Flavor::TLS; }
+
    private:
       std::vector<uint8_t> m_read_buffer;
       size_t m_read_offset = 0;
-      Connection_Side m_peer;
-      Certificate_Type m_certificate_type;
 };
 
 }  // namespace Botan::TLS
