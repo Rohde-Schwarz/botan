@@ -167,8 +167,6 @@ class BOTAN_TEST_API Handshake_Layer {
 
       using NextMessageStep = std::variant<IncompleteNotProcessed, IncompleteProcessed, NextMessageResult>;
 
-      virtual NextMessageStep next_message_buffer(std::span<const uint8_t> bytes, const Policy& policy) = 0;
-
       virtual TLS_Flavor tls_flavor() const = 0;
 
       Connection_Side peer() const { return m_peer; }
@@ -204,8 +202,6 @@ class TLS_Handshake_Layer final : public Handshake_Layer {
 
       CopyDataResult copy_data(const Policy& policy, const Handshake_Record& data_from_peer) override;
 
-      NextMessageStep next_message_buffer(std::span<const uint8_t> bytes, const Policy& policy) override;
-
       std::optional<Handshake_Message_13> next_message(const Policy& policy,
                                                        Transcript_Hash_State& transcript_hash) override;
 
@@ -217,6 +213,8 @@ class TLS_Handshake_Layer final : public Handshake_Layer {
       }
 
    protected:
+      NextMessageStep next_message_buffer(std::span<const uint8_t> bytes, const Policy& policy);
+
       TLS_Flavor tls_flavor() const override { return TLS_Flavor::TLS; }
 
    private:

@@ -285,7 +285,6 @@ void Channel_IO::set_selected_certificate_type(Certificate_Type t) {
 }
 
 std::optional<Epoch0_SequenceNumbers> Channel_IO::epoch0_sequence_numbers() const {
-   // TODO: If possible, remove optional, make this DTLS-only
    return record_layer().epoch0_sequence_numbers();
 }
 
@@ -386,11 +385,8 @@ void TLS_Channel_IO::send_data(Record_Type record_type, std::span<const uint8_t>
 }
 
 void TLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
-   // TODO: Pass the Flight straight into the record layer to optimize the number of data copies
-
-   // Now, we go through all messages of the flight, grouping them into
-   // two runs, one for the unprotected messages and one for the
-   // protected messages.
+   // Now, we go through all messages of the flight, grouping them into two runs
+   // one for the unprotected messages and one for the protected messages.
    bool protect_current_msgs = false;
    auto msgs = MarshalledHandshakeMessageFlight();
 
