@@ -21,19 +21,21 @@ class Callbacks;
 
 /**
  * A convenience wrapper for Callbacks::tls_register_deferred_operation() that
- * allows modelling a cancellable asynchronous operation. This is achieved by
- * storing an internal token that is shared with the deferred operation. If the
- * token is destroyed before the operation is executed, it will act as a no-op.
- *
- * Cancelling the operation can be done by explicitly calling cancel() on the
- * TimerToken object or simply by destroying/overwriting the TimerToken object.
+ * allows scheduling an asynchronous operation that is run exactly once after
+ * a specified delay.
  */
 class SingleshotTimer final {
    private:
       /**
        * This Token is owned by the SingleshotTimer object and shared with the
-       * deferred operation as a weak_ptr. If the Token is destroyed before the
-       * deferred operation is executed, the operation will act as a no-op.
+       * cancellable deferred operation as a weak_ptr. If the Token is destroyed
+       * before the deferred operation deferred operation is executed, the
+       * operation will act as a no-op.
+       *
+       * If the using application (accidentally) calls the deferred operation
+       * more than once on the same SingleshotTimer object it will still only be
+       * executed once. If the Token is destroyed before the deferred operation
+       * is executed, the operation will not be executed at all.
        */
       struct Token {
             bool executed = false;
@@ -53,11 +55,33 @@ class SingleshotTimer final {
       SingleshotTimer& operator=(SingleshotTimer&&) = default;
 
    public:
-      static SingleshotTimer start(Callbacks& callbacks, std::chrono::milliseconds delay, DeferredOperation operation) {
+      /**
+       * Start a deferred operation that will be executed after the given delay.
+       * This operation cannot be cancelled.
+       */
+      static void start_detached(Callbacks& callbacks, std::chrono::milliseconds delay, DeferredOperation operation) {
+         callbacks.tls_register_deferred_operation(
+            delay.count(), [token = std::make_shared<Token>(), operation = std::move(operation)] {
+               if(!token->executed) {
+                  operation();
+                  token->executed = true;
+               }
+            });
+      }
+
+      /**
+       * Start a deferred operation that can be cancelled using the returned
+       * SingleshotTimer object. The operation will be executed after the given
+       * delay unless the SingleshotTimer object is destroyed or cancel() is
+       * called before the operation is executed.
+       */
+      [[nodiscard]] static SingleshotTimer start(Callbacks& callbacks,
+                                                 std::chrono::milliseconds delay,
+                                                 DeferredOperation operation) {
          auto token = std::make_shared<Token>();
          callbacks.tls_register_deferred_operation(
-            delay.count(), [weak_token = std::weak_ptr(token), operation = std::move(operation)]() mutable {
-               if(auto handle = weak_token.lock()) {
+            delay.count(), [weak_token = std::weak_ptr(token), operation = std::move(operation)] {
+               if(auto handle = weak_token.lock(); handle && !handle->executed) {
                   operation();
                   handle->executed = true;
                }

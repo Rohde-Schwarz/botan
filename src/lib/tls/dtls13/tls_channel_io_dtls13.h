@@ -52,7 +52,6 @@ class DTLS_Channel_IO final : public Channel_IO,
 
       bool has_unacknowledged_key_update() const { return m_pending_key_update_record.has_value(); }
 
-      void arm_acknowledgement_timer();
       void arm_retransmission_timer();
       void maybe_clear_retransmission_buffer();
       void retransmit();

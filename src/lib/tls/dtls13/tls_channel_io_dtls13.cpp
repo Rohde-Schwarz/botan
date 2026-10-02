@@ -165,6 +165,8 @@ bool DTLS_Channel_IO::can_send_key_update() const {
 }
 
 void DTLS_Channel_IO::schedule_read_epoch_pruning(Epoch_Number latest_epoch) {
+   using namespace std::chrono_literals;
+
    // RFC 9147 Section 4.2.1
    //    Implementations [...] MAY choose to retain keying material from
    //    previous epochs for up to the default MSL specified for TCP [RFC0793]
@@ -173,8 +175,7 @@ void DTLS_Channel_IO::schedule_read_epoch_pruning(Epoch_Number latest_epoch) {
    // RFC 9293 4.
    //    MSL: Maximum Segment Lifetime, the time a TCP segment can exist in the
    //         internetwork system. Arbitrarily defined to be 2 minutes.
-   constexpr uint64_t expiration_time_ms = 2 * 60 * 1000;
-   callbacks().tls_register_deferred_operation(expiration_time_ms, [weak = weak_from_this(), latest_epoch] {
+   SingleshotTimer::start_detached(callbacks(), 2min, [weak = weak_from_this(), latest_epoch] {
       if(auto self = weak.lock()) {
          if(auto* cs = as_dtls_cipher_state(self->cipher_state())) {
             BOTAN_ASSERT_NONNULL(cs);
@@ -296,15 +297,6 @@ void DTLS_Channel_IO::arm_retransmission_timer() {
    });
 }
 
-void DTLS_Channel_IO::arm_acknowledgement_timer() {
-   const auto ack_time = std::chrono::milliseconds(policy().dtls_initial_timeout() / 4);
-   m_ack_timer = SingleshotTimer::start(callbacks(), ack_time, [weak = weak_from_this()] {
-      if(auto self = weak.lock()) {
-         self->send_acknowledgements();
-      }
-   });
-}
-
 void DTLS_Channel_IO::process(const Handshake_Record& record) {
    // Handshake records need to be fed to the handshake layer before
    // their messages can be consumed by the channel
@@ -362,7 +354,12 @@ void DTLS_Channel_IO::process(const Handshake_Record& record) {
       // incoming data. If we fail to generate such a flight, the timer will
       // eventually emit ACKs to the peer.
       if(m_dtls_version_committed && !m_ack_timer.armed()) {
-         arm_acknowledgement_timer();
+         const auto ack_time = std::chrono::milliseconds(policy().dtls_initial_timeout() / 4);
+         m_ack_timer = SingleshotTimer::start(callbacks(), ack_time, [weak = weak_from_this()] {
+            if(auto self = weak.lock()) {
+               self->send_acknowledgements();
+            }
+         });
       }
    }
 }
