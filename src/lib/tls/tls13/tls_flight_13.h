@@ -35,7 +35,7 @@ class Flight {
       struct Dummy_ChangeCipherSpec {};
 
       struct Message_Info {
-            Handshake_Type type;
+            Handshake_Type wire_type;
             std::optional<Epoch_Number> epoch;
             HandshakeProtocolHeader header;
             SerializedHandshakeMessage serialized;

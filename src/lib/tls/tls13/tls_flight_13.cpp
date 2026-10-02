@@ -10,7 +10,7 @@
 
 #include <botan/tls_callbacks.h>
 #include <botan/internal/stl_util.h>
-#include <botan/internal/tls_messages_internal.h>
+#include <botan/internal/tls_handshake_layer_13.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 
 #include <utility>
@@ -74,13 +74,12 @@ std::optional<Epoch_Number> epoch_for_handshake_type(Handshake_Type handshake_ty
    }
 }
 
-Flight::Message_Info make_message_info(Handshake_Type handshake_type,
-                                       SerializedHandshakeMessage serialized_message,
-                                       const PostHandshake post_handshake) {
+Flight::Message_Info make_message_info(const Handshake_Message& message, const PostHandshake post_handshake) {
+   auto serialized_message = Handshake_Layer::serialize(message);
    return {
-      .type = handshake_type,
-      .epoch = epoch_for_handshake_type(handshake_type, post_handshake),
-      .header = prepare_tls_handshake_header(handshake_type, serialized_message),
+      .wire_type = message.wire_type(),
+      .epoch = epoch_for_handshake_type(message.type(), post_handshake),
+      .header = TLS_Handshake_Layer::prepare_header(message.wire_type(), serialized_message.size()),
       .serialized = std::move(serialized_message),
    };
 }
@@ -154,10 +153,7 @@ void Flight::add(const Handshake_Message_13_Ref message) {
       [&](const auto msg) {
          m_callbacks->tls_inspect_handshake_msg(msg.get());
 
-         auto msg_info = make_message_info(msg.get().wire_type(),
-                                           // TODO: Handshake_Message::serialize() should return the strong type
-                                           SerializedHandshakeMessage(msg.get().serialize()),
-                                           PostHandshake::No);
+         auto msg_info = make_message_info(msg.get(), PostHandshake::No);
          m_transcript_hash->update(msg_info.header, msg_info.serialized);
          m_messages.push_back(std::move(msg_info));
       },
@@ -184,10 +180,7 @@ void PostHandshakeFlight::add(const Post_Handshake_Message_13 message) {
       [&](const auto& msg) {
          m_callbacks->tls_inspect_handshake_msg(msg);
 
-         m_messages.push_back(make_message_info(msg.wire_type(),
-                                                // TODO: Handshake_Message::serialize() should return the strong type
-                                                SerializedHandshakeMessage(msg.serialize()),
-                                                PostHandshake::Yes));
+         m_messages.push_back(make_message_info(msg, PostHandshake::Yes));
       },
       message);
 }

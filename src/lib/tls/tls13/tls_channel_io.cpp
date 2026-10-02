@@ -449,11 +449,7 @@ void TLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
 }
 
 void TLS_Channel_IO::send_key_update(const Key_Update& msg) {
-   const auto msg_serialized_bytes = msg.serialize();
-   const auto msg_marshalled_bytes = concat<MarshalledHandshakeMessage>(
-      prepare_tls_handshake_header(Handshake_Type::KeyUpdate, msg_serialized_bytes), msg_serialized_bytes);
-
-   send_data(Record_Type::Handshake, msg_marshalled_bytes, cipher_state());
+   send_data(Record_Type::Handshake, m_handshake_layer.marshal(msg), cipher_state());
    cipher_state()->update_write_keys();
 }
 

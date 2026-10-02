@@ -216,10 +216,8 @@ Post_Handshake_Message_13 Handshake_Layer::parse_post_handshake_message(Handshak
 
 void Handshake_Layer::update_transcript_for_psk_binder_calc(const Client_Hello_13& message,
                                                             Transcript_Hash_State& transcript_hash) {
-   // TODO: Handshake_Message::serialize() should return strong type
-   const auto msg_bytes = SerializedHandshakeMessage(message.serialize());
-
-   transcript_hash.update(prepare_tls_handshake_header(message.wire_type(), msg_bytes), msg_bytes);
+   const auto msg_bytes = serialize(message);
+   transcript_hash.update(TLS_Handshake_Layer::prepare_header(message.wire_type(), msg_bytes.size()), msg_bytes);
 }
 
 Handshake_Type Handshake_Layer::read_handshake_message_type(uint8_t value) {

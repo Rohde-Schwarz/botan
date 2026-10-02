@@ -62,22 +62,6 @@ std::vector<uint8_t> calculate_cookie(std::span<const uint8_t> client_hello_bits
                                       std::span<const uint8_t> cookie_secret);
 
 /**
- * Prepare the TLS header according to RFC9846 Section 4, i.e.,
- * msg_type (1 byte) | length (3 bytes)
- */
-inline auto prepare_tls_handshake_header(Handshake_Type type, std::span<const uint8_t> msg_bytes) {
-   BOTAN_ASSERT_NOMSG(msg_bytes.size() <= 0xFFFFFF);
-   const uint32_t msg_size = static_cast<uint32_t>(msg_bytes.size());
-
-   return HandshakeProtocolHeader(std::array{
-      static_cast<uint8_t>(type),
-      get_byte<1>(msg_size),
-      get_byte<2>(msg_size),
-      get_byte<3>(msg_size),
-   });
-}
-
-/**
  * Version-agnostic internal client hello data container that allows
  * parsing Client_Hello messages without prior knowledge of the contained
  * protocol version.

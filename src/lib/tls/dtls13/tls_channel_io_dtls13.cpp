@@ -125,7 +125,7 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
          static_cast<uint16_t>(record_payload_limit - current_datagram.size() - current_record_payload.size());
 
       const auto fragments = handshake_layer().fragment_message(
-         msg_info->type, msg_info->serialized, static_cast<uint16_t>(record_payload_limit), first_fragment_size);
+         msg_info->wire_type, msg_info->serialized, static_cast<uint16_t>(record_payload_limit), first_fragment_size);
 
       for(const auto& fragment : fragments) {
          if(current_datagram.size() + current_record_payload.size() + fragment.size() > record_payload_limit) {
@@ -188,8 +188,7 @@ void DTLS_Channel_IO::schedule_read_epoch_pruning(Epoch_Number latest_epoch) {
 void DTLS_Channel_IO::send_key_update(const Key_Update& msg) {
    BOTAN_STATE_CHECK(!has_unacknowledged_key_update());
 
-   // TODO: Let Handshake_Message::serialize() emit the strong type
-   const auto serialized_key_update = SerializedHandshakeMessage(msg.serialize());
+   const auto serialized_key_update = Handshake_Layer::serialize(msg);
    auto msg_bytes =
       handshake_layer().fragment_message(Handshake_Type::KeyUpdate,
                                          serialized_key_update,

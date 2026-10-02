@@ -14,7 +14,9 @@
 #include <botan/tls_magic.h>
 #include <botan/tls_messages_13.h>
 
-#include <botan/internal/tls_record_layer_13.h>
+#include <botan/internal/concat_util.h>
+#include <botan/internal/loadstor.h>
+#include <botan/internal/tls_record_13.h>
 #include <botan/internal/tls_types_13.h>
 
 namespace Botan::TLS {
@@ -43,14 +45,6 @@ class BOTAN_TEST_API Handshake_Layer {
             m_certificate_type(Certificate_Type::X509) {}
 
    public:
-      Handshake_Layer(const Handshake_Layer&) = delete;
-      Handshake_Layer(Handshake_Layer&&) = delete;
-      Handshake_Layer& operator=(const Handshake_Layer&) = delete;
-      Handshake_Layer& operator=(Handshake_Layer&&) = delete;
-
-      virtual ~Handshake_Layer() = default;
-
-   public:
       /**
        * The outcome of ingesting handshake data via copy_data(). This
        * information is relevant for DTLS, where handshake messages can be
@@ -70,6 +64,18 @@ class BOTAN_TEST_API Handshake_Layer {
          /// All of the passed-in data was successfully consumed
          Consumed,
       };
+
+      static SerializedHandshakeMessage serialize(const Handshake_Message& message) {
+         return SerializedHandshakeMessage(message.serialize());
+      }
+
+   public:
+      Handshake_Layer(const Handshake_Layer&) = delete;
+      Handshake_Layer(Handshake_Layer&&) = delete;
+      Handshake_Layer& operator=(const Handshake_Layer&) = delete;
+      Handshake_Layer& operator=(Handshake_Layer&&) = delete;
+
+      virtual ~Handshake_Layer() = default;
 
       /**
        * Reads data that was received in handshake records and stores it internally for further
@@ -184,6 +190,16 @@ class TLS_Handshake_Layer final : public Handshake_Layer {
    public:
       explicit TLS_Handshake_Layer(Connection_Side whoami) : Handshake_Layer(whoami) {}
 
+      /**
+       * Prepare the TLS message header according to RFC9846 Section 4
+       */
+      static HandshakeProtocolHeader prepare_header(Handshake_Type type, size_t payload_length) {
+         BOTAN_ASSERT_NOMSG(payload_length <= 0xFFFFFF);
+         auto header = HandshakeProtocolHeader(store_be(static_cast<uint32_t>(payload_length)));
+         header[0] = static_cast<uint8_t>(type);
+         return header;
+      }
+
       bool has_pending_data() const override { return m_read_offset < m_read_buffer.size(); }
 
       CopyDataResult copy_data(const Policy& policy, const Handshake_Record& data_from_peer) override;
@@ -194,6 +210,11 @@ class TLS_Handshake_Layer final : public Handshake_Layer {
                                                        Transcript_Hash_State& transcript_hash) override;
 
       std::optional<Post_Handshake_Message_13> next_post_handshake_message(const Policy& policy) override;
+
+      static auto marshal(const Handshake_Message& message) {
+         const auto bytes = serialize(message);
+         return concat<MarshalledHandshakeMessage>(prepare_header(message.wire_type(), bytes.size()), bytes);
+      }
 
    protected:
       TLS_Flavor tls_flavor() const override { return TLS_Flavor::TLS; }
