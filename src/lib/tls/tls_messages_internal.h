@@ -14,6 +14,8 @@
 #include <botan/tls_extensions.h>
 #include <botan/tls_session.h>
 #include <botan/tls_version.h>
+#include <botan/internal/loadstor.h>
+#include <botan/internal/tls_types_13.h>
 #include <vector>
 
 namespace Botan {

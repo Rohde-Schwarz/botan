@@ -50,8 +50,11 @@ class BOTAN_TEST_API Channel_IO {
                                                 std::shared_ptr<Callbacks> callbacks);
 
    protected:
-      Channel_IO(Connection_Side side, std::shared_ptr<const Policy> policy, std::shared_ptr<Callbacks> callbacks) :
-            m_policy(std::move(policy)), m_callbacks(std::move(callbacks)), m_side(side) {}
+      Channel_IO(Connection_Side side,
+                 TLS_Flavor flavor,
+                 std::shared_ptr<const Policy> policy,
+                 std::shared_ptr<Callbacks> callbacks) :
+            m_policy(std::move(policy)), m_callbacks(std::move(callbacks)), m_side(side), m_flavor(flavor) {}
 
    public:
       Channel_IO(const Channel_IO&) = delete;
@@ -138,8 +141,7 @@ class BOTAN_TEST_API Channel_IO {
        * For the case of receiving a HelloRetryRequest, use
        * notify_protocol_version_committed_and_flight_superseded().
        */
-      virtual void notify_protocol_version_committed() { /* don't care */
-      }
+      virtual void notify_protocol_version_committed() { /* don't care */ }
 
       /**
        * Like notify_protocol_version_committed(), but for the case where
@@ -152,8 +154,7 @@ class BOTAN_TEST_API Channel_IO {
        * protocol version, this method also clears the resend buffer and
        * retransmission timer.
        */
-      virtual void notify_protocol_version_committed_and_flight_superseded() { /* don't care */
-      }
+      virtual void notify_protocol_version_committed_and_flight_superseded() { /* don't care */ }
 
       /**
        * Notifies that the last message completing a flight was received.
@@ -161,8 +162,7 @@ class BOTAN_TEST_API Channel_IO {
        * This is relevant for DTLS: At that point, everything we need
        * was received and the ACK mechanism is no longer needed.
        */
-      virtual void notify_received_complete_flight() { /* don't care */
-      }
+      virtual void notify_received_complete_flight() { /* don't care */ }
 
       /**
        * Notifies that a complete flight was received that expects no response,
@@ -172,8 +172,7 @@ class BOTAN_TEST_API Channel_IO {
        * that would implicitly acknowledge it, the flight must be acknowledged
        * explicitly with an ACK message.
        */
-      virtual void notify_received_final_flight() { /* don't care */
-      }
+      virtual void notify_received_final_flight() { /* don't care */ }
 
       std::optional<Epoch0_SequenceNumbers> epoch0_sequence_numbers() const;
 
@@ -279,6 +278,7 @@ class BOTAN_TEST_API Channel_IO {
       std::shared_ptr<const Policy> m_policy;
       std::shared_ptr<Callbacks> m_callbacks;
       Connection_Side m_side;
+      TLS_Flavor m_flavor;
 };
 
 }  // namespace Botan::TLS

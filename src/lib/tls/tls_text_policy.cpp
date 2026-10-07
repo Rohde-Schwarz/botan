@@ -213,6 +213,10 @@ size_t Text_Policy::dtls_maximum_queued_acknowledgements() const {
    return get_len("dtls_maximum_queued_acknowledgements", Policy::dtls_maximum_queued_acknowledgements());
 }
 
+size_t Text_Policy::dtls_maximum_deprotection_failures() const {
+   return get_len("dtls_maximum_deprotection_failures", Policy::dtls_maximum_deprotection_failures());
+}
+
 std::optional<size_t> Text_Policy::max_useless_records() const {
    const std::string v = get_str("max_useless_records");
 

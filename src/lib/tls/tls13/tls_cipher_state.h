@@ -17,6 +17,7 @@
 #include <botan/tls_magic.h>
 
 #include <botan/internal/tls_record_13.h>
+#include <botan/internal/tls_record_dtls13.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 #include <botan/internal/tls_types_13.h>
 
@@ -87,6 +88,7 @@ class BOTAN_TEST_API Cipher_State {
             std::unique_ptr<AEAD_Mode> cipher;
             secure_vector<uint8_t> iv;
             uint64_t sequence_number;
+            uint64_t deprotection_failures;
 
             secure_vector<uint8_t> traffic_secret;
 
@@ -312,6 +314,15 @@ class BOTAN_TEST_API Cipher_State {
        * @returns the current sequence number of the current read epoch.
        */
       uint64_t current_read_sequence_number() const;
+
+      /**
+       * In DTLS deprotection failures of received records is not a fatal error
+       * and the counter is needed to determine when a KeyUpdate is required.
+       * For TLS, this will always return 0.
+       *
+       * @returns the number of failed deprotections in the current read epoch.
+       */
+      uint64_t current_read_epoch_deprotection_failures() const;
 
       /**
        * Register an optional callback function to extract secrets bound for a

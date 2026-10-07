@@ -78,6 +78,11 @@ using PackedHandshakeMessageFragments = Strong<std::vector<uint8_t>, struct Pack
 /// protocol header. Protected records hold the encrypted payload and AEAD tag.
 using MarshalledRecord = Strong<secure_vector<uint8_t>, struct MarshalledRecord_>;
 
+/// Holds the serialization of a single TLS 1.3 record along with its record
+/// protocol header and the record number used for this records. Typically, the
+/// record number is used in DTLS to track when records have been acknowledged.
+using MarshalledRecordAndNumber = std::pair<MarshalledRecord, RecordNumber>;
+
 /**
  * Wraps the epoch0 (unprotected) sequence numbers that are being handed down
  * from a DTLS 1.3 handshake to a DTLS 1.2 handshake during protocol downgrade.
