@@ -1271,6 +1271,8 @@ class TLS_Unit_Tests final : public Test {
                std::optional<PV> expected_version;  // nullopt => handshake must fail
          };
 
+         // The #if inside the initializer breaks clang-format's layout
+         // clang-format off
          const auto cases = std::array{
             Case{
                .name = "Client downgrade TLS 1.3 to 1.2",
@@ -1301,7 +1303,38 @@ class TLS_Unit_Tests final : public Test {
                .expected_version = std::nullopt,
             },
 
+   #if defined(BOTAN_HAS_DTLS_13)
+            Case{
+               .name = "Client downgrade DTLS 1.3 to 1.2",
+               .client_versions = {PV::DTLS_V12, PV::DTLS_V13},
+               .server_versions = {PV::DTLS_V12},
+               .offer_version = PV::DTLS_V13,
+               .expected_version = PV::DTLS_V12,
+            },
+            Case{
+               .name = "Server downgrade DTLS 1.3 to 1.2",
+               .client_versions = {PV::DTLS_V12},
+               .server_versions = {PV::DTLS_V12, PV::DTLS_V13},
+               .offer_version = PV::DTLS_V12,
+               .expected_version = PV::DTLS_V12,
+            },
+            Case{
+               .name = "No shared version (client TLS 1.3 only)",
+               .client_versions = {PV::DTLS_V13},
+               .server_versions = {PV::DTLS_V12},
+               .offer_version = PV::DTLS_V13,
+               .expected_version = std::nullopt,
+            },
+            Case{
+               .name = "No shared version (server TLS 1.3 only)",
+               .client_versions = {PV::DTLS_V12},
+               .server_versions = {PV::DTLS_V13},
+               .offer_version = PV::DTLS_V12,
+               .expected_version = std::nullopt,
+            },
+   #endif
          };
+         // clang-format on
 
          const auto make_policy = [&](std::span<const PV> versions) {
             auto policy = std::make_shared<Test_Policy>();

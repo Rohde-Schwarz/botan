@@ -875,6 +875,8 @@ class BOTAN_PUBLIC_API(2, 0) Datagram_Policy : public Policy {
       bool allow_tls13() const override { return false; }
 
       bool allow_dtls12() const override { return true; }
+
+      bool allow_dtls13() const override { return true; }
 };
 
 /*

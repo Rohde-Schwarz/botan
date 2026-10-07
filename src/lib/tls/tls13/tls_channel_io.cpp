@@ -20,6 +20,10 @@
 #include <botan/internal/tls_record_layer_13.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 
+#if defined(BOTAN_HAS_DTLS_13)
+   #include <botan/internal/tls_channel_io_dtls13.h>
+#endif
+
 namespace Botan::TLS {
 
 std::optional<Channel_IO::ReceiveEvent> Channel_IO::next_pending_handshake_message(
@@ -527,7 +531,11 @@ std::shared_ptr<Channel_IO> Channel_IO::create(Connection_Side side,
                                                std::shared_ptr<const Policy> policy,
                                                std::shared_ptr<Callbacks> callbacks) {
    if(flavor == TLS_Flavor::DTLS) {
-      throw Not_Implemented("DTLS 1.3 is not yet supported");
+#if defined(BOTAN_HAS_DTLS_13)
+      return std::make_shared<DTLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
+#else
+      throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
+#endif
    } else {
       return std::make_shared<TLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
    }

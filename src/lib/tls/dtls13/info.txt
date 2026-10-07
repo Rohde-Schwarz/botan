@@ -1,0 +1,13 @@
+<defines>
+DTLS_13 -> 20260624
+</defines>
+
+<module_info>
+name -> "DTLS 1.3"
+brief -> "Datagram Transport Layer Security 1.3"
+</module_info>
+
+<requires>
+tls13
+bitvector
+</requires>
