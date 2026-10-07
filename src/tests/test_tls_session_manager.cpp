@@ -170,6 +170,7 @@ decltype(auto) default_session(Botan::TLS::Connection_Side side,
                                  {},
                                  nullptr,
                                  server_info(),
+                                 0,
                                  start_time);
    #else
       throw Test_Error("TLS 1.3 is not available in this build");
@@ -533,6 +534,7 @@ std::vector<Test::Result> test_session_manager_choose_ticket() {
                                       {},
                                       nullptr,
                                       server_info(),
+                                      0,
                                       mycbs.tls_current_timestamp());
    };
 
@@ -1297,126 +1299,126 @@ std::vector<Test::Result> tls_session_manager_expiry() {
                    result.test_sz_eq("session was deleted when it expired", mgr->remove_all(), 0);
                 }),
 
-         CHECK_all("expired sessions are not found",
-                   [&](const std::string& type, const auto& factory, auto& result) {
-                      if(type == "Stateless") {
-                         return;  // this manager can neither store nor find anything
-                      }
+      CHECK_all("expired sessions are not found",
+                [&](const std::string& type, const auto& factory, auto& result) {
+                   if(type == "Stateless") {
+                      return;  // this manager can neither store nor find anything
+                   }
 
-                      auto mgr = factory();
+                   auto mgr = factory();
 
-                      const auto handle_old = random_id(*rng);
-                      mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs), handle_old);
+                   const auto handle_old = random_id(*rng);
+                   mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs), handle_old);
 
-                      cbs.tick();
-                      auto handle_new = random_id(*rng);
-                      mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs), handle_new);
+                   cbs.tick();
+                   auto handle_new = random_id(*rng);
+                   mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs), handle_new);
 
-                      auto sessions_and_handles = mgr->find(server_info(), cbs, plcy);
-                      result.require("sessions are found", !sessions_and_handles.empty());
-                      result.test_sz_eq("exactly one session is found", sessions_and_handles.size(), 1);
-                      result.test_bin_eq(
-                         "the new session is found", sessions_and_handles.front().handle.id().value(), handle_new);
+                   auto sessions_and_handles = mgr->find(server_info(), cbs, plcy);
+                   result.require("sessions are found", !sessions_and_handles.empty());
+                   result.test_sz_eq("exactly one session is found", sessions_and_handles.size(), 1);
+                   result.test_bin_eq(
+                      "the new session is found", sessions_and_handles.front().handle.id().value(), handle_new);
 
-                      result.test_sz_eq("old session was deleted when it expired", mgr->remove_all(), 1);
-                   }),
+                   result.test_sz_eq("old session was deleted when it expired", mgr->remove_all(), 1);
+                }),
 
-         CHECK_all(
-            "session tickets are not reused",
-            [&](const std::string& type, const auto& factory, auto& result) {
-               if(type == "Stateless") {
-                  return;  // this manager can neither store nor find anything
-               }
+      CHECK_all(
+         "session tickets are not reused",
+         [&](const std::string& type, const auto& factory, auto& result) {
+            if(type == "Stateless") {
+               return;  // this manager can neither store nor find anything
+            }
 
-               auto mgr = factory();
+            auto mgr = factory();
 
-               auto handle_1 = random_id(*rng);
-               mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs, Botan::TLS::Version_Code::TLS_V12),
-                          handle_1);
-               const auto handle_2 = random_ticket(*rng);
-               mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs, Botan::TLS::Version_Code::TLS_V12),
-                          handle_2);
+            auto handle_1 = random_id(*rng);
+            mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs, Botan::TLS::Version_Code::TLS_V12),
+                       handle_1);
+            const auto handle_2 = random_ticket(*rng);
+            mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs, Botan::TLS::Version_Code::TLS_V12),
+                       handle_2);
 
    #if defined(BOTAN_HAS_TLS_13)
-               const auto handle_3 = random_id(*rng);
-               mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs, Botan::TLS::Version_Code::TLS_V13),
-                          handle_3);
-               const auto handle_4 = random_ticket(*rng);
-               mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs, Botan::TLS::Version_Code::TLS_V13),
-                          handle_4);
+            const auto handle_3 = random_id(*rng);
+            mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs, Botan::TLS::Version_Code::TLS_V13),
+                       handle_3);
+            const auto handle_4 = random_ticket(*rng);
+            mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs, Botan::TLS::Version_Code::TLS_V13),
+                       handle_4);
    #endif
 
-               plcy.set_allow_session_reuse(false);
+            plcy.set_allow_session_reuse(false);
 
-               const auto sessions_and_handles1 = mgr->find(server_info(), cbs, plcy);
-               result.require("all sessions are found", sessions_and_handles1.size() > 1);
+            const auto sessions_and_handles1 = mgr->find(server_info(), cbs, plcy);
+            result.require("all sessions are found", sessions_and_handles1.size() > 1);
 
-               auto sessions_and_handles2 = mgr->find(server_info(), cbs, plcy);
-               result.test_sz_eq("only one session is found", sessions_and_handles2.size(), 1);
-               result.test_is_true("found session is the Session_ID", sessions_and_handles2.front().handle.is_id());
-               result.test_bin_eq(
-                  "found session is the Session_ID", sessions_and_handles2.front().handle.id().value(), handle_1);
-               result.test_is_true("found session is TLS 1.2",
-                                   sessions_and_handles2.front().session.version().is_pre_tls_13());
-            }),
+            auto sessions_and_handles2 = mgr->find(server_info(), cbs, plcy);
+            result.test_sz_eq("only one session is found", sessions_and_handles2.size(), 1);
+            result.test_is_true("found session is the Session_ID", sessions_and_handles2.front().handle.is_id());
+            result.test_bin_eq(
+               "found session is the Session_ID", sessions_and_handles2.front().handle.id().value(), handle_1);
+            result.test_is_true("found session is TLS 1.2",
+                                sessions_and_handles2.front().session.version().is_pre_tls_13());
+         }),
 
-         CHECK_all("number of found tickets is capped",
-                   [&](const std::string& type, const auto& factory, auto& result) {
-                      if(type == "Stateless") {
-                         return;  // this manager can neither store nor find anything
-                      }
+      CHECK_all("number of found tickets is capped",
+                [&](const std::string& type, const auto& factory, auto& result) {
+                   if(type == "Stateless") {
+                      return;  // this manager can neither store nor find anything
+                   }
 
-                      auto mgr = factory();
+                   auto mgr = factory();
 
-                      std::array<Botan::TLS::Session_Ticket, 5> tickets;
-                      for(auto& ticket : tickets) {
-                         ticket = random_ticket(*rng);
-                         mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs), ticket);
-                      }
+                   std::array<Botan::TLS::Session_Ticket, 5> tickets;
+                   for(auto& ticket : tickets) {
+                      ticket = random_ticket(*rng);
+                      mgr->store(default_session(Botan::TLS::Connection_Side::Client, cbs), ticket);
+                   }
 
-                      plcy.set_allow_session_reuse(true);
+                   plcy.set_allow_session_reuse(true);
 
-                      plcy.set_session_limit(1);
-                      result.test_sz_eq("find one",
-                                        mgr->find(server_info(), cbs, plcy).size(),
-                                        plcy.maximum_session_tickets_per_client_hello());
+                   plcy.set_session_limit(1);
+                   result.test_sz_eq("find one",
+                                     mgr->find(server_info(), cbs, plcy).size(),
+                                     plcy.maximum_session_tickets_per_client_hello());
 
-                      plcy.set_session_limit(3);
-                      result.test_sz_eq("find three",
-                                        mgr->find(server_info(), cbs, plcy).size(),
-                                        plcy.maximum_session_tickets_per_client_hello());
+                   plcy.set_session_limit(3);
+                   result.test_sz_eq("find three",
+                                     mgr->find(server_info(), cbs, plcy).size(),
+                                     plcy.maximum_session_tickets_per_client_hello());
 
-                      plcy.set_session_limit(10);
-                      result.test_sz_eq("find all five", mgr->find(server_info(), cbs, plcy).size(), 5);
-                   }),
+                   plcy.set_session_limit(10);
+                   result.test_sz_eq("find all five", mgr->find(server_info(), cbs, plcy).size(), 5);
+                }),
 
    #if defined(BOTAN_HAS_TLS_13)
-         CHECK_all("expired tickets are not selected for PSK resumption",
-                   [&](const auto&, const auto& factory, auto& result) {
-                      const auto ticket = [&](const Botan::TLS::Session_Handle& handle) {
-                         return Botan::TLS::PskIdentity(handle.opaque_handle().get(), 0);
-                      };
+      CHECK_all("expired tickets are not selected for PSK resumption",
+                [&](const auto&, const auto& factory, auto& result) {
+                   const auto ticket = [&](const Botan::TLS::Session_Handle& handle) {
+                      return Botan::TLS::PskIdentity(handle.opaque_handle().get(), 0);
+                   };
 
-                      auto mgr = factory();
+                   auto mgr = factory();
 
-                      auto old_handle = mgr->establish(
-                         default_session(Botan::TLS::Connection_Side::Server, cbs, Botan::TLS::Version_Code::TLS_V13));
-                      cbs.tick();
-                      auto new_handle = mgr->establish(
-                         default_session(Botan::TLS::Connection_Side::Server, cbs, Botan::TLS::Version_Code::TLS_V13));
-                      result.require("both sessions are stored", old_handle.has_value() && new_handle.has_value());
+                   auto old_handle = mgr->establish(
+                      default_session(Botan::TLS::Connection_Side::Server, cbs, Botan::TLS::Version_Code::TLS_V13));
+                   cbs.tick();
+                   auto new_handle = mgr->establish(
+                      default_session(Botan::TLS::Connection_Side::Server, cbs, Botan::TLS::Version_Code::TLS_V13));
+                   result.require("both sessions are stored", old_handle.has_value() && new_handle.has_value());
 
-                      auto session_and_index = mgr->choose_from_offered_tickets(
-                         std::vector{ticket(old_handle.value()), ticket(new_handle.value())}, "SHA-256", cbs, plcy);
-                      result.require("a ticket was chosen", session_and_index.has_value());
-                      result.test_u16_eq("the new ticket was chosen", session_and_index->second, uint16_t(1));
+                   auto session_and_index = mgr->choose_from_offered_tickets(
+                      std::vector{ticket(old_handle.value()), ticket(new_handle.value())}, "SHA-256", cbs, plcy);
+                   result.require("a ticket was chosen", session_and_index.has_value());
+                   result.test_u16_eq("the new ticket was chosen", session_and_index->second, uint16_t(1));
 
-                      cbs.tick();
+                   cbs.tick();
 
-                      const auto nothing = mgr->choose_from_offered_tickets(
-                         std::vector{ticket(new_handle.value()), ticket(old_handle.value())}, "SHA-256", cbs, plcy);
-                      result.require("all tickets are expired", !nothing.has_value());
-                   }),
+                   const auto nothing = mgr->choose_from_offered_tickets(
+                      std::vector{ticket(new_handle.value()), ticket(old_handle.value())}, "SHA-256", cbs, plcy);
+                   result.require("all tickets are expired", !nothing.has_value());
+                }),
    #endif
    });
 }
