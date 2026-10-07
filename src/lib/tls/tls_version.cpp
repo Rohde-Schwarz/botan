@@ -24,8 +24,11 @@ Protocol_Version Protocol_Version::latest_tls_version() {
 }
 
 Protocol_Version Protocol_Version::latest_dtls_version() {
+   // TODO: Go DTLS_V13 first once the DTLS1.3 implementation progresses
 #if defined(BOTAN_HAS_TLS_12)
    return Protocol_Version::DTLS_V12;
+#elif defined(BOTAN_HAS_DTLS_13)
+   return Protocol_Version::DTLS_V13;
 #else
    throw Not_Implemented("This build contains no usable DTLS version");
 #endif
@@ -102,6 +105,12 @@ bool Protocol_Version::valid() const {
 bool Protocol_Version::known_version() const {
 #if defined(BOTAN_HAS_TLS_13)
    if(m_version == static_cast<uint16_t>(Protocol_Version::TLS_V13)) {
+      return true;
+   }
+#endif
+
+#if defined(BOTAN_HAS_DTLS_13)
+   if(m_version == static_cast<uint16_t>(Protocol_Version::DTLS_V13)) {
       return true;
    }
 #endif
