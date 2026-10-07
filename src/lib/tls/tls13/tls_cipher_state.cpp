@@ -112,11 +112,19 @@
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_channel_impl_13.h>
 
+#if defined(BOTAN_HAS_DTLS_13)
+   #include <botan/internal/tls_cipher_state_dtls13.h>
+#endif
+
 namespace Botan::TLS {
 
 std::unique_ptr<Cipher_State> Cipher_State::create(Connection_Side side, TLS_Flavor flavor, std::string_view prf_algo) {
    if(flavor == TLS_Flavor::DTLS) {
-      throw Not_Implemented("DTLS 1.3 is not yet supported");
+#if defined(BOTAN_HAS_DTLS_13)
+      return std::make_unique<DTLS_Cipher_State>(side, prf_algo);
+#else
+      throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
+#endif
    } else {
       return std::make_unique<TLS_Cipher_State>(side, prf_algo);
    }
@@ -274,6 +282,11 @@ size_t Cipher_State::minimum_decryption_input_length() const {
    // This assumes that the AEAD cipher's minimal final size does not change
    // between epochs.
    return latest_read_epoch().cipher->minimum_final_size();
+}
+
+bool Cipher_State::has_cryptographic_association() const {
+   return current_write_epoch_number() > EpochNumber::Unprotected &&
+          current_read_epoch_number() > EpochNumber::Unprotected;
 }
 
 bool Cipher_State::must_expect_unprotected_alert_traffic() const {
@@ -886,6 +899,7 @@ Record TLS_Cipher_State::deprotect_record(Record_TLS record, size_t incoming_rec
       .type = Record_Type::Invalid,
       .sequence_number = m_read_epoch->sequence_number++,
       .payload = record.take_payload(),
+      .epoch = std::nullopt,
    };
 
    deprotect_and_hydrate_content_type(*m_read_epoch, record.header(), result, incoming_record_size_limit);

@@ -86,11 +86,74 @@ Flight::Message_Info make_message_info(const Handshake_Message& message, const F
    };
 }
 
+/**
+ * Ensures that the constructed flight sequence is legal. In a sense that,
+ * unprotected messages (if any) always come first and never after any
+ * protected message. Dummy cipher specs don't interleave with protected
+ * messages, and post-handshake flights never contain dummy cipher specs or
+ * statically pinned epochs.
+ *
+ * This function is for debugging purposes and won't be used if the build
+ * was configured --without-debug-asserts (the default setting).
+ *
+ * @throws Internal_Error if the flight message sequence is illegal
+ * @returns true if the flight message sequence is legal
+ */
+[[maybe_unused]] bool valid_message_sequence(std::span<const Flight::Message> flight,
+                                             Flight::PostHandshake post_handshake) {
+   bool in_protected_portion = false;
+   bool change_cipher_spec_seen = false;
+
+   for(const auto& message_info : flight) {
+      std::visit(  //
+         overloaded{
+            [&](const Flight::Dummy_ChangeCipherSpec&) {
+               if(post_handshake == Flight::PostHandshake::Yes) {
+                  throw Internal_Error("Flight contains a dummy ChangeCipherSpec in a post-handshake flight");
+               }
+               if(change_cipher_spec_seen) {
+                  throw Internal_Error("Flight contains multiple dummy ChangeCipherSpec messages");
+               }
+               if(in_protected_portion) {
+                  throw Internal_Error("Flight contains a dummy ChangeCipherSpec after a protected message");
+               }
+
+               change_cipher_spec_seen = true;
+            },
+            [&](const Flight::Message_Info& msg_info) {
+               const bool static_epoch = msg_info.epoch.has_value();
+               const bool protected_message = static_epoch && msg_info.epoch != EpochNumber::Unprotected;
+
+               if(post_handshake == Flight::PostHandshake::Yes) {
+                  if(static_epoch) {
+                     throw Internal_Error("Post-handshake flight contains a message with a pre-defined epoch");
+                  }
+               } else {
+                  if(!static_epoch) {
+                     throw Internal_Error("Handshake messages must have a pre-defined epoch");
+                  }
+                  if(protected_message) {
+                     in_protected_portion = true;
+                  } else if(in_protected_portion) {
+                     throw Internal_Error("Flight contains an unprotected message after a protected message");
+                  }
+               }
+            },
+         },
+         message_info);
+   }
+
+   return true;
+}
+
 }  // namespace
 
 std::vector<Flight::Message> Flight::commit() {
    BOTAN_STATE_CHECK(m_messages.has_value());
    BOTAN_STATE_CHECK(!m_messages->empty());
+
+   [[maybe_unused]] const auto post_handshake = m_transcript_hash.has_value() ? PostHandshake::No : PostHandshake::Yes;
+   BOTAN_DEBUG_ASSERT(valid_message_sequence(*m_messages, post_handshake));
 
    return std::exchange(m_messages, {}).value();
 }

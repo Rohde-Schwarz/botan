@@ -422,6 +422,86 @@ std::vector<Test::Result> test_commit() {
    };
 }
 
+   #if defined(BOTAN_ENABLE_DEBUG_ASSERTS)
+
+/**
+ * Smoke test for the message sequence validation that is performed in commit()
+ * when the library is built with debug asserts enabled.
+ */
+std::vector<Test::Result> test_valid_message_sequence() {
+   return {
+      CHECK("commit() accepts legal message sequences",
+            [](Test::Result& result) {
+               auto client_hello = make_client_hello();
+               auto server_hello = make_server_hello();
+               auto certificate = make_certificate();
+
+               Recording_Callbacks callbacks;
+
+               result.test_no_throw("unprotected messages, dummy CCS, protected messages", [&] {
+                  Transcript_Hash_State th(TLS_Flavor::TLS, "SHA-256");
+                  Flight flight(th, callbacks);
+                  flight.add(server_hello);
+                  flight.add_dummy_change_cipher_spec();
+                  flight.add(certificate);
+                  flight.commit();
+               });
+
+               result.test_no_throw("dummy CCS at the start of the flight", [&] {
+                  Transcript_Hash_State th(TLS_Flavor::TLS, "SHA-256");
+                  Flight flight(th, callbacks);
+                  flight.add_dummy_change_cipher_spec();
+                  flight.add(client_hello);
+                  flight.commit();
+               });
+
+               result.test_no_throw("post-handshake flight", [&] {
+                  PostHandshakeFlight flight(callbacks);
+                  flight.add(Key_Update(false));
+                  flight.add(make_new_session_ticket());
+                  flight.commit();
+               });
+            }),
+
+      CHECK("commit() rejects illegal message sequences",
+            [](Test::Result& result) {
+               auto server_hello = make_server_hello();
+               auto certificate = make_certificate();
+
+               Recording_Callbacks callbacks;
+
+               result.test_throws<Botan::Internal_Error>("unprotected message after protected message", [&] {
+                  Transcript_Hash_State th(TLS_Flavor::TLS, "SHA-256");
+                  Flight flight(th, callbacks);
+                  flight.add(certificate);
+                  flight.add(server_hello);
+                  flight.commit();
+               });
+
+               result.test_throws<Botan::Internal_Error>("dummy CCS after protected message", [&] {
+                  Transcript_Hash_State th(TLS_Flavor::TLS, "SHA-256");
+                  Flight flight(th, callbacks);
+                  flight.add(certificate);
+                  flight.add_dummy_change_cipher_spec();
+                  flight.commit();
+               });
+
+               result.test_throws<Botan::Internal_Error>("multiple dummy CCS", [&] {
+                  Transcript_Hash_State th(TLS_Flavor::TLS, "SHA-256");
+                  Flight flight(th, callbacks);
+                  flight.add(server_hello);
+                  flight.add_dummy_change_cipher_spec();
+                  flight.add_dummy_change_cipher_spec();
+                  flight.commit();
+               });
+            }),
+   };
+}
+
+BOTAN_REGISTER_TEST_FN("tls", "tls_flight_13_debug", test_valid_message_sequence);
+
+   #endif
+
 BOTAN_REGISTER_TEST_FN(
    "tls", "tls_flight_13", test_transcript_hash_update, test_epoch_detection, test_inspect_callback, test_commit);
 

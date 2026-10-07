@@ -14,10 +14,13 @@
 #include <botan/internal/buffer_slicer.h>
 #include <botan/internal/concat_util.h>
 #include <botan/internal/stl_util.h>
+#include <botan/internal/tls_channel_impl_13.h>
 #include <botan/internal/tls_cipher_state.h>
-#include <botan/internal/tls_handshake_layer_13.h>
-#include <botan/internal/tls_record_layer_13.h>
-#include <botan/internal/tls_transcript_hash_13.h>
+#include <botan/internal/tls_messages_internal.h>
+
+#if defined(BOTAN_HAS_DTLS_13)
+   #include <botan/internal/tls_channel_io_dtls13.h>
+#endif
 
 namespace Botan::TLS {
 
@@ -50,9 +53,16 @@ std::optional<Channel_IO::ReceiveEvent> Channel_IO::next_pending_handshake_messa
       //       because in TLS 1.2 Server Hello and other handshake messages can
       //       be legally coalesced in a single record.
       //
+      // TODO: This should be handled differently for DTLS
+      // Kimi: need per-record bookkeeping: copy_data should record
+      // whether the fragment completing a message was followed by
+      // more fragments in the same record, and attach that flag to
+      // the ReassembledMessage, rather than inferring it from
+      // global map state.
       if(holds_any_of<Client_Hello_12_Shim,
                       Client_Hello_13 /*, EndOfEarlyData,*/,
                       Server_Hello_13,
+                      Hello_Verify_Request,  // DTLS 1.3 -> 1.2 downgrade
                       Hello_Retry_Request,
                       Finished_13>(handshake_msg.value()) &&
          hs_layer.has_pending_data()) {
@@ -63,19 +73,25 @@ std::optional<Channel_IO::ReceiveEvent> Channel_IO::next_pending_handshake_messa
       // layer must be more restrictive.
       // See RFC 9846 5.1 regarding "legacy_record_version"
       if(!m_first_message_delivered) {
+         // TODO: Consider always calling disable_receiving_compat_mode
+         // to get rid of m_first_message_delivered
          rec_layer.disable_receiving_compat_mode();
          m_first_message_delivered = true;
       }
 
       return std::move(handshake_msg).value();
    } else {
-      auto post_handshake_msg = hs_layer.next_post_handshake_message(policy());
+      auto post_handshake_msg = hs_layer.next_post_handshake_message(*m_policy);
       if(!post_handshake_msg.has_value()) {
          return std::nullopt;
       }
 
       // make sure Key_Update appears only at the end of a record; see RFC
       // 9846 5.1 description above
+      //
+      // TODO: This doesn't work for DTLS, because the data may be delivered
+      //       out-of-order. This check assumes reliable stream semantics of
+      //       the underlying transport.
       if(std::holds_alternative<Key_Update>(post_handshake_msg.value()) && hs_layer.has_pending_data()) {
          throw Unexpected_Message("Unexpected additional post-handshake message data found in record");
       }
@@ -92,7 +108,10 @@ void Channel_IO::copy_data(std::span<const uint8_t> data) {
       return;
    }
 
-   record_layer().copy_data(data);
+   const auto cs = cipher_state();
+   const auto has_cryptographic_association = (cs != nullptr) && cs->has_cryptographic_association();
+
+   record_layer().copy_data(data, has_cryptographic_association);
 }
 
 Channel_IO::ReceiveEvent Channel_IO::next_pending_event(std::optional<Transcript_Hash_State>& transcript_hash,
@@ -119,6 +138,10 @@ Channel_IO::ReceiveEvent Channel_IO::next_pending_event(std::optional<Transcript
             [&](const Handshake_Record& record) -> std::optional<Channel_IO::ReceiveEvent> {
                process(record);
                return std::nullopt;  // continue looping, the handshake layer may have progressed...
+            },
+            [&](const ACK_Record& record) -> std::optional<Channel_IO::ReceiveEvent> {
+               process(record);
+               return std::nullopt;  // continue looping, the record layer may have more data...
             },
             [&](auto anything_else) -> std::optional<Channel_IO::ReceiveEvent> {
                // RFC 8446 5.1
@@ -335,6 +358,10 @@ void Channel_IO::set_selected_certificate_type(Certificate_Type cert_type) {
    handshake_layer().set_selected_certificate_type(cert_type);
 }
 
+std::optional<Epoch0_SequenceNumbers> Channel_IO::epoch0_sequence_numbers() const {
+   return record_layer().epoch0_sequence_numbers();
+}
+
 std::shared_ptr<const Cipher_State> Channel_IO::cipher_state() const {
    return m_cipher_state.lock();
 }
@@ -479,7 +506,14 @@ class TLS_Channel_IO final : public Channel_IO {
          prepare_and_flush_current_prepared(protect_current_msgs);
       }
 
-      void process(const Handshake_Record& record) override { m_handshake_layer.copy_data(policy(), record); }
+      void process(const Handshake_Record& record) override {
+         std::ignore = m_handshake_layer.copy_data(policy(), record);
+      }
+
+      void process(const ACK_Record& ack_record) override {
+         BOTAN_UNUSED(ack_record);
+         throw Unexpected_Message("Received ACK record in TLS 1.3");
+      }
 
       Record_Layer& record_layer() override { return m_record_layer; }
 
@@ -493,18 +527,11 @@ class TLS_Channel_IO final : public Channel_IO {
       void send_key_update(const Key_Update& msg) override {
          const auto cs = cipher_state();
          BOTAN_ASSERT_NONNULL(cs);
-
-         const auto serialized = Handshake_Layer::serialize(msg);
-         const auto header = TLS_Handshake_Layer::prepare_header(msg.wire_type(), serialized.size());
-
-         const auto payload = concat<std::vector<uint8_t>>(header, serialized);
-
-         send_data(Record_Type::Handshake, payload, cs.get());
+         send_data(Record_Type::Handshake, m_handshake_layer.marshal(msg), cs.get());
          cs->update_write_keys();
       }
 
-      void schedule_read_epoch_pruning(EpochNumber /* latest_epoch */) override { /* don't care */
-      }
+      void schedule_read_epoch_pruning(EpochNumber /* latest_epoch */) override { /* don't care */ }
 
    private:
       TLS_Record_Layer m_record_layer;
@@ -520,7 +547,11 @@ std::shared_ptr<Channel_IO> Channel_IO::create(Connection_Side side,
                                                std::shared_ptr<const Policy> policy,
                                                std::shared_ptr<Callbacks> callbacks) {
    if(flavor == TLS_Flavor::DTLS) {
-      throw Not_Implemented("DTLS 1.3 is not yet supported");
+#if defined(BOTAN_HAS_DTLS_13)
+      return std::make_shared<DTLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
+#else
+      throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
+#endif
    } else {
       return std::make_shared<TLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
    }

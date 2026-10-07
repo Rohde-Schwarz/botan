@@ -327,6 +327,12 @@ bool Policy::acceptable_protocol_version(Protocol_Version version) const {
    }
 #endif
 
+#if defined(BOTAN_HAS_DTLS_13)
+   if(version == Protocol_Version::DTLS_V13 && allow_dtls13()) {
+      return true;
+   }
+#endif
+
 #if defined(BOTAN_HAS_TLS_12)
    if(version == Protocol_Version::TLS_V12 && allow_tls12()) {
       return true;
@@ -343,6 +349,9 @@ bool Policy::acceptable_protocol_version(Protocol_Version version) const {
 
 Protocol_Version Policy::latest_supported_version(bool datagram) const {
    if(datagram) {
+      if(acceptable_protocol_version(Protocol_Version::DTLS_V13)) {
+         return Protocol_Version::DTLS_V13;
+      }
       if(acceptable_protocol_version(Protocol_Version::DTLS_V12)) {
          return Protocol_Version::DTLS_V12;
       }
@@ -397,6 +406,10 @@ bool Policy::allow_dtls12() const {
 #else
    return false;
 #endif
+}
+
+bool Policy::allow_dtls13() const {
+   return false;  // TODO: Opportunistically enable once DTLS 1.3 is supported
 }
 
 bool Policy::include_time_in_hello_random() const {
@@ -546,6 +559,13 @@ std::optional<size_t> Policy::dtls_maximum_retransmissions() const {
 size_t Policy::dtls_default_mtu() const {
    // default MTU is IPv6 min MTU minus UDP/IP headers
    return 1280 - 40 - 8;
+}
+
+size_t Policy::dtls_maximum_queued_acknowledgements() const {
+   // Matches BoringSSL's DTLS_MAX_ACK_BUFFER.
+   // Considering any reasonable DTLS configuration, there should be plenty of
+   // leeway for the expected amount of exchanged handshake records.
+   return 32;
 }
 
 std::vector<uint16_t> Policy::srtp_profiles() const {
