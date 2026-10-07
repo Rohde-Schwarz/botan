@@ -114,6 +114,13 @@ std::vector<uint8_t> reference_transcript_hash(std::initializer_list<const Hands
    return hash->final_stdvec();
 }
 
+std::optional<uint64_t> as_u64(const std::optional<Epoch_Number>& epoch) {
+   if(epoch.has_value()) {
+      return static_cast<uint64_t>(epoch.value());
+   }
+   return std::nullopt;
+}
+
 const Flight::Message_Info* as_message_info(const Flight::Message& msg) {
    return std::get_if<Flight::Message_Info>(&msg);
 }
@@ -124,7 +131,8 @@ const Flight::Message_Info* as_message_info(const Flight::Message& msg) {
 void check_message_info(Test::Result& result,
                         const std::string& what,
                         const Flight::Message& msg,
-                        const Handshake_Message& expected) {
+                        const Handshake_Message& expected,
+                        std::optional<Epoch_Number> expected_epoch) {
    const auto* info = as_message_info(msg);
    if(!result.test_is_true(what + ": is a handshake message", info != nullptr)) {
       return;
@@ -134,6 +142,7 @@ void check_message_info(Test::Result& result,
    const auto expected_marshalled = marshal_message(expected);
 
    result.test_enum_eq(what + ": wire type", info->wire_type, expected.wire_type());
+   result.test_opt_u64_eq(what + ": epoch", as_u64(info->epoch), as_u64(expected_epoch));
    result.test_bin_eq(what + ": serialized message", info->serialized.get(), expected_body);
    result.test_bin_eq(
       what + ": handshake protocol header", info->header.get(), std::span{expected_marshalled}.first<4>());
@@ -204,6 +213,57 @@ std::vector<Test::Result> test_transcript_hash_update() {
                result.test_bin_eq("previous transcript hash after Certificate ignores the dummy CCS",
                                   th.previous(),
                                   after_server_hello);
+            }),
+   };
+}
+
+std::vector<Test::Result> test_epoch_detection() {
+   return {
+      CHECK("epoch is derived from the handshake message type",
+            [](Test::Result& result) {
+               auto client_hello = make_client_hello();
+               auto server_hello = make_server_hello();
+               auto certificate = make_certificate();
+
+               auto epoch_of = [](Handshake_Message_13_Ref msg) {
+                  Recording_Callbacks callbacks;
+                  Transcript_Hash_State th(TLS_Flavor::TLS, "SHA-256");
+                  Flight flight(th, callbacks);
+                  flight.add(msg);
+
+                  const auto messages = flight.commit();
+                  if(messages.size() != 1 || as_message_info(messages.front()) == nullptr) {
+                     throw Test_Error("unexpected flight content");
+                  }
+                  return as_u64(as_message_info(messages.front())->epoch);
+               };
+
+               result.test_opt_u64_eq(
+                  "Client Hello is unprotected", epoch_of(client_hello), as_u64(Epoch_Number::Unprotected));
+               result.test_opt_u64_eq(
+                  "Server Hello is unprotected", epoch_of(server_hello), as_u64(Epoch_Number::Unprotected));
+               result.test_opt_u64_eq("Certificate is sent with handshake traffic keys",
+                                      epoch_of(certificate),
+                                      as_u64(Epoch_Number::HandshakeTraffic));
+            }),
+
+      CHECK("post-handshake messages don't pin an epoch",
+            [](Test::Result& result) {
+               const auto new_session_ticket = make_new_session_ticket();
+               const Key_Update key_update(true);
+
+               Recording_Callbacks callbacks;
+               PostHandshakeFlight flight(callbacks);
+               flight.add(make_new_session_ticket());
+               flight.add(Key_Update(true));
+
+               const auto messages = flight.commit();
+               if(!result.test_sz_eq("number of messages", messages.size(), 2)) {
+                  return;
+               }
+
+               check_message_info(result, "New Session Ticket", messages[0], new_session_ticket, std::nullopt);
+               check_message_info(result, "Key Update", messages[1], key_update, std::nullopt);
             }),
    };
 }
@@ -301,10 +361,10 @@ std::vector<Test::Result> test_commit() {
                   return;
                }
 
-               check_message_info(result, "Server Hello", messages[0], server_hello);
+               check_message_info(result, "Server Hello", messages[0], server_hello, Epoch_Number::Unprotected);
                result.test_is_true("dummy CCS is the second message",
                                    std::holds_alternative<Flight::Dummy_ChangeCipherSpec>(messages[1]));
-               check_message_info(result, "Certificate", messages[2], certificate);
+               check_message_info(result, "Certificate", messages[2], certificate, Epoch_Number::HandshakeTraffic);
             }),
 
       CHECK("commit() of a post-handshake flight produces the list of message infos in order",
@@ -322,8 +382,8 @@ std::vector<Test::Result> test_commit() {
                   return;
                }
 
-               check_message_info(result, "Key Update", messages[0], key_update);
-               check_message_info(result, "New Session Ticket", messages[1], new_session_ticket);
+               check_message_info(result, "Key Update", messages[0], key_update, std::nullopt);
+               check_message_info(result, "New Session Ticket", messages[1], new_session_ticket, std::nullopt);
             }),
 
       CHECK("a flight cannot be used after commit()",
@@ -366,7 +426,88 @@ std::vector<Test::Result> test_commit() {
    };
 }
 
-BOTAN_REGISTER_TEST_FN("tls", "tls_flight_13", test_transcript_hash_update, test_inspect_callback, test_commit);
+   #if defined(BOTAN_ENABLE_DEBUG_ASSERTS)
+
+/**
+ * Smoke test for the message sequence validation that is performed in commit()
+ * when the library is built with debug asserts enabled.
+ */
+std::vector<Test::Result> test_valid_message_sequence() {
+   return {
+      CHECK("commit() accepts legal message sequences",
+            [](Test::Result& result) {
+               auto client_hello = make_client_hello();
+               auto server_hello = make_server_hello();
+               auto certificate = make_certificate();
+
+               Recording_Callbacks callbacks;
+
+               result.test_no_throw("unprotected messages, dummy CCS, protected messages", [&] {
+                  Transcript_Hash_State th(TLS_Flavor::TLS, "SHA-256");
+                  Flight flight(th, callbacks);
+                  flight.add(server_hello);
+                  flight.add_dummy_change_cipher_spec();
+                  flight.add(certificate);
+                  flight.commit();
+               });
+
+               result.test_no_throw("dummy CCS at the start of the flight", [&] {
+                  Transcript_Hash_State th(TLS_Flavor::TLS, "SHA-256");
+                  Flight flight(th, callbacks);
+                  flight.add_dummy_change_cipher_spec();
+                  flight.add(client_hello);
+                  flight.commit();
+               });
+
+               result.test_no_throw("post-handshake flight", [&] {
+                  PostHandshakeFlight flight(callbacks);
+                  flight.add(Key_Update(false));
+                  flight.add(make_new_session_ticket());
+                  flight.commit();
+               });
+            }),
+
+      CHECK("commit() rejects illegal message sequences",
+            [](Test::Result& result) {
+               auto server_hello = make_server_hello();
+               auto certificate = make_certificate();
+
+               Recording_Callbacks callbacks;
+
+               result.test_throws<Botan::Internal_Error>("unprotected message after protected message", [&] {
+                  Transcript_Hash_State th(TLS_Flavor::TLS, "SHA-256");
+                  Flight flight(th, callbacks);
+                  flight.add(certificate);
+                  flight.add(server_hello);
+                  flight.commit();
+               });
+
+               result.test_throws<Botan::Internal_Error>("dummy CCS after protected message", [&] {
+                  Transcript_Hash_State th(TLS_Flavor::TLS, "SHA-256");
+                  Flight flight(th, callbacks);
+                  flight.add(certificate);
+                  flight.add_dummy_change_cipher_spec();
+                  flight.commit();
+               });
+
+               result.test_throws<Botan::Internal_Error>("multiple dummy CCS", [&] {
+                  Transcript_Hash_State th(TLS_Flavor::TLS, "SHA-256");
+                  Flight flight(th, callbacks);
+                  flight.add(server_hello);
+                  flight.add_dummy_change_cipher_spec();
+                  flight.add_dummy_change_cipher_spec();
+                  flight.commit();
+               });
+            }),
+   };
+}
+
+BOTAN_REGISTER_TEST_FN("tls", "tls_flight_13_debug", test_valid_message_sequence);
+
+   #endif
+
+BOTAN_REGISTER_TEST_FN(
+   "tls", "tls_flight_13", test_transcript_hash_update, test_epoch_detection, test_inspect_callback, test_commit);
 
 }  // namespace
 

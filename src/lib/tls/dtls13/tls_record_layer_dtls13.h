@@ -1,0 +1,182 @@
+/*
+* TLS record layer implementation for DTLS 1.3
+* (C) 2026 Jack Lloyd
+*     2026 Amos Treiber, René Meusel - Rohde & Schwarz Cybersecurity GmbH
+*
+* Botan is released under the Simplified BSD License (see license.txt)
+*/
+
+#ifndef BOTAN_TLS_RECORD_LAYER_DTLS13_H_
+#define BOTAN_TLS_RECORD_LAYER_DTLS13_H_
+
+#include <botan/concepts.h>
+#include <botan/strong_type.h>
+#include <botan/tls_version.h>
+#include <botan/internal/tls_ack_record_dtls13.h>
+#include <botan/internal/tls_record_dtls13.h>
+#include <botan/internal/tls_record_layer_13.h>
+#include <botan/internal/tls_types_13.h>
+#include <botan/internal/tls_utils_dtls13.h>
+#include <deque>
+
+namespace Botan {
+
+class BufferSlicer;
+
+}
+
+namespace Botan::TLS {
+
+class Callbacks;
+class Policy;
+
+/**
+ * Implementation of the DTLS 1.3 record protocol layer
+ *
+ * This component transforms bytes received from the peer into bytes
+ * containing plaintext TLS messages and vice versa.
+ */
+class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
+   public:
+      using IncomingRecord = std::variant<PlaintextRecord_DTLS, ProtectedRecord_DTLS>;
+
+      struct HandshakeRecordInfo /* NOLINT(*-member-init) */ {
+            std::vector<RecordNumber> record_numbers;  // Includes numbers of previous transmissions
+            PackedHandshakeMessageFragments packed_fragments;
+      };
+
+   public:
+      DTLS_Record_Layer(Connection_Side side,
+                        std::shared_ptr<const Policy> policy,
+                        std::shared_ptr<Callbacks> callbacks);
+
+      bool copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) override;
+
+      ReadResult next_record(Cipher_State* cipher_state = nullptr) override;
+
+      MarshalledRecordAndNumber prepare_record(Record_Type type,
+                                               std::span<const uint8_t> data,
+                                               Cipher_State* cipher_state,
+                                               std::optional<Epoch_Number> epoch = std::nullopt) override;
+
+      /**
+       * Prepares a single handshake record from a payload containing one or
+       * more packed handshake message fragments and tracks the record for
+       * potential retransmission.
+       *
+       * @param packed_fragments  the marshalled handshake message fragments
+       *                          to be packed into the record
+       * @param cipher_state      the cipher state to protect the record with
+       * @param epoch             the epoch to send the record in; if not
+       *                          provided, the current write epoch is used
+       */
+      MarshalledRecordAndNumber prepare_handshake_record(PackedHandshakeMessageFragments packed_fragments,
+                                                         Cipher_State* cipher_state,
+                                                         std::optional<Epoch_Number> epoch = std::nullopt);
+
+      /**
+       * Re-prepares all records that are currently not acknowledged by the
+       * peer. Acknowledgements could either be explicit (via ACK records) or
+       * implicit (via flight state progress).
+       *
+       * @note This call is relevant for DTLS only.
+       *
+       * @returns a vector of ready-to-send records re-prepared in the
+       *          respective epoch of their first transmission.
+       */
+      std::vector<MarshalledRecord> prepare_unacknowledged_records(Cipher_State* cipher_state);
+
+      /**
+       * Like the overload above, but determines the record overhead from the
+       * protection epoch the record will be sent in rather than from the mere
+       * presence of a cipher state. This matters when a flight contains both
+       * unprotected (epoch 0) and protected messages: the unprotected records
+       * may carry slightly more payload.
+       */
+      uint16_t record_payload_size_limit(const Policy& policy,
+                                         Cipher_State* cipher_state,
+                                         std::optional<Epoch_Number> epoch = std::nullopt) const override;
+
+      void clear_read_buffer() override;
+
+      /**
+       * Queues an acknowledgement for a handshake record received from the
+       * peer, to be emitted with the next outgoing ACK record.
+       *
+       * RFC 9147 Section 7
+       *    The ACK message is used by an endpoint to indicate which handshake
+       *    records it has received and processed from the other side. [...]
+       *    Implementations MUST NOT acknowledge records containing handshake
+       *    messages or fragments which have not been processed or buffered.
+       *    Otherwise, deadlock can ensue.
+       *
+       * Hence, this must be called only after the record's content was
+       * successfully passed to and accepted by the handshake layer. Records
+       * that don't carry handshake messages (most notably application data)
+       * are never acknowledged.
+       */
+      void acknowledge_handshake_record(RecordNumber record_number);
+
+      /**
+       * @returns true if at least one received handshake record is currently
+       *          queued for acknowledgement
+       */
+      bool has_outstanding_acknowledgements() const;
+
+      /**
+      * Generates a serialized ACK message containing all records that were
+      * successfully received and processed by the record layer. This list is
+      * cleared whenever progress is made in the handshake state machine, see
+      * `clear_dtls_outstanding_acknowledgements()`.
+      */
+      ACKs acknowledgements() const;
+
+      /**
+       * Processes an incoming ACK message and removes all acknowledged records
+       * from the list of unacknowledged outgoing handshake records.
+       *
+       * @returns true if there are no more unacknowledged records left, false
+       *          otherwise
+       */
+      bool handle_acknowledgements(const ACKs& ack_payload);
+
+      bool has_unacknowledged_record(const RecordNumber& record_number) const;
+      bool has_unacknowledged_records() const;
+
+      void clear_resend_buffer();
+      void clear_outstanding_acknowledgements();
+
+      std::optional<Epoch0_SequenceNumbers> epoch0_sequence_numbers() const noexcept override {
+         return Epoch0_SequenceNumbers{
+            .read = m_unprotected_read_seq_no,
+            .write = m_unprotected_write_seq_no,
+         };
+      }
+
+   private:
+      bool read_datagram(std::span<const uint8_t> datagram);
+
+      PlaintextRecord_DTLS read_plaintext_record(BufferSlicer& bs);
+      ProtectedRecord_DTLS read_protected_record(BufferSlicer& bs);
+
+      IncomingRecord next_incoming_record();
+
+      Replay_Window_13& replay_window_for_epoch(Epoch_Number epoch);
+
+   private:
+      std::shared_ptr<Callbacks> m_callbacks;
+
+      std::deque<IncomingRecord> m_incoming_records;
+      std::vector<HandshakeRecordInfo> m_unacked_outgoing_handshake_records;
+
+      std::map<Epoch_Number, Replay_Window_13> m_replay_windows;
+
+      uint64_t m_unprotected_write_seq_no = 0;
+      uint64_t m_unprotected_read_seq_no = 0;
+
+      std::vector<RecordNumber> m_record_numbers_to_ack;
+};
+
+}  // namespace Botan::TLS
+
+#endif

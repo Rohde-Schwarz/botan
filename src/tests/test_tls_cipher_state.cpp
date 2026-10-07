@@ -102,8 +102,9 @@ class RFC8448_TestData {
       void encrypt(Test::Result& result, Cipher_State* cs) const {
          MarshalledRecord record;
 
-         result.test_no_throw("protection is successful for " + name,
-                              [&] { record = Botan::TLS::as_tls_cipher_state(cs)->protect_record(record_type, plaintext_fragment, 0); });
+         result.test_no_throw("protection is successful for " + name, [&] {
+            record = Botan::TLS::as_tls_cipher_state(cs)->protect_record(record_type, plaintext_fragment, 0);
+         });
 
          result.test_bin_eq(
             "protected record header for " + name, std::span{record}.first(TLS_HEADER_SIZE), record_header);
@@ -122,7 +123,8 @@ class RFC8448_TestData {
 
          std::optional<Record> plaintext;
          result.test_no_throw("deprotection is successful for " + name, [&] {
-            plaintext = Botan::TLS::as_tls_cipher_state(cs)->deprotect_record(std::move(record), Botan::TLS::MAX_PLAINTEXT_SIZE);
+            plaintext =
+               Botan::TLS::as_tls_cipher_state(cs)->deprotect_record(std::move(record), Botan::TLS::MAX_PLAINTEXT_SIZE);
          });
 
          result.test_opt_not_null("deprotection successful for " + name, plaintext);
@@ -920,10 +922,10 @@ std::vector<Test::Result> test_record_padding() {
 
    // Create a Cipher_State for the client side, that is capable of
    // protecting and deprotecting records.
-   auto cs_client =
-      Cipher_State::init_with_server_hello(Connection_Side::Client, TLS_Flavor::TLS, shared_secret(), cipher, th_server_hello, {});
-   auto cs_server =
-      Cipher_State::init_with_server_hello(Connection_Side::Server, TLS_Flavor::TLS, shared_secret(), cipher, th_server_hello, {});
+   auto cs_client = Cipher_State::init_with_server_hello(
+      Connection_Side::Client, TLS_Flavor::TLS, shared_secret(), cipher, th_server_hello, {});
+   auto cs_server = Cipher_State::init_with_server_hello(
+      Connection_Side::Server, TLS_Flavor::TLS, shared_secret(), cipher, th_server_hello, {});
 
    auto* tls_cs_client = Botan::TLS::as_tls_cipher_state(cs_client.get());
    auto* tls_cs_server = Botan::TLS::as_tls_cipher_state(cs_server.get());

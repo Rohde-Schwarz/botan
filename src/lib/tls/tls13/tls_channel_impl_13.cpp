@@ -45,10 +45,12 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
                                  const std::shared_ptr<Credentials_Manager>& credentials_manager,
                                  const std::shared_ptr<RandomNumberGenerator>& rng,
                                  const std::shared_ptr<const Policy>& policy,
-                                 bool is_server) :
-      m_side(is_server ? Connection_Side::Server : Connection_Side::Client),
-      m_transcript_hash(TLS_Flavor::TLS),
-      m_channel_io(Channel_IO::create(m_side, TLS_Flavor::TLS, policy, callbacks)),
+                                 Connection_Side connection_side,
+                                 TLS_Flavor flavor) :
+      m_side(connection_side),
+      m_flavor(flavor),
+      m_transcript_hash(flavor),
+      m_channel_io(Channel_IO::create(m_side, m_flavor, policy, callbacks)),
       m_callbacks(callbacks),
       m_session_manager(session_manager),
       m_credentials_manager(credentials_manager),
@@ -127,16 +129,22 @@ size_t Channel_Impl_13::from_peer(std::span<const uint8_t> data) {
    } catch(TLS_Exception& e) {
       send_fatal_alert(e.type());
       throw;
-   } catch(Invalid_Authentication_Tag&) {
+   }
+
+   catch(Invalid_Authentication_Tag&) {
       // RFC 8446 5.2
       //    If the decryption fails, the receiver MUST terminate the connection
       //    with a "bad_record_mac" alert.
       send_fatal_alert(Alert::BadRecordMac);
       throw;
-   } catch(Decoding_Error&) {
+   }
+
+   catch(Decoding_Error&) {
       send_fatal_alert(Alert::DecodeError);
       throw;
-   } catch(...) {
+   }
+
+   catch(...) {
       send_fatal_alert(Alert::InternalError);
       throw;
    }
@@ -199,6 +207,26 @@ SymmetricKey Channel_Impl_13::key_material_export(std::string_view label,
 void Channel_Impl_13::update_traffic_keys(bool request_peer_update) {
    BOTAN_STATE_CHECK(!is_downgrading() && is_handshake_complete() && is_active());
    m_channel_io->update_traffic_keys(request_peer_update);
+}
+
+bool Channel_Impl_13::timeout_check() {
+   if(!is_datagram()) {
+      return false;
+   }
+
+   throw Not_Implemented(
+      "timeout_check() is not implemented for DTLS 1.3, please implement "
+      "TLS::Callbacks::tls_register_deferred_operation() instead");
+}
+
+std::optional<std::chrono::milliseconds> Channel_Impl_13::next_retransmission_timeout() const {
+   if(!is_datagram()) {
+      return std::nullopt;
+   }
+
+   throw Not_Implemented(
+      "next_retransmission_timeout() is not implemented for DTLS 1.3, please "
+      "implement TLS::Callbacks::tls_register_deferred_operation() instead");
 }
 
 SecretLoggerFn Channel_Impl_13::secret_logger() const {
@@ -328,9 +356,9 @@ void Channel_Impl_13::expect_downgrade(const Server_Information& server_info,
       m_credentials_manager,
       m_rng,
       m_policy,
-      TLS_Flavor::TLS,
+      is_datagram() ? TLS_Flavor::DTLS : TLS_Flavor::TLS,
       false,  // received_tls_13_error_alert
-      false   // will_downgrade
+      false,  // will_downgrade
    };
    m_downgrade_info = std::make_unique<Downgrade_Information>(std::move(di));
 }
