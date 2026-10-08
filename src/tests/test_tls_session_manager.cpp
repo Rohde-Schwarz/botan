@@ -149,6 +149,7 @@ decltype(auto) default_session(Botan::TLS::Connection_Side side,
                                  {},
                                  nullptr,
                                  server_info(),
+                                 0,
                                  cbs.tls_current_timestamp());
    #else
       throw Test_Error("TLS 1.3 is not available in this build");
@@ -514,6 +515,7 @@ std::vector<Test::Result> test_session_manager_choose_ticket() {
                                       {},
                                       nullptr,
                                       server_info(),
+                                      0,
                                       mycbs.tls_current_timestamp());
    };
 

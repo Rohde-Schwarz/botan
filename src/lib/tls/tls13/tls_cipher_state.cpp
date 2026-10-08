@@ -111,11 +111,19 @@
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_channel_impl_13.h>
 
+#if defined(BOTAN_HAS_DTLS_13)
+   #include <botan/internal/tls_cipher_state_dtls13.h>
+#endif
+
 namespace Botan::TLS {
 
 std::unique_ptr<Cipher_State> Cipher_State::create(Connection_Side side, TLS_Flavor flavor, std::string_view prf_algo) {
    if(flavor == TLS_Flavor::DTLS) {
-      throw Not_Implemented("DTLS 1.3 is not yet supported");
+#if defined(BOTAN_HAS_DTLS_13)
+      return std::make_unique<DTLS_Cipher_State>(side, prf_algo);
+#else
+      throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
+#endif
    } else {
       return std::make_unique<TLS_Cipher_State>(side, prf_algo);
    }
@@ -275,6 +283,11 @@ size_t Cipher_State::minimum_decryption_input_length() const {
    return latest_read_epoch().cipher->minimum_final_size();
 }
 
+bool Cipher_State::has_cryptographic_association() const {
+   return current_write_epoch_number() > Epoch_Number::Unprotected &&
+          current_read_epoch_number() > Epoch_Number::Unprotected;
+}
+
 bool Cipher_State::must_expect_unprotected_alert_traffic() const {
    // Client side:
    //   After successfully receiving a Server Hello we expect servers to send
@@ -303,33 +316,13 @@ bool Cipher_State::must_expect_unprotected_alert_traffic() const {
 bool Cipher_State::can_encrypt_application_traffic() const {
    // TODO: when implementing early traffic (0-RTT) this will likely need
    //       to allow `State::EarlyTraffic`.
-
-   if(m_connection_side == Connection_Side::Client && m_state != State::Completed) {
-      return false;
-   }
-
-   if(m_connection_side == Connection_Side::Server && m_state != State::ServerApplicationTraffic &&
-      m_state != State::Completed) {
-      return false;
-   }
-
-   return has_write_epoch();
+   return current_write_epoch_number() >= Epoch_Number::ApplicationTraffic_0;
 }
 
 bool Cipher_State::can_decrypt_application_traffic() const {
    // TODO: when implementing early traffic (0-RTT) this will likely need
    //       to allow `State::EarlyTraffic`.
-
-   if(m_connection_side == Connection_Side::Client && m_state != State::ServerApplicationTraffic &&
-      m_state != State::Completed) {
-      return false;
-   }
-
-   if(m_connection_side == Connection_Side::Server && m_state != State::Completed) {
-      return false;
-   }
-
-   return has_read_epoch();
+   return current_read_epoch_number() >= Epoch_Number::ApplicationTraffic_0;
 }
 
 std::string Cipher_State::hash_algorithm() const {
@@ -346,15 +339,16 @@ bool Cipher_State::is_compatible_with(const Ciphersuite& cipher) const {
       return false;
    }
 
-   BOTAN_ASSERT_NOMSG(has_write_epoch() == has_read_epoch());
+   BOTAN_ASSERT_NOMSG((current_write_epoch_number() == Epoch_Number::Unprotected) ==
+                      (current_read_epoch_number() == Epoch_Number::Unprotected));
 
    // Compare canonical AEAD names rather than substring-matching cipher_algo
-   // against the AEAD's name(). starts_with() is both too permissive (an
+   // against m_encrypt->name(). starts_with() is both too permissive (an
    // AES-128/CCM-8 instance starts with "AES-128/CCM" so it would accept the
    // CCM-16 suite) and too restrictive (cipher_algo "AES-128/CCM(8)" does not
    // prefix the canonical "AES-128/CCM(8,3)"). Re-instantiating the AEAD from
    // cipher_algo yields the same canonical name() the suite would produce.
-   if(has_write_epoch()) {
+   if(current_write_epoch_number() > Epoch_Number::Unprotected) {
       auto canonical = AEAD_Mode::create(cipher.cipher_algo(), Cipher_Dir::Encryption);
       // This assumes that the AEAD cipher does not change between epochs.
       if(!canonical || canonical->name() != latest_write_epoch().cipher->name()) {
@@ -634,11 +628,11 @@ void Cipher_State::advance_with_server_hello(const Ciphersuite& cipher,
    maybe_log_secret("SERVER_HANDSHAKE_TRAFFIC_SECRET", server_handshake_traffic_secret);
 
    if(m_connection_side == Connection_Side::Server) {
-      advance_read_epoch(client_handshake_traffic_secret, true /* handshake epoch */);
-      advance_write_epoch(server_handshake_traffic_secret, true /* handshake epoch */);
+      advance_read_epoch(client_handshake_traffic_secret, Epoch_Number::HandshakeTraffic);
+      advance_write_epoch(server_handshake_traffic_secret, Epoch_Number::HandshakeTraffic);
    } else {
-      advance_read_epoch(server_handshake_traffic_secret, true /* handshake epoch */);
-      advance_write_epoch(client_handshake_traffic_secret, true /* handshake epoch */);
+      advance_read_epoch(server_handshake_traffic_secret, Epoch_Number::HandshakeTraffic);
+      advance_write_epoch(client_handshake_traffic_secret, Epoch_Number::HandshakeTraffic);
    }
 
    m_salt = derive_secret(handshake_secret, "derived", empty_hash());
@@ -646,13 +640,14 @@ void Cipher_State::advance_with_server_hello(const Ciphersuite& cipher,
    m_state = State::HandshakeTraffic;
 }
 
-Cipher_State::Epoch Cipher_State::create_epoch(Cipher_Dir direction,
-                                               const secure_vector<uint8_t>& traffic_secret,
-                                               bool handshake_epoch) const {
+Cipher_State::Epoch Cipher_State::create_epoch(Epoch_Number epoch_number,
+                                               Cipher_Dir direction,
+                                               const secure_vector<uint8_t>& traffic_secret) const {
    BOTAN_ASSERT_NONNULL(m_hash);
    BOTAN_ASSERT_NOMSG(m_ciphersuite.has_value());
 
    return {
+      .number = epoch_number,
       .cipher = [&]() -> std::unique_ptr<AEAD_Mode> {
          auto cipher = AEAD_Mode::create_or_throw(m_ciphersuite->cipher_algo(), direction);
          cipher->set_key(hkdf_expand_label(traffic_secret, "key", {}, cipher->minimum_keylength()));
@@ -662,9 +657,7 @@ Cipher_State::Epoch Cipher_State::create_epoch(Cipher_Dir direction,
       .sequence_number = 0,
       .traffic_secret = traffic_secret,
       .finished_key = [&]() -> std::optional<secure_vector<uint8_t>> {
-         if(handshake_epoch) {
-            // Key derivation for the MAC in the "Finished" handshake message
-            // as described in RFC 8446 4.4.4
+         if(epoch_number == Epoch_Number::HandshakeTraffic) {
             return hkdf_expand_label(traffic_secret, "finished", {}, m_hash->output_length());
          }
          return {};
@@ -717,7 +710,19 @@ std::vector<uint8_t> Cipher_State::empty_hash() const {
    return m_hash->final_stdvec();
 }
 
-void Cipher_State::update_read_keys() {
+namespace {
+
+Epoch_Number operator+(Epoch_Number current, size_t offset) {
+   return static_cast<Epoch_Number>(to_underlying(current) + offset);
+}
+
+Epoch_Number operator-(Epoch_Number current, Epoch_Number offset) {
+   return static_cast<Epoch_Number>(to_underlying(current) - to_underlying(offset));
+}
+
+}  // namespace
+
+Epoch_Number Cipher_State::update_read_keys() {
    BOTAN_ASSERT_NOMSG(m_state == State::ServerApplicationTraffic || m_state == State::Completed);
    BOTAN_ASSERT_NONNULL(m_hash);
 
@@ -726,15 +731,17 @@ void Cipher_State::update_read_keys() {
    const auto new_read_application_traffic_secret =
       hkdf_expand_label(epoch.traffic_secret, "traffic upd", {}, m_hash->output_length());
 
+   BOTAN_DEBUG_ASSERT(current_read_epoch_number() >= Epoch_Number::ApplicationTraffic_0);
+   const auto app_key_index = current_read_epoch_number() - Epoch_Number::ApplicationTraffic_0;
    const auto secret_label = fmt("{}_TRAFFIC_SECRET_{}",
                                  m_connection_side == Connection_Side::Server ? "CLIENT" : "SERVER",
-                                 ++m_read_key_update_count);
+                                 to_underlying(app_key_index));
    maybe_log_secret(secret_label, new_read_application_traffic_secret);
 
-   advance_read_epoch(new_read_application_traffic_secret);
+   return advance_read_epoch(new_read_application_traffic_secret);
 }
 
-void Cipher_State::update_write_keys() {
+Epoch_Number Cipher_State::update_write_keys() {
    BOTAN_ASSERT_NOMSG(m_state == State::ServerApplicationTraffic || m_state == State::Completed);
    BOTAN_ASSERT_NONNULL(m_hash);
 
@@ -743,20 +750,30 @@ void Cipher_State::update_write_keys() {
    const auto new_write_application_traffic_secret =
       hkdf_expand_label(epoch.traffic_secret, "traffic upd", {}, m_hash->output_length());
 
+   BOTAN_DEBUG_ASSERT(current_write_epoch_number() >= Epoch_Number::ApplicationTraffic_0);
+   const auto app_key_index = current_write_epoch_number() - Epoch_Number::ApplicationTraffic_0;
    const auto secret_label = fmt("{}_TRAFFIC_SECRET_{}",
                                  m_connection_side == Connection_Side::Server ? "SERVER" : "CLIENT",
-                                 ++m_write_key_update_count);
+                                 to_underlying(app_key_index));
    maybe_log_secret(secret_label, new_write_application_traffic_secret);
 
-   advance_write_epoch(new_write_application_traffic_secret);
+   return advance_write_epoch(new_write_application_traffic_secret);
 }
 
-uint64_t Cipher_State::records_encrypted_with_current_key() const {
+uint64_t Cipher_State::current_write_sequence_number() const {
    return latest_write_epoch().sequence_number;
 }
 
-uint64_t Cipher_State::records_decrypted_with_current_key() const {
+uint64_t Cipher_State::current_read_sequence_number() const {
    return latest_read_epoch().sequence_number;
+}
+
+Epoch_Number Cipher_State::current_write_epoch_number() const {
+   return has_write_epoch() ? latest_write_epoch().number : Epoch_Number::Unprotected;
+}
+
+Epoch_Number Cipher_State::current_read_epoch_number() const {
+   return has_read_epoch() ? latest_read_epoch().number : Epoch_Number::Unprotected;
 }
 
 TLS_Cipher_State::TLS_Cipher_State(Connection_Side side, std::string_view prf_algo) :
@@ -764,13 +781,16 @@ TLS_Cipher_State::TLS_Cipher_State(Connection_Side side, std::string_view prf_al
 
 TLS_Cipher_State::~TLS_Cipher_State() = default;
 
-MarshalledRecord TLS_Cipher_State::protect_record(Record_Type type,
-                                                  std::span<const uint8_t> plaintext,
-                                                  size_t padding_bytes) {
+MarshalledRecordAndNumber TLS_Cipher_State::protect_record(Record_Type type,
+                                                           std::span<const uint8_t> plaintext,
+                                                           size_t padding_bytes) {
    BOTAN_ASSERT_NOMSG(m_write_epoch.has_value());
 
    // RFC 8446 5.3
    //    Sequence numbers MUST NOT wrap.
+   // RFC 9147 4.2.1
+   //    Implementations MUST either abandon an association or rekey prior to
+   //    allowing the sequence number to wrap.
    if(m_write_epoch->sequence_number == std::numeric_limits<uint64_t>::max()) {
       throw Invalid_State("TLS write sequence number overflow");
    }
@@ -791,9 +811,11 @@ MarshalledRecord TLS_Cipher_State::protect_record(Record_Type type,
       Protocol_Version::TLS_V12 /* = 0x0303 */,
       checked_cast_to<uint16_t>(protected_record_length(*m_write_epoch, plaintext.size(), padding_bytes)));
 
-   auto result = marshall_and_protect(*m_write_epoch, header, plaintext, type, padding_bytes);
-   ++m_write_epoch->sequence_number;
-   return result;
+   return std::make_pair(marshall_and_protect(*m_write_epoch, header, plaintext, type, padding_bytes),
+                         RecordNumber{
+                            .epoch = m_write_epoch->number,
+                            .sequence_number = m_write_epoch->sequence_number++,
+                         });
 }
 
 Record TLS_Cipher_State::deprotect_record(Record_TLS record, size_t incoming_record_size_limit) {
@@ -836,6 +858,7 @@ Record TLS_Cipher_State::deprotect_record(Record_TLS record, size_t incoming_rec
       .type = Record_Type::Invalid,
       .sequence_number = m_read_epoch->sequence_number++,
       .payload = record.take_payload(),
+      .epoch = std::nullopt,
    };
 
    deprotect_and_hydrate_content_type(*m_read_epoch, record.header(), result, incoming_record_size_limit);
@@ -865,12 +888,18 @@ Record TLS_Cipher_State::deprotect_record(Record_TLS record, size_t incoming_rec
    return annotate_record_type(std::move(result));
 }
 
-void TLS_Cipher_State::advance_write_epoch(const secure_vector<uint8_t>& traffic_secret, bool handshake_epoch) {
-   m_write_epoch = create_epoch(Cipher_Dir::Encryption, traffic_secret, handshake_epoch);
+Epoch_Number TLS_Cipher_State::advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                                   std::optional<Epoch_Number> epoch_number) {
+   const auto next_epoch_number = epoch_number.value_or(current_write_epoch_number() + 1);
+   m_write_epoch = create_epoch(next_epoch_number, Cipher_Dir::Encryption, traffic_secret);
+   return m_write_epoch->number;
 }
 
-void TLS_Cipher_State::advance_read_epoch(const secure_vector<uint8_t>& traffic_secret, bool handshake_epoch) {
-   m_read_epoch = create_epoch(Cipher_Dir::Decryption, traffic_secret, handshake_epoch);
+Epoch_Number TLS_Cipher_State::advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
+                                                  std::optional<Epoch_Number> epoch_number) {
+   const auto next_epoch_number = epoch_number.value_or(current_read_epoch_number() + 1);
+   m_read_epoch = create_epoch(next_epoch_number, Cipher_Dir::Decryption, traffic_secret);
+   return m_read_epoch->number;
 }
 
 void TLS_Cipher_State::clear_write_keys() {
