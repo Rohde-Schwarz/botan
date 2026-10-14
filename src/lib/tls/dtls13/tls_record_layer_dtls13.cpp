@@ -1,0 +1,509 @@
+/*
+* DTLS record layer implementation for DTLS 1.3
+* (C) 2026 Jack Lloyd
+*     2026 Amos Treiber, René Meusel - Rohde & Schwarz Networks and Cybersecurity GmbH
+*
+* Botan is released under the Simplified BSD License (see license.txt)
+*/
+
+#include <botan/internal/tls_record_layer_dtls13.h>
+
+#include <algorithm>
+#include <utility>
+
+#include <botan/assert.h>
+#include <botan/tls_alert.h>
+#include <botan/tls_callbacks.h>
+#include <botan/tls_exceptn.h>
+#include <botan/tls_policy.h>
+#include <botan/tls_version.h>
+#include <botan/internal/buffer_slicer.h>
+#include <botan/internal/buffer_stuffer.h>
+#include <botan/internal/concat_util.h>
+#include <botan/internal/ct_utils.h>
+#include <botan/internal/fmt.h>
+#include <botan/internal/int_utils.h>
+#include <botan/internal/loadstor.h>
+#include <botan/internal/stl_util.h>
+#include <botan/internal/tls_cipher_state_dtls13.h>
+
+namespace Botan::TLS {
+
+namespace {
+
+// RFC 8446 5.2
+//    type:  The TLSPlaintext.type value containing the content type of the record.
+constexpr size_t content_type_tag_length = 1;
+
+bool protection_desired(DTLS_Cipher_State* cipher_state, std::optional<Epoch_Number> record_epoch) {
+   // If the user provided a specific epoch, we protect (or not) based on that
+   // wish. Otherwise, we protect if a cipher_state is provided.
+   if(record_epoch.has_value()) {
+      BOTAN_ASSERT_IMPLICATION(record_epoch.value() > Epoch_Number::Unprotected,
+                               cipher_state != nullptr,
+                               "If the epoch indicates protection, a cipher state must be present");
+      return record_epoch.value() > Epoch_Number::Unprotected;
+   } else {
+      return cipher_state != nullptr;
+   }
+}
+
+}  // namespace
+
+DTLS_Record_Layer::DTLS_Record_Layer(Connection_Side side,
+                                     std::shared_ptr<const Policy> policy,
+                                     std::shared_ptr<Callbacks> callbacks) :
+      Record_Layer(side, std::move(policy), /*receive_compat_mode*/ true), m_callbacks(std::move(callbacks)) {}
+
+bool DTLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) {
+   try {
+      return read_datagram(data_from_peer);
+   } catch(const TLS_Exception& ex) {
+      // RFC 9147 Section 4.5.2
+      //    Unlike TLS, DTLS is resilient in the face of invalid records
+      //    (e.g., invalid formatting, length, MAC, etc.). In general,
+      //    invalid records SHOULD be silently discarded, thus preserving the
+      //    association [...].
+      //
+      // If low-level record parsing failed (i.e., the incoming data looked
+      // syntactically invalid, e.g. truncated), we discard the datagram
+      // regardless of the status of the cryptographic association.
+      //
+      // When the records were syntactically valid, but semantically invalid
+      // (e.g., unknown record type, epoch>0 in unprotected record, etc.), we
+      // might still discard the record, if and only if this connection already
+      // established a cryptographic association. Otherwise, there is nothing
+      // to preserve in the sense of the RFC quote above and we rethrow.
+      //
+      // All of the above are checks that can be performed without access to the
+      // cryptographic key material. Any further checks (e.g., MAC verification)
+      // or checks on the deprotected plaintext are done in `next_record()` and
+      // beyond.
+
+      if(ex.type() == AlertType::DecodeError) {
+         // The incoming data was syntactically invalid => discard.
+         return false;
+      }
+
+      if(has_cryptographic_association) {
+         // We successfully established a cryptographic association with this
+         // peer and, therefore, expect protected communication with only this
+         // peer. Any records recognizable as semantically invalid even before
+         // deprotection are therefore considered an active attack by some other
+         // party and discarded.
+         return false;
+      }
+
+      // We don't have a cryptographic association yet and the incoming data was
+      // syntactically valid but semantically invalid. So there is nothing
+      // to preserve in the sense of the RFC quote above and we abort the
+      // connection attempt.
+      throw;
+   }
+}
+
+bool DTLS_Record_Layer::read_datagram(std::span<const uint8_t> datagram) {
+   BufferSlicer bs(datagram);
+   std::vector<IncomingRecord> records_in_this_datagram;
+
+   // RFC 9147 Section 4.3
+   //    Multiple DTLS records MAY be placed in a single datagram. Records are
+   //    encoded consecutively. [...] The first byte of the datagram payload
+   //    MUST be the beginning of a record. Records MUST NOT span datagrams.
+   while(!bs.empty()) {
+      // RFC 9147 Section 4.1
+      //    If the [...] leading bits of the first byte are 001 [...] the
+      //    implementation MUST process the record as DTLSCiphertext; the true
+      //    content type will be inside the protected portion.
+      const bool is_protected_record = (bs.peek_byte() & 0b11100000) == 0b00100000;
+      if(is_protected_record) {
+         records_in_this_datagram.push_back(read_protected_record(bs));
+      } else {
+         records_in_this_datagram.push_back(read_plaintext_record(bs));
+      }
+   }
+
+   BOTAN_DEBUG_ASSERT(bs.empty());
+
+   // Only commit the records found in the passed-in datagram once the entire
+   // datagram has been successfully processed. This way, records from a
+   // datagram that is later found to be invalid (e.g., due to a bad MAC) will
+   // not be added to the read buffer.
+   m_incoming_records.insert(m_incoming_records.end(),
+                             std::make_move_iterator(records_in_this_datagram.begin()),
+                             std::make_move_iterator(records_in_this_datagram.end()));
+
+   return true;
+}
+
+PlaintextRecord_DTLS DTLS_Record_Layer::read_plaintext_record(BufferSlicer& bs) {
+   auto header = PlaintextHeader_DTLS::parse(bs);
+   if(bs.remaining() < header.length) {
+      throw TLS_Exception(AlertType::DecodeError, "Received DTLSPlaintext with truncated payload");
+   }
+
+   // RFC 9147 Section 4.
+   //    legacy_record_version: This value MUST be set to {254, 253} for all
+   //    records other than the initial ClientHello (i.e., one not generated
+   //    after a HelloRetryRequest), where it may also be {254, 255} for
+   //    compatibility purposes.
+   //
+   // TODO: Does it really make sense to make this rely on m_receiving_compat_mode of TLS?
+   // In that case, m_receiving_compat_mode can move to just the TLS impl.
+   if(header.legacy_version != Protocol_Version::DTLS_V12 &&
+      (header.legacy_version != Protocol_Version::DTLS_V10 || !receiving_compat_mode())) {
+      throw TLS_Exception(Alert::IllegalParameter, "Received unexpected record version");
+   }
+
+   return {
+      .header = header,
+      .payload = bs.copy_as_secure_vector(header.length),
+   };
+}
+
+ProtectedRecord_DTLS DTLS_Record_Layer::read_protected_record(BufferSlicer& bs) {
+   auto unified_header = UnifiedHeader_DTLS::parse(bs, std::nullopt /* CID NYI */);
+
+   // RFC 9147 Section 4.3
+   //    The length field from DTLS records containing that field can be
+   //    used to determine the boundaries between records. The final
+   //    record in a datagram can omit the length field.
+   //
+   // RFC 9147 Section 4.
+   //    The length field MAY be omitted [...], which means that the
+   //    record consumes the entire rest of the datagram in the lower
+   //    level transport.
+   const auto fragment_length = unified_header.length.value_or(checked_cast_to<uint16_t>(bs.remaining()));
+
+   // RFC 9147 Section 4.2.3
+   //    [The sequence number deprotection procedure] requires the ciphertext
+   //    length to be at least 16 bytes. Receivers MUST reject shorter records
+   //    as if they had failed deprotection.
+   //
+   // We throw a DecodeError here, which will lead to the datagram being
+   // discarded by the DTLS_Record_Layer (as if it failed deprotection).
+   if(fragment_length < 16) {
+      throw TLS_Exception(Alert::DecodeError, "Received an encrypted record that is too short");
+   }
+
+   // - - - - - -  - - - - - -  - - - - - -  - - - - - -  - - - - - -  - - - - -
+   // After this point we're sure that the input buffer contained something that
+   // roughly resembles a DTLSCiphertext record. Below we're checking the
+   // semantics of the record header's fields as far as we can.
+   //
+   // * Any of the Decode_Errors above would lead to the input datagram being
+   //   discarded by the DTLS_Record_Layer, and
+   // * Any other errors below would lead to the connection being terminated
+   //   with an alert.
+   //
+
+   // RFC 8449 Section 4
+   //    a DTLS endpoint that receives a record larger than its advertised
+   //    limit MAY either generate a fatal "record_overflow" alert or
+   //    discard the record.
+   //
+   // We reject records that would exceed the maximum allowed size after
+   // deprotection for sure (the AEAD can only add up to 255 bytes).
+   if(fragment_length + unified_header.serialized_byte_length() >
+      incoming_record_size_limit() + MAX_AEAD_EXPANSION_SIZE_TLS13) {
+      throw TLS_Exception(Alert::RecordOverflow, "Received a datagram that exceeds maximum size");
+   }
+
+   return {
+      .header = std::move(unified_header),
+      .payload = bs.copy_as_secure_vector(fragment_length),
+   };
+}
+
+DTLS_Record_Layer::IncomingRecord DTLS_Record_Layer::next_incoming_record() {
+   BOTAN_STATE_CHECK(!m_incoming_records.empty());
+
+   auto next_record = std::move(m_incoming_records.front());
+   m_incoming_records.erase(m_incoming_records.begin());
+   return next_record;
+}
+
+Replay_Window_13& DTLS_Record_Layer::replay_window_for_epoch(Epoch_Number epoch) {
+   auto it = m_replay_windows.find(epoch);
+   if(it == m_replay_windows.end()) {
+      it = m_replay_windows.emplace(epoch, Replay_Window_13()).first;
+   }
+   return it->second;
+}
+
+Record_Layer::ReadResult DTLS_Record_Layer::next_record(Cipher_State* cipher_state) {
+   auto* cs = as_dtls_cipher_state(cipher_state);
+
+   while(!m_incoming_records.empty()) {
+      const auto current_read_epoch = cs != nullptr ? cs->current_read_epoch_number() : Epoch_Number::Unprotected;
+
+      auto maybe_next_record = std::visit(  //
+         overloaded{
+            [&](PlaintextRecord_DTLS record) -> std::optional<Record> {
+               // RFC 9147 4.2.1
+               //    Implementations SHOULD discard records from earlier epochs
+               //    [...].
+               //
+               // RFC 9147 7.
+               //    During the handshake, ACK records MUST be sent with an
+               //    epoch which is equal to or higher than the record which is
+               //    being acknowledged.
+               //
+               // Hence, we reject all plaintext records after establishing a
+               // cryptographic association. However, we do allow ACK records
+               // in plaintext (epoch 0) until we established a post-handshake
+               // cryptographic association (epoch 3). This allows the peer to
+               // ACK any unprotected records we might have retransmitted.
+               const bool should_discard_plaintext_record = [&] {
+                  if(record.header.type == Record_Type::ACK) {
+                     return current_read_epoch >= Epoch_Number::ApplicationTraffic_0;
+                  } else {
+                     return current_read_epoch > Epoch_Number::Unprotected;
+                  }
+               }();
+
+               if(should_discard_plaintext_record) {
+                  return std::nullopt;
+               }
+
+               return annotate_record_type({
+                  .type = record.header.type,
+                  .sequence_number = record.header.sequence_number,
+                  .payload = std::move(record.payload),
+                  .epoch = Epoch_Number::Unprotected,  // ossified (RFC 9147 Section 4 Figure 2)
+               });
+            },
+            [&](ProtectedRecord_DTLS record) -> std::optional<Record> {
+               // RFC 9147 Section 4.5.2
+               //     In general, invalid records SHOULD be silently discarded
+               //     [...].
+               //
+               // We received a protected record but don't have a cryptographic
+               // association yet, so we can't deprotect it.
+               if(current_read_epoch == Epoch_Number::Unprotected) {
+                  return std::nullopt;
+               }
+
+               return cs->deprotect_record(std::move(record), incoming_record_size_limit());
+            },
+         },
+         next_incoming_record());
+
+      if(maybe_next_record.has_value()) {
+         std::visit(
+            [&](const auto& record) {
+               BOTAN_DEBUG_ASSERT(record.epoch.has_value() && record.sequence_number.has_value());
+
+               // RFC 9147 Section 4.5.1
+               //    For each received record, the receiver MUST verify that the
+               //    record contains a sequence number that does not duplicate the
+               //    sequence number of any other record received in that epoch during
+               //    the lifetime of the association. This check SHOULD happen after
+               //    deprotecting the record; otherwise, the record discard might
+               //    itself serve as a timing channel for the record number.
+               auto& window = replay_window_for_epoch(record.epoch.value());
+               if(!window.accept(record.sequence_number.value())) {
+                  maybe_next_record.reset();
+               }
+            },
+            *maybe_next_record);
+      }
+
+      if(maybe_next_record.has_value()) {
+         return generalize_to<ReadResult>(std::move(maybe_next_record).value());
+      }
+   }
+
+   return BytesNeeded(0);
+}
+
+MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(Record_Type type,
+                                                            std::span<const uint8_t> data,
+                                                            Cipher_State* cipher_state,
+                                                            std::optional<Epoch_Number> epoch) {
+   auto* cs = as_dtls_cipher_state(cipher_state);
+
+   // RFC 8446 5.1
+   //    The length MUST NOT exceed 2^14 bytes.
+   //
+   // We deliberately do not check against record_payload_size_limit() here,
+   // because this would take the configured MTU into account. We won't stop the
+   // user from sending larger records than their configuration allows.
+   BOTAN_ASSERT_NOMSG(data.size() <= MAX_PLAINTEXT_SIZE);
+   BOTAN_ASSERT_NOMSG(type != Record_Type::ChangeCipherSpec);
+
+   const bool protect = protection_desired(cs, epoch);
+
+   // RFC 9846 5.1
+   //    Application Data messages are always protected.
+   BOTAN_ASSERT_IMPLICATION(type == Record_Type::ApplicationData,
+                            cs != nullptr,
+                            "Application Data records MUST NOT be written to the wire unprotected");
+
+   // RFC 9846 5.1
+   //    Implementations MUST NOT send zero-length fragments of Handshake types,
+   //    even if those fragments contain padding. [...] a record with an Alert
+   //    type MUST contain exactly one message. [...] Zero-length fragments of
+   //    Application Data [...] MAY be sent, as they are potentially useful as a
+   //    traffic analysis countermeasure.
+   BOTAN_ASSERT_IMPLICATION(data.empty(),
+                            type == Record_Type::ApplicationData,
+                            "Zero-length fragments are only allowed for Application Data");
+
+   if(!protect) {
+      // RFC 9147 Section 4 (3.)
+      //    The sequence number is set to be the low order 48 bits of the 64 bit
+      //    sequence number. Plaintext records MUST NOT be sent with sequence
+      //    numbers that would exceed 2^48-1, so the upper 16 bits will always be 0.
+      BOTAN_ASSERT_NOMSG(m_unprotected_write_seq_no < (uint64_t(1) << 48) - 1);
+
+      // Currently, the Record_Layer handles sequence numbers for unprotected
+      // records. For protected records this is handled by the Cipher_State, which
+      // feels somewhat inconsistent.
+      //
+      // TODO: evaluate if we find a better way to handle the sequence numbers.
+      const auto write_seq_no = m_unprotected_write_seq_no++;
+
+      const auto header = PlaintextHeader_DTLS{
+         .type = type,
+         .legacy_version = Protocol_Version::DTLS_V12,  // TODO: perhaps use V10 for first message (compatibility)
+         // .epoch = Epoch_Number::Unprotected, // ossified (RFC 9147 Section 4 Figure 2)
+         .sequence_number = write_seq_no,
+         .length = static_cast<uint16_t>(data.size()),
+      };
+
+      return {
+         concat<MarshalledRecord>(header.serialize(), data),
+         {
+            .epoch = Epoch_Number::Unprotected,
+            .sequence_number = write_seq_no,
+         },
+      };
+   } else {
+      BOTAN_DEBUG_ASSERT(!epoch.has_value() || *epoch > Epoch_Number::Unprotected);
+
+      const size_t pt_size_with_type_tag = data.size() + content_type_tag_length;
+      const size_t max_record_size = outgoing_record_size_limit();
+
+      // Don't even bother consulting the policy if we already filled the
+      // record fully, because then we can't add any padding anyway.
+      // If the user requests more padding than we can actually add, we will
+      // truncate the padding to fill up the record entirely.
+      //
+      // TODO: This is very similar to TLS, consider extracting it.
+      const size_t padding_length =
+         (pt_size_with_type_tag < max_record_size)
+            ? std::min(policy().record_padding_bytes(pt_size_with_type_tag), max_record_size - pt_size_with_type_tag)
+            : 0;
+      BOTAN_ASSERT_NOMSG(pt_size_with_type_tag + padding_length <= max_record_size);
+
+      return cs->protect_record(type, data, padding_length, epoch);
+   }
+}
+
+MarshalledRecordAndNumber DTLS_Record_Layer::prepare_handshake_record(PackedHandshakeMessageFragments packed_fragments,
+                                                                      Cipher_State* cipher_state,
+                                                                      std::optional<Epoch_Number> epoch) {
+   BOTAN_ASSERT_NOMSG(packed_fragments.size() <= record_payload_size_limit(policy(), cipher_state, epoch));
+
+   auto marshalled_record_and_number = prepare_record(Record_Type::Handshake, packed_fragments, cipher_state, epoch);
+   m_unacked_outgoing_handshake_records.push_back({
+      .record_numbers = {marshalled_record_and_number.second},
+      .packed_fragments = std::move(packed_fragments),
+   });
+
+   return marshalled_record_and_number;
+}
+
+std::vector<MarshalledRecord> DTLS_Record_Layer::prepare_unacknowledged_records(Cipher_State* cipher_state) {
+   std::vector<MarshalledRecord> prepared_records;
+   prepared_records.reserve(m_unacked_outgoing_handshake_records.size());
+
+   for(auto& record_info : m_unacked_outgoing_handshake_records) {
+      auto [marshalled_record, retransmission_record_number] = prepare_record(
+         Record_Type::Handshake, record_info.packed_fragments, cipher_state, record_info.record_numbers.back().epoch);
+      record_info.record_numbers.push_back(retransmission_record_number);
+      prepared_records.push_back(std::move(marshalled_record));
+   }
+
+   return prepared_records;
+}
+
+uint16_t DTLS_Record_Layer::record_payload_size_limit(const Policy& policy,
+                                                      Cipher_State* cipher_state,
+                                                      std::optional<Epoch_Number> epoch) const {
+   auto* cs = as_dtls_cipher_state(cipher_state);
+
+   const auto mtu = policy.dtls_default_mtu();
+   const auto overhead = [&]() -> size_t {
+      if(!protection_desired(cs, epoch)) {
+         return DTLS_HEADER_SIZE;
+      } else {
+         constexpr size_t content_type_length = 1;
+         // This assumes no padding is needed for the cipher, so for CCM we lose a
+         // few bytes of the maximum possible size limit.
+         const size_t tag_length = cs->encrypt_output_length(0);
+         return UnifiedHeader_DTLS::expected_length(policy, std::nullopt /* TODO: support CID */) +
+                content_type_length + tag_length;
+      }
+   }();
+
+   // Cap the record payload at the specified hard limit if the user-provided MTU
+   // is exorbitantly large.
+   return static_cast<uint16_t>(std::min<size_t>(MAX_PLAINTEXT_SIZE, mtu - overhead));
+}
+
+void DTLS_Record_Layer::clear_read_buffer() {
+   m_incoming_records.clear();
+}
+
+void DTLS_Record_Layer::acknowledge_handshake_record(RecordNumber record_number) {
+   m_record_numbers_to_ack.emplace_back(record_number);
+
+   // RFC 9147 Section 7.1
+   //    If space is limited, implementations SHOULD favor including records
+   //    which have not yet been acknowledged.
+   //
+   // Hence, we retain only the most recently received record numbers.
+   if(m_record_numbers_to_ack.size() > policy().dtls_maximum_queued_acknowledgements()) {
+      m_record_numbers_to_ack.erase(m_record_numbers_to_ack.begin());
+   }
+}
+
+bool DTLS_Record_Layer::has_outstanding_acknowledgements() const {
+   return !m_record_numbers_to_ack.empty();
+}
+
+ACKs DTLS_Record_Layer::acknowledgements() const {
+   return ACKs(m_record_numbers_to_ack);
+}
+
+bool DTLS_Record_Layer::handle_acknowledgements(const ACKs& acks) {
+   std::erase_if(m_unacked_outgoing_handshake_records, [&](const auto& record_info) {
+      return std::any_of(
+         acks.record_numbers().begin(), acks.record_numbers().end(), [&](const auto& acked_record_number) {
+            return value_exists(record_info.record_numbers, acked_record_number);
+         });
+   });
+   return !has_unacknowledged_records();
+}
+
+bool DTLS_Record_Layer::has_unacknowledged_record(const RecordNumber& record_number) const {
+   return std::any_of(m_unacked_outgoing_handshake_records.begin(),
+                      m_unacked_outgoing_handshake_records.end(),
+                      [&](const auto& record_info) { return value_exists(record_info.record_numbers, record_number); });
+}
+
+bool DTLS_Record_Layer::has_unacknowledged_records() const {
+   return !m_unacked_outgoing_handshake_records.empty();
+}
+
+void DTLS_Record_Layer::clear_resend_buffer() {
+   m_unacked_outgoing_handshake_records.clear();
+}
+
+void DTLS_Record_Layer::clear_outstanding_acknowledgements() {
+   m_record_numbers_to_ack.clear();
+}
+
+}  // namespace Botan::TLS
