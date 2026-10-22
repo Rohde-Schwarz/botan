@@ -74,6 +74,8 @@ class DTLS_Channel_IO final : public Channel_IO,
       std::optional<RecordNumber> m_pending_key_update_record;
 
       bool m_dtls_version_committed = false;
+
+      secure_vector<uint8_t> m_outgoing_datagram;
 };
 
 }  // namespace Botan::TLS

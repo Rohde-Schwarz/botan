@@ -314,11 +314,12 @@ Record_Layer::ReadResult DTLS_Record_Layer::next_record(Cipher_State* cipher_sta
    return BytesNeeded(0);
 }
 
-MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(const Policy& policy,
-                                                            Record_Type type,
-                                                            std::span<const uint8_t> data,
-                                                            Cipher_State* cipher_state,
-                                                            std::optional<EpochNumber> epoch) {
+RecordNumber DTLS_Record_Layer::prepare_record(Record_Type type,
+                                               std::span<const uint8_t> payload,
+                                               const Policy& policy,
+                                               Cipher_State* cipher_state,
+                                               secure_vector<uint8_t>& out,
+                                               std::optional<EpochNumber> epoch) {
    auto* cs = as_dtls_cipher_state(cipher_state);
 
    // RFC 8446 5.1
@@ -327,7 +328,7 @@ MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(const Policy& policy
    // We deliberately do not check against record_payload_size_limit() here,
    // because this would take the configured MTU into account. We won't stop the
    // user from sending larger records than their configuration allows.
-   BOTAN_ASSERT_NOMSG(data.size() <= MAX_PLAINTEXT_SIZE);
+   BOTAN_ASSERT_NOMSG(payload.size() <= MAX_PLAINTEXT_SIZE);
    BOTAN_ASSERT_NOMSG(type != Record_Type::ChangeCipherSpec);
 
    const bool protect = protection_desired(cs, epoch);
@@ -344,7 +345,7 @@ MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(const Policy& policy
    //    type MUST contain exactly one message. [...] Zero-length fragments of
    //    Application Data [...] MAY be sent, as they are potentially useful as a
    //    traffic analysis countermeasure.
-   BOTAN_ASSERT_IMPLICATION(data.empty(),
+   BOTAN_ASSERT_IMPLICATION(payload.empty(),
                             type == Record_Type::ApplicationData,
                             "Zero-length fragments are only allowed for Application Data");
 
@@ -367,20 +368,20 @@ MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(const Policy& policy
          .legacy_version = Protocol_Version::DTLS_V12,  // TODO: perhaps use V10 for first message (compatibility)
          // .epoch = EpochNumber::Unprotected, // ossified (RFC 9147 Section 4 Figure 2)
          .sequence_number = write_seq_no,
-         .length = static_cast<uint16_t>(data.size()),
+         .length = static_cast<uint16_t>(payload.size()),
       };
 
+      append(out, header.serialize());
+      append(out, payload);
+
       return {
-         concat<MarshalledRecord>(header.serialize(), data),
-         {
-            .epoch = EpochNumber::Unprotected,
-            .sequence_number = write_seq_no,
-         },
+         .epoch = EpochNumber::Unprotected,
+         .sequence_number = write_seq_no,
       };
    } else {
       BOTAN_DEBUG_ASSERT(!epoch.has_value() || *epoch > EpochNumber::Unprotected);
 
-      const size_t pt_size_with_type_tag = data.size() + content_type_tag_length;
+      const size_t pt_size_with_type_tag = payload.size() + content_type_tag_length;
       const size_t max_record_size = outgoing_record_size_limit();
 
       // Don't even bother consulting the policy if we already filled the
@@ -395,24 +396,25 @@ MarshalledRecordAndNumber DTLS_Record_Layer::prepare_record(const Policy& policy
             : 0;
       BOTAN_ASSERT_NOMSG(pt_size_with_type_tag + padding_length <= max_record_size);
 
-      return cs->protect_record(type, data, padding_length, epoch);
+      return cs->protect_record(type, payload, padding_length, out, epoch);
    }
 }
 
-MarshalledRecordAndNumber DTLS_Record_Layer::prepare_handshake_record(PackedHandshakeMessageFragments packed_fragments,
-                                                                      const Policy& policy,
-                                                                      Cipher_State* cipher_state,
-                                                                      std::optional<EpochNumber> epoch) {
+RecordNumber DTLS_Record_Layer::prepare_handshake_record(PackedHandshakeMessageFragments packed_fragments,
+                                                         secure_vector<uint8_t>& out,
+                                                         const Policy& policy,
+                                                         Cipher_State* cipher_state,
+                                                         std::optional<EpochNumber> epoch) {
    BOTAN_ASSERT_NOMSG(packed_fragments.size() <= record_payload_size_limit(policy, cipher_state, epoch));
 
-   auto marshalled_record_and_number =
-      prepare_record(policy, Record_Type::Handshake, packed_fragments, cipher_state, epoch);
+   const auto record_number =
+      prepare_record(Record_Type::Handshake, packed_fragments, policy, cipher_state, out, epoch);
    m_unacked_outgoing_handshake_records.push_back({
-      .record_numbers = {marshalled_record_and_number.second},
+      .record_numbers = {record_number},
       .packed_fragments = std::move(packed_fragments),
    });
 
-   return marshalled_record_and_number;
+   return record_number;
 }
 
 std::vector<MarshalledRecord> DTLS_Record_Layer::prepare_unacknowledged_records(const Policy& policy,
@@ -421,13 +423,13 @@ std::vector<MarshalledRecord> DTLS_Record_Layer::prepare_unacknowledged_records(
    prepared_records.reserve(m_unacked_outgoing_handshake_records.size());
 
    for(auto& record_info : m_unacked_outgoing_handshake_records) {
-      auto [marshalled_record, retransmission_record_number] = prepare_record(policy,
-                                                                              Record_Type::Handshake,
-                                                                              record_info.packed_fragments,
-                                                                              cipher_state,
-                                                                              record_info.record_numbers.back().epoch);
-      record_info.record_numbers.push_back(retransmission_record_number);
-      prepared_records.push_back(std::move(marshalled_record));
+      auto& out = prepared_records.emplace_back();
+      record_info.record_numbers.push_back(prepare_record(Record_Type::Handshake,
+                                                          record_info.packed_fragments,
+                                                          policy,
+                                                          cipher_state,
+                                                          out.get(),
+                                                          record_info.record_numbers.back().epoch));
    }
 
    return prepared_records;

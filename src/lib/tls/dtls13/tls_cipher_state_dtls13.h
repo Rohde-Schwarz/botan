@@ -41,13 +41,16 @@ class DTLS_Cipher_State final : public Cipher_State {
        * @param payload        the record plaintext to be protected in-place
        * @param padding_bytes  the number of padding zero-bytes to be added
        * @param epoch          the optional epoch number to use for protection
+       * @param out            the marshalled and protected record (to be sent
+       *                       on the wire) is appended to this buffer
        *
-       * @returns the marshalled and protected record to be sent on the wire
+       * @returns the sequence number of the record that was just protected
        */
-      MarshalledRecordAndNumber protect_record(Record_Type type,
-                                               std::span<const uint8_t> payload,
-                                               size_t padding_bytes,
-                                               std::optional<EpochNumber> epoch = std::nullopt);
+      RecordNumber protect_record(Record_Type type,
+                                  std::span<const uint8_t> payload,
+                                  size_t padding_bytes,
+                                  secure_vector<uint8_t>& out,
+                                  std::optional<EpochNumber> epoch = std::nullopt);
 
       /**
        * Deprotect a DTLS record using the traffic secret keys and the current

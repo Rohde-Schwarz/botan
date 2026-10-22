@@ -52,11 +52,12 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
 
       ReadResult next_record(Cipher_State* cipher_state = nullptr) override;
 
-      MarshalledRecordAndNumber prepare_record(const Policy& policy,
-                                               Record_Type type,
-                                               std::span<const uint8_t> data,
-                                               Cipher_State* cipher_state,
-                                               std::optional<EpochNumber> epoch = std::nullopt) override;
+      RecordNumber prepare_record(Record_Type type,
+                                  std::span<const uint8_t> payload,
+                                  const Policy& policy,
+                                  Cipher_State* cipher_state,
+                                  secure_vector<uint8_t>& out,
+                                  std::optional<EpochNumber> epoch = std::nullopt) override;
 
       /**
        * Prepares a single handshake record from a payload containing one or
@@ -65,15 +66,17 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
        *
        * @param packed_fragments  the marshalled handshake message fragments
        *                          to be packed into the record
+       * @param out               the output buffer to write the record into
        * @param policy            the policy to use for this record
        * @param cipher_state      the cipher state to protect the record with
        * @param epoch             the epoch to send the record in; if not
        *                          provided, the current write epoch is used
        */
-      MarshalledRecordAndNumber prepare_handshake_record(PackedHandshakeMessageFragments packed_fragments,
-                                                         const Policy& policy,
-                                                         Cipher_State* cipher_state,
-                                                         std::optional<EpochNumber> epoch = std::nullopt);
+      RecordNumber prepare_handshake_record(PackedHandshakeMessageFragments packed_fragments,
+                                            secure_vector<uint8_t>& out,
+                                            const Policy& policy,
+                                            Cipher_State* cipher_state,
+                                            std::optional<EpochNumber> epoch = std::nullopt);
 
       /**
        * Re-prepares all records that are currently not acknowledged by the

@@ -81,7 +81,7 @@ std::optional<Channel_IO::ReceiveEvent> Channel_IO::next_pending_handshake_messa
 
       return std::move(handshake_msg).value();
    } else {
-      auto post_handshake_msg = hs_layer.next_post_handshake_message(*m_policy);
+      auto post_handshake_msg = hs_layer.next_post_handshake_message(policy());
       if(!post_handshake_msg.has_value()) {
          return std::nullopt;
       }

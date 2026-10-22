@@ -148,6 +148,9 @@ RecordNumber TLS_Record_Layer::prepare_record(Record_Type type,
                             cs != nullptr,
                             "Application Data records MUST NOT be written to the wire unprotected");
 
+   BOTAN_ARG_CHECK(type != Record_Type::ChangeCipherSpec || verify_change_cipher_spec(payload),
+                   "TLS 1.3 deprecated CHANGE_CIPHER_SPEC");
+
    // RFC 9846 5.1
    //    Implementations MUST NOT send zero-length fragments of Handshake types,
    //    even if those fragments contain padding. [...] a record with an Alert

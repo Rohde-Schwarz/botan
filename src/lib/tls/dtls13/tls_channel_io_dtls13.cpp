@@ -39,14 +39,24 @@ DTLS_Channel_IO::DTLS_Channel_IO(Connection_Side side,
       Channel_IO(side, std::move(policy_ptr), callbacks),
       m_record_layer(side),
       m_handshake_layer(side),
-      m_retransmission_timer(policy(), std::move(callbacks)) {}
+      m_retransmission_timer(policy(), std::move(callbacks)) {
+   // In DTLS we flush out the payload one datagram at a time. Hence, the output
+   // buffer is capped to the application-defined MTU or the maximum record
+   // length if the application provides a larger MTU.
+   m_outgoing_datagram.reserve(std::min(policy().dtls_default_mtu(), to_underlying(MAX_CIPHERTEXT_SIZE_TLS13)));
+}
 
 void DTLS_Channel_IO::send_data(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) {
-   const auto [prepared_record, _] = m_record_layer.prepare_record(policy(), record_type, payload, cipher_state);
-   callbacks().tls_emit_data(prepared_record);
+   BOTAN_STATE_CHECK(m_outgoing_datagram.empty());
+
+   std::ignore = m_record_layer.prepare_record(record_type, payload, policy(), cipher_state, m_outgoing_datagram);
+   callbacks().tls_emit_data(m_outgoing_datagram);
+   m_outgoing_datagram.clear();
 }
 
 void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
+   BOTAN_STATE_CHECK(m_outgoing_datagram.empty());
+
    // RFC 9147 Section 4.3
    //    DTLS messages MAY be fragmented into multiple DTLS records. Each DTLS
    //    record MUST fit within a single datagram. [...] Multiple DTLS records
@@ -62,7 +72,6 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
    // handshake header to make progress.
    constexpr size_t min_fragment_size = DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH + 1;
 
-   std::vector<uint8_t> current_datagram;                   // datagram currently being packed with records
    PackedHandshakeMessageFragments current_record_payload;  // record currently being packed with fragments
    std::optional<EpochNumber> current_record_epoch;
 
@@ -73,17 +82,19 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
          return;
       }
 
-      auto [record, _record_number] = record_layer().prepare_handshake_record(
-         std::exchange(current_record_payload, {}), policy(), cipher_state().get(), current_record_epoch);
-      current_datagram.insert(current_datagram.end(), record.begin(), record.end());
+      record_layer().prepare_handshake_record(std::exchange(current_record_payload, {}),
+                                              m_outgoing_datagram,
+                                              policy(),
+                                              cipher_state().get(),
+                                              current_record_epoch);
    };
 
    // Seals the pending record and emits the pending datagram.
    const auto flush_datagram = [&]() {
       flush_record();
-      if(!current_datagram.empty()) {
-         callbacks().tls_emit_data(current_datagram);
-         current_datagram.clear();
+      if(!m_outgoing_datagram.empty()) {
+         callbacks().tls_emit_data(m_outgoing_datagram);
+         m_outgoing_datagram.clear();
       }
    };
 
@@ -113,7 +124,7 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
       // records already packed into the pending datagram into account. If not
       // even a minimal fragment fits, the pending record (and with it the
       // pending datagram) is full.
-      const size_t packed_bytes = current_datagram.size() + current_record_payload.size();
+      const size_t packed_bytes = m_outgoing_datagram.size() + current_record_payload.size();
       if(packed_bytes + min_fragment_size > record_payload_limit) {
          flush_datagram();
       }
@@ -122,13 +133,16 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
       // in the pending record; all further fragments may fill up entire
       // records.
       const auto first_fragment_size =
-         static_cast<uint16_t>(record_payload_limit - current_datagram.size() - current_record_payload.size());
+         static_cast<uint16_t>(record_payload_limit - m_outgoing_datagram.size() - current_record_payload.size());
 
+      // TODO: This could be optimized with an out-param to avoid allocation
+      //       and copy for each fragment. I.e. just hand it a reference to
+      //       `current_record_payload` and let it append the fragment directly.
       const auto fragments = handshake_layer().fragment_message(
          msg_info->wire_type, msg_info->serialized, static_cast<uint16_t>(record_payload_limit), first_fragment_size);
 
       for(const auto& fragment : fragments) {
-         if(current_datagram.size() + current_record_payload.size() + fragment.size() > record_payload_limit) {
+         if(m_outgoing_datagram.size() + current_record_payload.size() + fragment.size() > record_payload_limit) {
             // The pending record (and with it the pending datagram) is full.
             flush_datagram();
          }
@@ -188,6 +202,7 @@ void DTLS_Channel_IO::schedule_read_epoch_pruning(EpochNumber latest_epoch) {
 
 void DTLS_Channel_IO::send_key_update(const Key_Update& msg) {
    BOTAN_STATE_CHECK(!has_unacknowledged_key_update());
+   BOTAN_STATE_CHECK(m_outgoing_datagram.empty());
 
    const auto serialized_key_update = Handshake_Layer::serialize(msg);
    auto msg_bytes =
@@ -196,10 +211,14 @@ void DTLS_Channel_IO::send_key_update(const Key_Update& msg) {
                                          DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH + serialized_key_update.size());
 
    BOTAN_ASSERT_NOMSG(msg_bytes.size() == 1);  // KeyUpdate is small enough to always fit into a single fragment
-   const auto [prepared_record, record_number] = record_layer().prepare_handshake_record(
-      PackedHandshakeMessageFragments(std::move(msg_bytes.front())), policy(), cipher_state().get());
+   const auto record_number =
+      record_layer().prepare_handshake_record(PackedHandshakeMessageFragments(std::move(msg_bytes.front())),
+                                              m_outgoing_datagram,
+                                              policy(),
+                                              cipher_state().get());
 
-   callbacks().tls_emit_data(prepared_record);
+   callbacks().tls_emit_data(m_outgoing_datagram);
+   m_outgoing_datagram.clear();
 
    // RFC 9147 8.
    //    [...]  KeyUpdates MUST be acknowledged. In order to facilitate epoch

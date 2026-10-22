@@ -105,10 +105,11 @@ DTLS_Cipher_State::DTLS_Cipher_State(Connection_Side side, std::string_view prf_
 
 DTLS_Cipher_State::~DTLS_Cipher_State() = default;
 
-std::pair<MarshalledRecord, RecordNumber> DTLS_Cipher_State::protect_record(Record_Type type,
-                                                                            std::span<const uint8_t> payload,
-                                                                            size_t padding_bytes,
-                                                                            std::optional<EpochNumber> epoch_number) {
+RecordNumber DTLS_Cipher_State::protect_record(Record_Type type,
+                                               std::span<const uint8_t> payload,
+                                               size_t padding_bytes,
+                                               secure_vector<uint8_t>& out,
+                                               std::optional<EpochNumber> epoch_number) {
    BOTAN_ASSERT_NOMSG(!m_write_epochs.empty());
    BOTAN_ARG_CHECK(!epoch_number.has_value() || *epoch_number > EpochNumber::Unprotected,
                    "epoch_number must implicate record protection");
@@ -164,22 +165,22 @@ std::pair<MarshalledRecord, RecordNumber> DTLS_Cipher_State::protect_record(Reco
 
    // 3. Marshall and protect the record
 
-   MarshalledRecord result;
-   marshall_and_protect(epoch, unified_header.serialize(), payload, type, padding_bytes, result.get());
+   const auto marshalled_record =
+      marshall_and_protect(epoch, unified_header.serialize(), payload, type, padding_bytes, out);
 
    // 4. Mask seq bytes (RFC 9147 Section 4.2.3 Record Number Encryption) and
    //    render the header into the output buffer
 
    const size_t header_size = unified_header.serialized_byte_length();
+   BOTAN_ASSERT_NOMSG(marshalled_record.size() >= header_size);
    unified_header.sequence_number = xor_record_sequence_number(
-      epoch, ciphersuite(), std::span{result}.subspan(header_size), unified_header.sequence_number);
-   unified_header.serialize_to(std::span{result}.first(header_size));
+      epoch, ciphersuite(), marshalled_record.subspan(header_size), unified_header.sequence_number);
+   unified_header.serialize_to(marshalled_record.first(header_size));
 
-   return std::make_pair(std::move(result),
-                         RecordNumber{
-                            .epoch = epoch.number,
-                            .sequence_number = epoch.sequence_number++,
-                         });
+   return {
+      .epoch = epoch.number,
+      .sequence_number = epoch.sequence_number++,
+   };
 }
 
 std::optional<Record> DTLS_Cipher_State::deprotect_record(ProtectedRecord_DTLS record,
@@ -272,14 +273,6 @@ std::optional<Record> DTLS_Cipher_State::deprotect_record(ProtectedRecord_DTLS r
    return annotate_record_type(std::move(result));
 }
 
-namespace {
-
-EpochNumber operator+(EpochNumber current, size_t offset) {
-   return static_cast<EpochNumber>(to_underlying(current) + offset);
-}
-
-}  // namespace
-
 DTLS_Cipher_State::Epoch DTLS_Cipher_State::create_dtls_epoch(EpochNumber epoch_number,
                                                               Cipher_Dir direction,
                                                               const secure_vector<uint8_t>& traffic_secret) {
@@ -292,14 +285,14 @@ DTLS_Cipher_State::Epoch DTLS_Cipher_State::create_dtls_epoch(EpochNumber epoch_
 }
 
 EpochNumber DTLS_Cipher_State::advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
-                                                    std::optional<EpochNumber> epoch_number) {
+                                                   std::optional<EpochNumber> epoch_number) {
    const auto next_epoch_number = epoch_number.value_or(current_write_epoch_number() + 1);
    m_write_epochs.push_back(create_dtls_epoch(next_epoch_number, Cipher_Dir::Encryption, traffic_secret));
    return next_epoch_number;
 }
 
 EpochNumber DTLS_Cipher_State::advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
-                                                   std::optional<EpochNumber> epoch_number) {
+                                                  std::optional<EpochNumber> epoch_number) {
    const auto next_epoch_number = epoch_number.value_or(current_read_epoch_number() + 1);
    m_read_epochs.push_back(create_dtls_epoch(next_epoch_number, Cipher_Dir::Decryption, traffic_secret));
    return next_epoch_number;

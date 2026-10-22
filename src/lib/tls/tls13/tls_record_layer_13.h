@@ -18,12 +18,10 @@
 #include <botan/internal/tls_record_13.h>
 #include <botan/internal/tls_types_13.h>
 #include <deque>
-#include <memory>
 #include <span>
 
 namespace Botan::TLS {
 
-class Callbacks;
 class Cipher_State;
 class Policy;
 
@@ -88,9 +86,9 @@ class BOTAN_TEST_API Record_Layer {
        * The payload passed into this function must fit into a single record,
        * @sa record_payload_size_limit() for the maximum allowed payload size.
        *
+       * @param policy        The TLS policy for record size constraints
        * @param type          The type of the record to be prepared.
        * @param payload       The plaintext payload to be included in the record.
-       * @param policy        The TLS policy for record size constraints
        * @param cipher_state  If not nullptr, the record will be encrypted using
        *                      this cipher state. Pass nullptr to prepare a
        *                      plaintext record.
@@ -193,6 +191,11 @@ class TLS_Record_Layer final : public Record_Layer {
       uint16_t record_payload_size_limit(const Policy& policy,
                                          Cipher_State* cipher_state = nullptr,
                                          std::optional<EpochNumber> epoch = std::nullopt) const override;
+
+      /// Disables the sending compatibility mode that uses legacy record
+      /// version 0x0301 for the initial (unprotected) flight. Must be called
+      /// once the first flight's unprotected messages have been sent.
+      void disable_sending_compat_mode() noexcept { m_sending_compat_mode = false; }
 
    private:
       bool m_sending_compat_mode;
