@@ -63,8 +63,8 @@ class SingleshotTimer final {
          callbacks.tls_register_deferred_operation(
             delay.count(), [token = std::make_shared<Token>(), operation = std::move(operation)] {
                if(!token->executed) {
+                  token->executed = true;  // set it first, in case operation() throws
                   operation();
-                  token->executed = true;
                }
             });
       }
@@ -82,8 +82,8 @@ class SingleshotTimer final {
          callbacks.tls_register_deferred_operation(
             delay.count(), [weak_token = std::weak_ptr(token), operation = std::move(operation)] {
                if(auto handle = weak_token.lock(); handle && !handle->executed) {
+                  handle->executed = true;  // set it first, in case operation() throws
                   operation();
-                  handle->executed = true;
                }
             });
 
