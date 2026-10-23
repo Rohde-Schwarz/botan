@@ -8,7 +8,7 @@
 #include <fstream>
 #include <memory>
 
-#if defined(BOTAN_HAS_TLS)
+#if defined(BOTAN_HAS_TLS_LOL)
    #include "test_rng.h"
 
    #include <botan/mem_ops.h>
@@ -52,7 +52,7 @@ namespace Botan_Tests {
 
 namespace {
 
-#if defined(BOTAN_HAS_TLS)
+#if defined(BOTAN_HAS_TLS_LOL)
 
 class TLS_Session_Tests final : public Test {
    public:

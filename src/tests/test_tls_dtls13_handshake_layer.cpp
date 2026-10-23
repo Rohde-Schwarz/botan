@@ -7,7 +7,7 @@
 
 #include "tests.h"
 
-#if defined(BOTAN_HAS_DTLS_13)
+#if defined(BOTAN_HAS_DTLS_13_LOL)
    #include <numeric>
 
    #include <botan/hex.h>
