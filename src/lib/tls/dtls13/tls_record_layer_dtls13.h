@@ -172,6 +172,10 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       std::map<EpochNumber, Replay_Window_13> m_replay_windows;
 
       uint64_t m_unprotected_write_seq_no = 0;
+
+      // TODO: This can likely be removed, it is not needed for downgrade
+      // info and also not for replay protection. (In fact, it is not
+      // even incremented.)
       uint64_t m_unprotected_read_seq_no = 0;
 
       std::vector<RecordNumber> m_record_numbers_to_ack;
