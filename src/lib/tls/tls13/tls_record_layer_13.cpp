@@ -13,7 +13,9 @@
 #include <botan/tls_exceptn.h>
 #include <botan/tls_policy.h>
 #include <botan/tls_version.h>
+#include <botan/internal/buffer_slicer.h>
 #include <botan/internal/concat_util.h>
+#include <botan/internal/ct_utils.h>
 #include <botan/internal/int_utils.h>
 #include <botan/internal/loadstor.h>
 #include <botan/internal/tls_cipher_state.h>
@@ -94,8 +96,10 @@ TLS_Record_Layer::TLS_Record_Layer(Connection_Side side) :
       // is disabled at initialization for servers.
       m_sending_compat_mode(side == Connection_Side::Client) {}
 
-void TLS_Record_Layer::copy_data(std::span<const uint8_t> data) {
-   while(!data.empty()) {
+bool TLS_Record_Layer::copy_data(std::span<const uint8_t> data_from_peer, bool has_cryptographic_association) {
+   BOTAN_UNUSED(has_cryptographic_association);
+
+   while(!data_from_peer.empty()) {
       auto& record = [&]() -> Record_TLS& {
          if(m_incoming_records.empty() || m_incoming_records.back().complete()) {
             return m_incoming_records.emplace_back();
@@ -105,20 +109,24 @@ void TLS_Record_Layer::copy_data(std::span<const uint8_t> data) {
       }();
 
       BOTAN_DEBUG_ASSERT(!record.complete());
-      const size_t consumed = record.append(data);
-      BOTAN_ASSERT_NOMSG(consumed <= data.size());
-      data = data.subspan(consumed);
+      const size_t consumed = record.append(data_from_peer);
+      BOTAN_ASSERT_NOMSG(consumed <= data_from_peer.size());
+      data_from_peer = data_from_peer.subspan(consumed);
    }
+
+   // We don't ever drop data in TLS, we do that in DTLS only.
+   return true;
 }
 
 RecordNumber TLS_Record_Layer::prepare_record(Record_Type type,
                                               std::span<const uint8_t> payload,
                                               const Policy& policy,
                                               Cipher_State* cipher_state,
-                                              secure_vector<uint8_t>& out) {
+                                              secure_vector<uint8_t>& out,
+                                              std::optional<EpochNumber> epoch) {
    auto* cs = as_tls_cipher_state(cipher_state);
 
-   BOTAN_ARG_CHECK(payload.size() <= record_payload_size_limit(policy, cs),
+   BOTAN_ARG_CHECK(payload.size() <= record_payload_size_limit(policy, cs, epoch),
                    "data size exceeds record payload size limit");
 
    // RFC 9846 5.
@@ -198,8 +206,10 @@ RecordNumber TLS_Record_Layer::prepare_record(Record_Type type,
    }
 }
 
-uint16_t TLS_Record_Layer::record_payload_size_limit(const Policy& policy, Cipher_State* cipher_state) const {
-   BOTAN_UNUSED(policy);  // not relevant for TLS
+uint16_t TLS_Record_Layer::record_payload_size_limit(const Policy& policy,
+                                                     Cipher_State* cipher_state,
+                                                     std::optional<EpochNumber> epoch) const {
+   BOTAN_UNUSED(policy, epoch);  // not relevant for TLS
 
    // RFC 8449 4.
    //    When the "record_size_limit" extension is negotiated, an endpoint
@@ -277,6 +287,7 @@ Record_Layer::ReadResult TLS_Record_Layer::next_record(Cipher_State* cipher_stat
          .type = record.type(),
          .sequence_number = std::nullopt,
          .payload = record.take_payload(),
+         .epoch = std::nullopt,
       }));
    } else {
       if(cs == nullptr) {

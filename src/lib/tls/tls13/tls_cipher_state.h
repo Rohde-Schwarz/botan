@@ -10,13 +10,13 @@
 #ifndef BOTAN_TLS_CIPHER_STATE_H_
 #define BOTAN_TLS_CIPHER_STATE_H_
 
-#include <botan/assert.h>
 #include <botan/cipher_mode.h>
 #include <botan/secmem.h>
 #include <botan/tls_ciphersuite.h>
 #include <botan/tls_magic.h>
 
 #include <botan/internal/tls_record_13.h>
+#include <botan/internal/tls_record_dtls13.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 #include <botan/internal/tls_types_13.h>
 
@@ -227,6 +227,12 @@ class BOTAN_TEST_API Cipher_State {
       bool is_handshake_complete() const { return m_state == State::Completed; }
 
       /**
+       * Indicates whether the cipher state has established cryptographic keys
+       * and is capable of sending/receiving protected records.
+       */
+      bool has_cryptographic_association() const;
+
+      /**
        * Indicates whether unprotected Alert records are to be expected
        */
       bool must_expect_unprotected_alert_traffic() const;
@@ -373,7 +379,9 @@ class BOTAN_TEST_API Cipher_State {
                                                const std::vector<uint8_t>& context,
                                                size_t length) const;
 
-      Cipher_State::Epoch create_epoch(EpochNumber EpochNumber,
+      void strip_padding_and_hydrate_content_type(Record_Content& deprotected_record) const;
+
+      Cipher_State::Epoch create_epoch(EpochNumber epoch_number,
                                        Cipher_Dir direction,
                                        const secure_vector<uint8_t>& traffic_secret) const;
 
