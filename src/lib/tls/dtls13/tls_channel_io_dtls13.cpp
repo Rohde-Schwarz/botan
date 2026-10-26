@@ -155,30 +155,29 @@ void DTLS_Channel_IO::send_flight(std::vector<Flight::Message> flight) {
    m_ack_timer.cancel();
 }
 
-bool DTLS_Channel_IO::can_send_key_update() const {
-   // RFC 9147 8.
-   //    [...] implementations MUST NOT send [...] a new KeyUpdate until the
-   //    previous KeyUpdate has been acknowledged [...].
-   if(has_unacknowledged_key_update()) {
-      return false;
-   }
+void DTLS_Channel_IO::handle_key_update(const Key_Update& key_update) {
+   using namespace std::chrono_literals;
 
+   // RFC 9147 8.
+   //    With a 128-bit key as in AES-128, rekeying 2^64 times has a high
+   //    probability of key reuse within a given connection. [...] In order to
+   //    provide an extra margin of security, sending implementations MUST NOT
+   //    allow the epoch to exceed 2^48-1. [...]
+   //
    // RFC 9147 8. (Errata-ID 8050)
    //    After the handshake, each epoch change consumes a message_seq value,
-   //    which is limited to 2^16-1. [...] In this case, the implementation MUST
-   //    check for this limit, if reached, terminate the association.
+   //    which is limited to 2^16-1. Both sending and receiving implementations
+   //    MAY instead enforce an epoch limit of 2^16-1. In this case, the
+   //    implementation MUST check for this limit, if reached, terminate the
+   //    association.
    //
-   // We don't terminate the association but we reject any further key updates.
-   BOTAN_ASSERT_NONNULL(cipher_state());
-   if(to_underlying(cipher_state()->current_write_epoch_number()) == std::numeric_limits<uint16_t>::max()) {
-      throw Invalid_State("Cannot update keys: maximum DTLS epoch number reached");
+   // If the just-received KeyUpdate would move the epoch number beyond the
+   // limit of 2^16-1, we reject it as unexpected message.
+   if(to_underlying(cipher_state()->current_read_epoch_number()) == std::numeric_limits<uint16_t>::max()) {
+      throw TLS_Exception(Alert::UnexpectedMessage, "Cannot update keys: maximum DTLS epoch number reached");
    }
 
-   return true;
-}
-
-void DTLS_Channel_IO::schedule_read_epoch_pruning(EpochNumber latest_epoch) {
-   using namespace std::chrono_literals;
+   Channel_IO::handle_key_update(key_update);
 
    // RFC 9147 Section 4.2.1
    //    Implementations [...] MAY choose to retain keying material from
@@ -188,15 +187,31 @@ void DTLS_Channel_IO::schedule_read_epoch_pruning(EpochNumber latest_epoch) {
    // RFC 9293 4.
    //    MSL: Maximum Segment Lifetime, the time a TCP segment can exist in the
    //         internetwork system. Arbitrarily defined to be 2 minutes.
-   SingleshotTimer::start_detached(callbacks(), 2min, [weak = weak_from_this(), latest_epoch] {
-      if(auto self = weak.lock()) {
-         if(auto cs = self->cipher_state()) {
-            auto* dcs = as_dtls_cipher_state(cs.get());
-            BOTAN_ASSERT_NONNULL(dcs);
-            dcs->prune_read_epochs_older_than(latest_epoch);
+   //
+   // Note: In the unlikely case that the peer never receives our ACK for this
+   // KeyUpdate (or its retransmissions), it may keep transmitting application
+   // data on the old epoch. After this timer expires, we prune all read epochs
+   // except the one the just-received KeyUpdate moved us into. In that case we
+   // would not be able to decrypt any data from the peer anymore and this
+   // association would be effectively dead. We currently don't handle this case
+   // explicitly at the moment.
+   SingleshotTimer::start_detached(
+      callbacks(), 2min, [weak = weak_from_this(), latest_epoch = cipher_state()->current_read_epoch_number()] {
+         if(auto self = weak.lock()) {
+            if(auto cs = self->cipher_state()) {
+               auto* dcs = as_dtls_cipher_state(cs.get());
+               BOTAN_ASSERT_NONNULL(dcs);
+               dcs->prune_read_epochs_older_than(latest_epoch);
+            }
          }
-      }
-   });
+      });
+}
+
+bool DTLS_Channel_IO::can_send_key_update() const {
+   // RFC 9147 8.
+   //    [...] implementations MUST NOT send [...] a new KeyUpdate until the
+   //    previous KeyUpdate has been acknowledged [...].
+   return !has_unacknowledged_key_update();
 }
 
 void DTLS_Channel_IO::send_key_update(const Key_Update& msg) {

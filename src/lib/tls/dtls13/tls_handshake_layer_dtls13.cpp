@@ -249,34 +249,10 @@ std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handsha
       return std::nullopt;
    }
 
-   if(reassembled.epoch != m_current_epoch) {
-      throw TLS_Exception(AlertType::UnexpectedMessage, "Post-handshake message received in unexpected epoch");
-   }
-
    const auto msg_type = read_handshake_message_type(reassembled.header[0]);
    auto msg = parse_post_handshake_message(msg_type, reassembled.payload);
 
    m_current_read_message.erase(static_cast<uint16_t>(m_read_message_seq++));
-
-   if(msg_type == Handshake_Type::KeyUpdate) {
-      // RFC 9147 8.
-      //    With a 128-bit key as in AES-128, rekeying 2^64 times has a high
-      //    probability of key reuse within a given connection. [...] sending
-      //    implementations MUST NOT allow the epoch to exceed 2^48-1.
-      //
-      // RFC 9147 8. (Errata-ID 8050)
-      //    After the handshake, each epoch change consumes a message_seq value,
-      //    which is limited to 2^16-1. [...] In this case, the implementation
-      //    MUST check for this limit, if reached, terminate the association.
-      //
-      // Thus, we won't ever be able to wrap the key anywhere near the 2^48
-      // limit due to the technical limitations of the message sequence number.
-      if(to_underlying(m_current_epoch) == std::numeric_limits<uint16_t>::max()) {
-         throw TLS_Exception(AlertType::UnexpectedMessage, "DTLS handshake message sequence number exhausted");
-      }
-
-      m_current_epoch = static_cast<EpochNumber>(to_underlying(m_current_epoch) + 1);
-   }
 
    return msg;
 }
@@ -293,6 +269,10 @@ std::vector<MarshalledHandshakeMessageFragment> DTLS_Handshake_Layer::fragment_m
                       "DTLS first fragment max size must be larger than header length");
       BOTAN_ARG_CHECK(first_fragment_max_size <= max_fragment_size,
                       "DTLS first fragment max size must not exceed the general max fragment size");
+   }
+
+   if(m_send_message_seq == std::numeric_limits<uint16_t>::max()) {
+      throw Invalid_State("Maximum DTLS message sequence number reached");
    }
 
    const uint16_t message_seq = m_send_message_seq++;

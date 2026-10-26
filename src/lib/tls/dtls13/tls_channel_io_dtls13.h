@@ -42,13 +42,13 @@ class DTLS_Channel_IO final : public Channel_IO,
       void send_key_update(const Key_Update& msg) override;
       bool can_send_key_update() const override;
 
+      void handle_key_update(const Key_Update& key_update) override;
+
       void notify_protocol_version_committed() override { m_dtls_version_committed = true; }
 
       void notify_protocol_version_committed_and_flight_superseded() override;
       void notify_received_complete_flight() override;
       void notify_received_final_flight() override;
-
-      void schedule_read_epoch_pruning(EpochNumber latest_epoch) override;
 
       bool has_unacknowledged_key_update() const { return m_pending_key_update_record.has_value(); }
 

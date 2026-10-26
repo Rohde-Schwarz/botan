@@ -97,14 +97,13 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
       uint32_t m_read_message_seq = 0;  // 32-bit to detect msg seqno exhaustion
 
       struct ReassembledMessage {
-            EpochNumber epoch;        // The record protection epoch this message was received in.
+            EpochNumber epoch;         // The record protection epoch this message was received in.
             TLSHeader header;          // msg_type + 3-byte total length, filled in on first fragment
             DTLSPayload payload;       // sized to msg_len once known, filled in as fragments arrive
             bitvector received_bytes;  // tracks which bytes of the payload have been received so far
             bool complete = false;
       };
 
-      EpochNumber m_current_epoch = EpochNumber::ApplicationTraffic_0;
       std::map<uint16_t, ReassembledMessage> m_current_read_message;  // keyed by message_seq
 };
 

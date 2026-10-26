@@ -93,7 +93,7 @@ class BOTAN_TEST_API Channel_IO {
        * Processes a KeyUpdate message received from the peer: updates the read
        * keys, and schedules a reciprocal KeyUpdate if the peer requested one.
        */
-      void handle_key_update(const Key_Update& key_update);
+      virtual void handle_key_update(const Key_Update& key_update);
 
       /**
        * Sends a KeyUpdate message to the peer and updates the write keys once
@@ -194,10 +194,6 @@ class BOTAN_TEST_API Channel_IO {
       /// Marshalls and sends the given KeyUpdate message, then advances the
       /// write epoch.
       virtual void send_key_update(const Key_Update& msg) = 0;
-
-      /// Gives the IO the opportunity to schedule pruning of superseded read
-      /// epochs after a key update. Relevant for DTLS only; a no-op for TLS.
-      virtual void schedule_read_epoch_pruning(EpochNumber latest_epoch) = 0;
 
       virtual Record_Layer& record_layer() = 0;
 

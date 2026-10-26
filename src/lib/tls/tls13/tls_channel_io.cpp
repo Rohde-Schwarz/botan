@@ -264,7 +264,7 @@ void Channel_IO::handle_key_update(const Key_Update& key_update) {
       m_last_peer_key_update_ms = now;
    }
 
-   schedule_read_epoch_pruning(cs->update_read_keys());
+   cs->update_read_keys();
 
    if(key_update.expects_reciprocation() && cs->can_encrypt_application_traffic()) {
       // RFC 9846 4.7.3
@@ -530,8 +530,6 @@ class TLS_Channel_IO final : public Channel_IO {
          send_data(Record_Type::Handshake, m_handshake_layer.marshal(msg), cs.get());
          cs->update_write_keys();
       }
-
-      void schedule_read_epoch_pruning(EpochNumber /* latest_epoch */) override { /* don't care */ }
 
    private:
       TLS_Record_Layer m_record_layer;

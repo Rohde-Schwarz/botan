@@ -273,6 +273,26 @@ std::optional<Record> DTLS_Cipher_State::deprotect_record(ProtectedRecord_DTLS r
    return annotate_record_type(std::move(result));
 }
 
+namespace {
+
+bool epoch_limit_reached(EpochNumber current_epoch) {
+   // RFC 9147 8.
+   //    With a 128-bit key as in AES-128, rekeying 2^64 times has a high
+   //    probability of key reuse within a given connection. [...] In order to
+   //    provide an extra margin of security, sending implementations MUST NOT
+   //    allow the epoch to exceed 2^48-1. [...]
+   //
+   // RFC 9147 8. (Errata-ID 8050)
+   //    After the handshake, each epoch change consumes a message_seq value,
+   //    which is limited to 2^16-1. Both sending and receiving implementations
+   //    MAY instead enforce an epoch limit of 2^16-1. In this case, the
+   //    implementation MUST check for this limit, if reached, terminate the
+   //    association.
+   return to_underlying(current_epoch) == std::numeric_limits<uint16_t>::max();
+}
+
+}  // namespace
+
 DTLS_Cipher_State::Epoch DTLS_Cipher_State::create_dtls_epoch(EpochNumber epoch_number,
                                                               Cipher_Dir direction,
                                                               const secure_vector<uint8_t>& traffic_secret) {
@@ -286,6 +306,7 @@ DTLS_Cipher_State::Epoch DTLS_Cipher_State::create_dtls_epoch(EpochNumber epoch_
 
 EpochNumber DTLS_Cipher_State::advance_write_epoch(const secure_vector<uint8_t>& traffic_secret,
                                                    std::optional<EpochNumber> epoch_number) {
+   BOTAN_STATE_CHECK(!epoch_limit_reached(current_write_epoch_number()));
    const auto next_epoch_number = epoch_number.value_or(current_write_epoch_number() + 1);
    m_write_epochs.push_back(create_dtls_epoch(next_epoch_number, Cipher_Dir::Encryption, traffic_secret));
    return next_epoch_number;
@@ -293,6 +314,7 @@ EpochNumber DTLS_Cipher_State::advance_write_epoch(const secure_vector<uint8_t>&
 
 EpochNumber DTLS_Cipher_State::advance_read_epoch(const secure_vector<uint8_t>& traffic_secret,
                                                   std::optional<EpochNumber> epoch_number) {
+   BOTAN_STATE_CHECK(!epoch_limit_reached(current_write_epoch_number()));
    const auto next_epoch_number = epoch_number.value_or(current_read_epoch_number() + 1);
    m_read_epochs.push_back(create_dtls_epoch(next_epoch_number, Cipher_Dir::Decryption, traffic_secret));
    return next_epoch_number;
