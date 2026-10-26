@@ -7,7 +7,7 @@
 
 #include "tests.h"
 
-#if defined(BOTAN_HAS_DTLS_13_LOL)
+#if defined(BOTAN_HAS_DTLS_13)
 
    #include <botan/hex.h>
    #include <botan/tls.h>
@@ -16,6 +16,7 @@
    #include <botan/internal/concat_util.h>
    #include <botan/internal/stl_util.h>
    #include <botan/internal/tls_cipher_state.h>
+   #include <botan/internal/tls_cipher_state_dtls13.h>
    #include <botan/internal/tls_record_dtls13.h>
    #include <botan/internal/tls_record_layer_dtls13.h>
    #include <botan/internal/tls_types_13.h>
@@ -27,21 +28,29 @@ namespace Botan_Tests {
 
 namespace {
 
-auto create_policy(std::optional<uint16_t> minimum_record_size = {}) {
+auto create_policy(std::optional<uint16_t> minimum_record_size = {},
+                   std::optional<size_t> maximum_queued_acknowledgements = {}) {
    class Test_Policy : public Botan::TLS::Policy {
       public:
-         explicit Test_Policy(std::optional<uint16_t> minimum_record_size) :
-               m_minimum_record_size(minimum_record_size) {}
+         Test_Policy(std::optional<uint16_t> minimum_record_size,
+                     std::optional<size_t> maximum_queued_acknowledgements) :
+               m_minimum_record_size(minimum_record_size),
+               m_maximum_queued_acknowledgements(maximum_queued_acknowledgements) {}
 
          size_t record_padding_bytes(size_t plaintext_bytes) const override {
             return plaintext_bytes < m_minimum_record_size ? *m_minimum_record_size - plaintext_bytes : 0;
          }
 
+         size_t dtls_maximum_queued_acknowledgements() const override {
+            return m_maximum_queued_acknowledgements.value_or(Policy::dtls_maximum_queued_acknowledgements());
+         }
+
       private:
          std::optional<uint16_t> m_minimum_record_size;
+         std::optional<size_t> m_maximum_queued_acknowledgements;
    };
 
-   return std::make_shared<Test_Policy>(minimum_record_size);
+   return std::make_shared<Test_Policy>(minimum_record_size, maximum_queued_acknowledgements);
 }
 
 std::unique_ptr<TLS::Cipher_State> make_cipher_state(TLS::Connection_Side side,
@@ -113,17 +122,17 @@ std::vector<Test::Result> read_clienthello_record() {
       "b4 9f a1 b3 cd d9 ff 37 78 2d 1f cf ff 4d 76 32 6c d5 fc eb 1a"
       "2c e2 9e 04 85 d3 af 10 3c 4c fa b6 6e 47 66");
 
-   auto policy = create_policy();
+   const auto policy = create_policy();
 
    return {
       CHECK("Parse ClientHello",
             [&](Test::Result& result) {
-               TLS::DTLS_Record_Layer rl(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl;
                result.test_is_true("ingest client hello", rl.copy_data(client_hello_record, false));
 
-               auto read = rl.next_record();
+               const auto read = rl.next_record();
                result.require("received something", !std::holds_alternative<TLS::BytesNeeded>(read));
-               auto record = std::get<TLS::Handshake_Record>(read);
+               const auto record = std::get<TLS::Handshake_Record>(read);
 
                result.test_enum_eq("received handshake", record.type, TLS::Record_Type::Handshake);
                result.test_u64_eq("sequence_number is 0", record.sequence_number.value(), 0);
@@ -139,7 +148,7 @@ std::vector<Test::Result> read_clienthello_record() {
             [&](Test::Result& result) {
                // DTLS records must not span datagrams, but copy_data
                // in DTLS assumes to be called on a full datagram.
-               TLS::DTLS_Record_Layer rl(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl;
 
                // Not enough to read record header (13 bytes)
                result.test_is_false("partial header is discarded",
@@ -167,7 +176,7 @@ std::vector<Test::Result> read_clienthello_record() {
                bad_record[1] = 0x03;  // Invalid version
                bad_record[2] = 0x03;
 
-               TLS::DTLS_Record_Layer rl(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl;
                result.test_throws<TLS::TLS_Exception>("bad record version throws without association",
                                                       [&] { rl.copy_data(bad_record, false); });
                result.test_is_false("bad record version is discarded with association", rl.copy_data(bad_record, true));
@@ -176,9 +185,9 @@ std::vector<Test::Result> read_clienthello_record() {
                auto dtls10_record = client_hello_record;
                dtls10_record[1] = 0xFE;  // Only valid for initial ClientHello
                dtls10_record[2] = 0xFF;
-               TLS::DTLS_Record_Layer rl2(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl2;
                result.test_is_true("ingest dtls10 record", rl2.copy_data(dtls10_record, false));
-               auto record = std::get<TLS::Handshake_Record>(rl2.next_record());
+               const auto record = std::get<TLS::Handshake_Record>(rl2.next_record());
                result.test_enum_eq("received handshake", record.type, TLS::Record_Type::Handshake);
 
                rl2.disable_receiving_compat_mode();
@@ -188,8 +197,8 @@ std::vector<Test::Result> read_clienthello_record() {
 
       CHECK("epoch 0 round-trip with duplicate rejection",
             [&](Test::Result& result) {
-               TLS::DTLS_Record_Layer rl_out(TLS::Connection_Side::Client);
-               TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl_out;
+               TLS::DTLS_Record_Layer rl_in;
                const std::array<std::vector<uint8_t>, 2> payloads = {Botan::hex_decode("deadbeef"),
                                                                      Botan::hex_decode("beefdead")};
 
@@ -200,7 +209,7 @@ std::vector<Test::Result> read_clienthello_record() {
                      "write sequence number incremented", rl_out.epoch0_sequence_numbers()->write, i + 1);
 
                   result.require("ingestion is successful", rl_in.copy_data(wire, false));
-                  auto record = std::get<TLS::Handshake_Record>(rl_in.next_record());
+                  const auto record = std::get<TLS::Handshake_Record>(rl_in.next_record());
 
                   // Test that the created record can be read
                   result.test_enum_eq("type is Handshake", record.type, TLS::Record_Type::Handshake);
@@ -219,10 +228,9 @@ std::vector<Test::Result> read_clienthello_record() {
          "records from a partially invalid datagram are dropped entirely",
          [&](Test::Result& result) {
             // Records are committed to the read buffer only once the
-            // entire datagram was parsed successfully (RFC 9147 Section
-            // 4.3: "Records MUST NOT span datagrams").
-            TLS::DTLS_Record_Layer rl_out(TLS::Connection_Side::Client);
-            TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Server);
+            // entire datagram was parsed successfully
+            TLS::DTLS_Record_Layer rl_out;
+            TLS::DTLS_Record_Layer rl_in;
 
             const auto valid_record = prepare_handshake_record(rl_out, *policy, Botan::hex_decode("deadbeef"));
 
@@ -237,32 +245,17 @@ std::vector<Test::Result> read_clienthello_record() {
 }
 
 std::vector<Test::Result> protected_records() {
-   auto policy = create_policy();
+   const auto policy = create_policy();
 
    return {
       CHECK("basic round-trip",
             [&](Test::Result& result) {
-               auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+               const auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
 
-               TLS::DTLS_Record_Layer rl_out(TLS::Connection_Side::Client);
-               TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl_out;
+               TLS::DTLS_Record_Layer rl_in;
 
-               const std::array<std::vector<uint8_t>, 2> handshake_payloads = {Botan::hex_decode("deadbeef"),
-                                                                               Botan::hex_decode("beefdead")};
-
-               // Two round trips without record protection to test sequence_number increment
-               for(uint64_t i = 0; i < handshake_payloads.size(); ++i) {
-                  const auto wire = prepare_handshake_record(rl_out, *policy, handshake_payloads[i]);
-                  result.require("ingestion is successful", rl_in.copy_data(wire, false));
-                  auto received = std::get<TLS::Handshake_Record>(rl_in.next_record());
-                  result.test_bin_eq("received record matches payload", received.payload, handshake_payloads[i]);
-                  result.test_enum_eq("record type", received.type, TLS::Record_Type::Handshake);
-                  result.test_u64_eq("record sequence_number", received.sequence_number.value(), i);
-               }
-
-               // Application data can only be transferred once the handshake
-               // completed, i.e. in the application traffic epoch.
                advance_to_application_traffic(*cs_client);
                advance_to_application_traffic(*cs_server);
 
@@ -274,7 +267,7 @@ std::vector<Test::Result> protected_records() {
                result.test_u8_eq("epoch encoded as 001xxxEE", record[0] & 0xE3, 0x23);
 
                result.require("ingestion is successful", rl_in.copy_data(record, true));
-               auto deprotected = std::get<TLS::ApplicationData_Record>(rl_in.next_record(cs_server.get()));
+               const auto deprotected = std::get<TLS::ApplicationData_Record>(rl_in.next_record(cs_server.get()));
                result.test_bin_eq("deprotected record matches payload", deprotected.payload, to_be_protected_payload);
                result.test_enum_eq("record type", deprotected.type, TLS::Record_Type::ApplicationData);
                result.test_u64_eq("record sequence_number", deprotected.sequence_number.value(), uint64_t{0});
@@ -283,31 +276,18 @@ std::vector<Test::Result> protected_records() {
                                    TLS::EpochNumber::ApplicationTraffic_0);
             }),
 
-      CHECK("write protected record",
-            [&](Test::Result& result) {
-               auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
-               TLS::DTLS_Record_Layer rl_client(TLS::Connection_Side::Client);
-
-               const auto wire = prepare_handshake_record(
-                  rl_client, *policy, Botan::hex_decode("68656c6c6f2064746c73"), cs_client.get());
-
-               result.test_bin_eq("KAT output matches",
-                                  wire,
-                                  "2e 76 cf 00 1b 9a c7 72 ae 54 cb f8 cc 7b 09 72"
-                                  "9d 4a 6f 78 89 c9 3b ff 4e 62 a5 3f 4f 34 c4 fb");
-            }),
-
       CHECK("read protected record",
             [&](Test::Result& result) {
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
-               TLS::DTLS_Record_Layer rl_server(TLS::Connection_Side::Server);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl_server;
 
+               // Generated by Botan via prepare_record
                const auto wire = Botan::hex_decode(
                   "2e 76 cf 00 1b 9a c7 72 ae 54 cb f8 cc 7b 09 72"
                   "9d 4a 6f 78 89 c9 3b ff 4e 62 a5 3f 4f 34 c4 fb");
                result.require("parsing success", rl_server.copy_data(wire, true));
 
-               auto records = rl_server.next_record(cs_server.get());
+               const auto records = rl_server.next_record(cs_server.get());
                result.require("produced a record", !std::holds_alternative<TLS::BytesNeeded>(records));
 
                const auto& record = std::get<TLS::Handshake_Record>(records);
@@ -317,34 +297,30 @@ std::vector<Test::Result> protected_records() {
 
       CHECK("reading protected record without key state should drop the record",
             [&](Test::Result& result) {
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
-               TLS::DTLS_Record_Layer rl_server(TLS::Connection_Side::Server);
+               const auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
+               TLS::DTLS_Record_Layer rl_client;
+               TLS::DTLS_Record_Layer rl_server;
 
-               const auto wire = Botan::hex_decode(
-                  "2e 76 cf 00 1b 9a c7 72 ae 54 cb f8 cc 7b 09 72"
-                  "9d 4a 6f 78 89 c9 3b ff 4e 62 a5 3f 4f 34 c4 fb");
+               const auto wire = prepare_handshake_record(
+                  rl_client, *policy, Botan::hex_decode("68656c6c6f2064746c73"), cs_client.get());
                result.require("parsing success", rl_server.copy_data(wire, false));
 
-               auto records = rl_server.next_record(nullptr);
+               const auto records = rl_server.next_record(nullptr);
                result.require("produced no record", std::holds_alternative<TLS::BytesNeeded>(records));
             }),
 
       CHECK("read multiple protected records from one datagram",
             [&](Test::Result& result) {
-               // The records in this datagram are written by a server, so we
-               // read them with a client-side cipher state. Application data
-               // requires the handshake to be complete, hence the records are
-               // transferred in the application traffic epoch.
-               auto cs_writer = make_cipher_state(TLS::Connection_Side::Server);
-               auto cs_reader = make_cipher_state(TLS::Connection_Side::Client);
+               const auto cs_writer = make_cipher_state(TLS::Connection_Side::Server);
+               const auto cs_reader = make_cipher_state(TLS::Connection_Side::Client);
                advance_to_application_traffic(*cs_writer);
                advance_to_application_traffic(*cs_reader);
 
-               TLS::DTLS_Record_Layer rl_writer(TLS::Connection_Side::Server);
-               TLS::DTLS_Record_Layer rl_reader(TLS::Connection_Side::Client);
+               TLS::DTLS_Record_Layer rl_writer;
+               TLS::DTLS_Record_Layer rl_reader;
 
-               const auto payload1 = Botan::hex_decode("7365727665722068656c6c6f");  // "server hello"
-               const auto payload2 = Botan::hex_decode("617070207061796c6f6164");    // "app payload"
+               const auto payload1 = Botan::hex_decode("7365727665722068656c6c6f");
+               const auto payload2 = Botan::hex_decode("617070207061796c6f6164");
 
                // A (post-handshake) Handshake record followed by an
                // ApplicationData record, coalesced into a single datagram.
@@ -355,14 +331,14 @@ std::vector<Test::Result> protected_records() {
 
                result.require("parsing success", rl_reader.copy_data(wire, true));
 
-               auto read1 = rl_reader.next_record(cs_reader.get());
+               const auto read1 = rl_reader.next_record(cs_reader.get());
                result.require("produced a record", !std::holds_alternative<TLS::BytesNeeded>(read1));
 
                const auto& r1 = std::get<TLS::Handshake_Record>(read1);
                result.test_bin_eq("payload matches", r1.payload, payload1);
                result.test_enum_eq("type is Handshake", r1.type, TLS::Record_Type::Handshake);
 
-               auto read2 = rl_reader.next_record(cs_reader.get());
+               const auto read2 = rl_reader.next_record(cs_reader.get());
                result.require("produced another record", !std::holds_alternative<TLS::BytesNeeded>(read2));
 
                const auto& r2 = std::get<TLS::ApplicationData_Record>(read2);
@@ -375,12 +351,14 @@ std::vector<Test::Result> protected_records() {
 
       CHECK("tampered ciphertext is dropped",
             [&](Test::Result& result) {
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
-               TLS::DTLS_Record_Layer rl_server(TLS::Connection_Side::Server);
+               const auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
 
-               auto wire = Botan::hex_decode(
-                  "2e 76 cf 00 1b 9a c7 72 ae 54 cb f8 cc 7b 09 72"
-                  "9d 4a 6f 78 89 c9 3b ff 4e 62 a5 3f 4f 34 c4 fb");
+               TLS::DTLS_Record_Layer rl_client;
+               TLS::DTLS_Record_Layer rl_server;
+
+               auto wire = prepare_handshake_record(
+                  rl_client, *policy, Botan::hex_decode("68656c6c6f2064746c73"), cs_client.get());
                wire.back() ^= 0x40;  // flip a bit in the last ciphertext byte
 
                result.test_is_true("datagram is accepted", rl_server.copy_data(wire, true));
@@ -390,12 +368,16 @@ std::vector<Test::Result> protected_records() {
 
       CHECK("protected ChangeCipherSpec (inner type) is rejected",
             [&](Test::Result& result) {
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+               const auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
 
-               // Some protected record whose DTLSInnerPlaintext.type == 0x14 (CCS).
-               const auto wire = Botan::hex_decode("2E86210012F3B637745B63096B1FE706BAD3EE73FF5D73");
+               // The record layer refuses to emit CCS records for RFC compliance,
+               // so we create a protected CCS via the cipher state directly.
+               Botan::secure_vector<uint8_t> wire;
+               TLS::as_dtls_cipher_state(cs_client.get())
+                  ->protect_record(TLS::Record_Type::ChangeCipherSpec, Botan::hex_decode("01"), 0, wire);
 
-               TLS::DTLS_Record_Layer rl(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl;
                result.test_is_true("ingest doesn't reject protected datagram", rl.copy_data(wire, true));
                result.test_throws<TLS::TLS_Exception>("No records",
                                                       "Deprotected DTLS record had unexpected content type: 20",
@@ -404,14 +386,11 @@ std::vector<Test::Result> protected_records() {
 
       CHECK("application data at the handshake epoch is rejected",
             [&](Test::Result& result) {
-               // Regression test for CVE-2026-34582 in the DTLS flow:
-               // application data must not be transferred before the
-               // handshake completed (RFC 9147 Section 6.1).
-               auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+               const auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
 
-               TLS::DTLS_Record_Layer rl_out(TLS::Connection_Side::Client);
-               TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl_out;
+               TLS::DTLS_Record_Layer rl_in;
 
                // Note that the record layer currently produces such a record
                // without complaint; the peer's cipher state rejects it.
@@ -428,12 +407,11 @@ std::vector<Test::Result> protected_records() {
             [&](Test::Result& result) {
                // Even with application traffic keys in place, application
                // data must not arrive at the handshake epoch
-               // (RFC 9147 Section 6.1).
-               auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+               const auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
 
-               TLS::DTLS_Record_Layer rl_out(TLS::Connection_Side::Client);
-               TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl_out;
+               TLS::DTLS_Record_Layer rl_in;
 
                const auto record = prepare_record(
                   rl_out, *policy, TLS::Record_Type::ApplicationData, Botan::hex_decode("deadbeef"), cs_client.get());
@@ -457,11 +435,11 @@ std::vector<Test::Result> protected_records() {
                // Such a situation can occur in DTLS 1.3 for the first server
                // flight, where the server sends an unprotected ServerHello
                // followed by a protected EncryptedExtensions record...
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
-               auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+               const auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
 
-               TLS::DTLS_Record_Layer rl_out(TLS::Connection_Side::Server);
-               TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Client);
+               TLS::DTLS_Record_Layer rl_out;
+               TLS::DTLS_Record_Layer rl_in;
 
                const std::array<std::vector<uint8_t>, 2> payloads = {
                   Botan::hex_decode("deadbeef"),
@@ -476,15 +454,15 @@ std::vector<Test::Result> protected_records() {
                const auto wire = Botan::concat<std::vector<uint8_t>>(unprotected_record, protected_record);
 
                result.require("reading hybrid datagram", rl_in.copy_data(wire, true));
-               auto unprotected = rl_in.next_record(nullptr);
+               const auto unprotected = rl_in.next_record(nullptr);
                result.test_is_true("expect getting a record", !std::holds_alternative<TLS::BytesNeeded>(unprotected));
-               auto record1 = std::get<TLS::Handshake_Record>(unprotected);
+               const auto record1 = std::get<TLS::Handshake_Record>(unprotected);
                result.test_enum_eq("type is Handshake", record1.type, TLS::Record_Type::Handshake);
                result.test_bin_eq("payload matches", record1.payload, payloads[0]);
 
-               auto was_protected = rl_in.next_record(cs_client.get());
+               const auto was_protected = rl_in.next_record(cs_client.get());
                result.test_is_true("expect getting a record", !std::holds_alternative<TLS::BytesNeeded>(was_protected));
-               auto record2 = std::get<TLS::Handshake_Record>(was_protected);
+               const auto record2 = std::get<TLS::Handshake_Record>(was_protected);
                result.test_enum_eq("type is Handshake", record2.type, TLS::Record_Type::Handshake);
                result.test_enum_eq(
                   "epoch is handshake traffic", record2.epoch.value(), TLS::EpochNumber::HandshakeTraffic);
@@ -496,13 +474,13 @@ std::vector<Test::Result> protected_records() {
 
       CHECK("duplicated and too-old protected records are rejected",
             [&](Test::Result& result) {
-               auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+               const auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
                advance_to_application_traffic(*cs_client);
                advance_to_application_traffic(*cs_server);
 
-               TLS::DTLS_Record_Layer rl_out(TLS::Connection_Side::Client);
-               TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl_out;
+               TLS::DTLS_Record_Layer rl_in;
 
                const auto payload = Botan::hex_decode("deadbeef");
 
@@ -538,18 +516,18 @@ std::vector<Test::Result> protected_records() {
                const auto fresh_record =
                   prepare_record(rl_out, *policy, TLS::Record_Type::ApplicationData, payload, cs_client.get());
                result.require("ingest fresh record", rl_in.copy_data(fresh_record, true));
-               auto read = rl_in.next_record(cs_server.get());
+               const auto read = rl_in.next_record(cs_server.get());
                result.require("fresh record is delivered", !std::holds_alternative<TLS::BytesNeeded>(read));
                result.test_bin_eq("payload matches", std::get<TLS::ApplicationData_Record>(read).payload, payload);
             }),
 
       CHECK("replay windows are tracked per epoch",
             [&](Test::Result& result) {
-               auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+               const auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
 
-               TLS::DTLS_Record_Layer rl_out(TLS::Connection_Side::Client);
-               TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl_out;
+               TLS::DTLS_Record_Layer rl_in;
 
                const auto payload = Botan::hex_decode("deadbeef");
 
@@ -557,7 +535,7 @@ std::vector<Test::Result> protected_records() {
                // data is not allowed, yet, hence a handshake-typed record)
                const auto handshake_record = prepare_handshake_record(rl_out, *policy, payload, cs_client.get());
                result.require("ingest handshake epoch record", rl_in.copy_data(handshake_record, true));
-               auto read1 = rl_in.next_record(cs_server.get());
+               const auto read1 = rl_in.next_record(cs_server.get());
                result.require("handshake epoch record is delivered", !std::holds_alternative<TLS::BytesNeeded>(read1));
                result.test_enum_eq("epoch is handshake traffic",
                                    std::get<TLS::Handshake_Record>(read1).epoch.value(),
@@ -568,11 +546,11 @@ std::vector<Test::Result> protected_records() {
                advance_to_application_traffic(*cs_server);
 
                // Sequence number 0 in the application traffic epoch must be
-               // accepted, because replay state is tracked per epoch.
+               // accepted, because replay state is tracked per epoch...
                const auto app_record =
                   prepare_record(rl_out, *policy, TLS::Record_Type::ApplicationData, payload, cs_client.get());
                result.require("ingest application epoch record", rl_in.copy_data(app_record, true));
-               auto read2 = rl_in.next_record(cs_server.get());
+               const auto read2 = rl_in.next_record(cs_server.get());
                result.require("application epoch record is delivered",
                               !std::holds_alternative<TLS::BytesNeeded>(read2));
                result.test_enum_eq("epoch is application traffic",
@@ -589,10 +567,10 @@ std::vector<Test::Result> protected_records() {
 
       CHECK("plaintext records are discarded once a cryptographic association exists",
             [&](Test::Result& result) {
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
 
-               TLS::DTLS_Record_Layer rl_out(TLS::Connection_Side::Client);
-               TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl_out;
+               TLS::DTLS_Record_Layer rl_in;
 
                const auto plaintext_record = prepare_handshake_record(rl_out, *policy, Botan::hex_decode("deadbeef"));
 
@@ -604,35 +582,113 @@ std::vector<Test::Result> protected_records() {
                                    std::holds_alternative<TLS::BytesNeeded>(rl_in.next_record(cs_server.get())));
 
                // The same record is delivered when read without a cipher state.
-               TLS::DTLS_Record_Layer rl_in2(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl_in2;
                result.require("ingest plaintext record", rl_in2.copy_data(plaintext_record, false));
                result.test_is_true("plaintext record is delivered",
                                    !std::holds_alternative<TLS::BytesNeeded>(rl_in2.next_record(nullptr)));
             }),
 
+      CHECK("plaintext ACK records are tolerated until the application traffic epoch",
+            [&](Test::Result& result) {
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+
+               TLS::DTLS_Record_Layer rl_out;
+               TLS::DTLS_Record_Layer rl_in;
+
+               const auto plaintext_ack =
+                  prepare_record(rl_out, *policy, TLS::Record_Type::ACK, Botan::hex_decode("deadbeef"));
+
+               // RFC 9147 7: ACKs are sent at an epoch equal to or higher than
+               // the acknowledged record's, so epoch 0 ACKs must remain
+               // acceptable while the handshake is in progress...
+               result.require("ingest plaintext ACK", rl_in.copy_data(plaintext_ack, true));
+               const auto read = rl_in.next_record(cs_server.get());
+               result.require("plaintext ACK is delivered at the handshake epoch",
+                              !std::holds_alternative<TLS::BytesNeeded>(read));
+               result.test_enum_eq("record type is ACK", std::get<TLS::ACK_Record>(read).type, TLS::Record_Type::ACK);
+
+               // ... but are discarded like any other plaintext record once
+               // the application traffic epoch is reached.
+               advance_to_application_traffic(*cs_server);
+
+               TLS::DTLS_Record_Layer rl_in2;
+               result.require("ingest plaintext ACK again", rl_in2.copy_data(plaintext_ack, true));
+               result.test_is_true("plaintext ACK is discarded at the application traffic epoch",
+                                   std::holds_alternative<TLS::BytesNeeded>(rl_in2.next_record(cs_server.get())));
+            }),
+
       CHECK("a protected record without a length field consumes the rest of the datagram",
             [&](Test::Result& result) {
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
-               TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Server);
+               const auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+
+               TLS::DTLS_Record_Layer rl_out;
+               TLS::DTLS_Record_Layer rl_in;
+
+               const auto payload = Botan::hex_decode("deadbeef");
+               const auto valid_record = prepare_handshake_record(rl_out, *policy, payload, cs_client.get());
 
                // RFC 9147 Section 4.3: The final record in a datagram can
                // omit the length field; it then consumes the entire rest of
                // the datagram. (epoch_bits=2, no CID, short seq_no, no length)
-               const auto wire = Botan::concat<std::vector<uint8_t>>(
+               const auto lengthless_record = Botan::concat<std::vector<uint8_t>>(
                   std::array<uint8_t, 2>{0b00100010, 0x2A}, std::vector<uint8_t>(16, 0xAA) /* garbage "ciphertext" */);
 
-               // The datagram parses fine; the record then fails deprotection
-               // and is discarded. Note that a framing error would have
-               // rejected the datagram right away.
-               result.test_is_true("length-less record is framed correctly", rl_in.copy_data(wire, true));
-               result.test_is_true("record is dropped after failed deprotection",
+               const auto datagram = Botan::concat<std::vector<uint8_t>>(valid_record, lengthless_record);
+
+               // A framing error would have rejected the datagram right away,
+               // taking the valid record down with it.
+               result.test_is_true("datagram with length-less final record is accepted",
+                                   rl_in.copy_data(datagram, true));
+
+               const auto read = rl_in.next_record(cs_server.get());
+               result.require("record preceding the length-less one is delivered",
+                              !std::holds_alternative<TLS::BytesNeeded>(read));
+               result.test_bin_eq("payload matches", std::get<TLS::Handshake_Record>(read).payload, payload);
+
+               result.test_is_true("length-less record is dropped after failed deprotection",
                                    std::holds_alternative<TLS::BytesNeeded>(rl_in.next_record(cs_server.get())));
+            }),
+
+      CHECK("protected record with too little ciphertext for deprotection is discarded",
+            [&](Test::Result& result) {
+               TLS::DTLS_Record_Layer rl_in;
+
+               // RFC 9147 4.2.3: unmasking the sequence number requires at
+               // least 16 bytes of ciphertext; shorter records are rejected
+               // as if they had failed deprotection.
+               // (epoch_bits=2, no CID, short seq_no, no length)
+               const auto wire = Botan::concat<std::vector<uint8_t>>(std::array<uint8_t, 2>{0b00100010, 0x2A},
+                                                                     std::vector<uint8_t>(15, 0xAA));
+
+               result.test_is_false("datagram is discarded", rl_in.copy_data(wire, true));
+               result.test_is_true("nothing to read",
+                                   std::holds_alternative<TLS::BytesNeeded>(rl_in.next_record(nullptr)));
+            }),
+
+      CHECK("oversized protected record triggers record overflow",
+            [&](Test::Result& result) {
+               TLS::DTLS_Record_Layer rl;
+
+               // (epoch_bits=2, no CID, 16-bit seq_no, length present)
+               constexpr uint16_t advertised_length = 20000;
+               auto wire = std::vector<uint8_t>{0b00101110,
+                                                0x00,
+                                                0x00,
+                                                static_cast<uint8_t>(advertised_length >> 8),
+                                                static_cast<uint8_t>(advertised_length & 0xFF)};
+               wire.resize(wire.size() + advertised_length, 0xAA);
+
+               result.test_throws<TLS::TLS_Exception>("record overflow is fatal without association",
+                                                      "exceeds maximum size",
+                                                      [&] { rl.copy_data(wire, false); });
+               result.test_is_false("record overflow is discarded with association", rl.copy_data(wire, true));
             }),
 
       CHECK("record size limit depends on the protection epoch",
             [&](Test::Result& result) {
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
-               TLS::DTLS_Record_Layer rl(TLS::Connection_Side::Server);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl;
 
                // Unprotected records use the 13-byte DTLSPlaintext header,
                // protected records use the shorter unified header but incur
@@ -649,15 +705,15 @@ std::vector<Test::Result> protected_records() {
 
       CHECK("minimum record size is respected",
             [&](Test::Result& result) {
-               auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
-               auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+               const auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
+               const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
                advance_to_application_traffic(*cs_client);
                advance_to_application_traffic(*cs_server);
 
                const size_t minimum_record_size = 1024;
 
-               auto policy_with_padding = create_policy(minimum_record_size);
-               TLS::DTLS_Record_Layer rl_out(TLS::Connection_Side::Client);
+               const auto policy_with_padding = create_policy(minimum_record_size);
+               TLS::DTLS_Record_Layer rl_out;
 
                const std::vector<uint8_t> payload(1, 0x42);
                const auto record = prepare_record(
@@ -669,25 +725,25 @@ std::vector<Test::Result> protected_records() {
                result.test_sz_gte("produced wire bytes", record.size(), expected_size_lower_bound);
 
                // decryption
-               TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl_in;
                result.require("ingestion is successful", rl_in.copy_data(record, true));
-               auto read = rl_in.next_record(cs_server.get());
+               const auto read = rl_in.next_record(cs_server.get());
                result.require("expect getting a record", !std::holds_alternative<TLS::BytesNeeded>(read));
-               auto content = std::get<TLS::ApplicationData_Record>(read);
+               const auto content = std::get<TLS::ApplicationData_Record>(read);
                result.test_enum_eq("type is ApplicationData", content.type, TLS::Record_Type::ApplicationData);
                result.test_bin_eq("payload matches", content.payload, payload);
             }),
 
       CHECK("round-trip with all relevant cipher suites",
             [&](Test::Result& result) {
-               auto go = [&](std::string_view suite) {
-                  auto suite_cs_client = make_cipher_state(TLS::Connection_Side::Client, suite);
-                  auto suite_cs_server = make_cipher_state(TLS::Connection_Side::Server, suite);
+               const auto go = [&](std::string_view suite) {
+                  const auto suite_cs_client = make_cipher_state(TLS::Connection_Side::Client, suite);
+                  const auto suite_cs_server = make_cipher_state(TLS::Connection_Side::Server, suite);
                   advance_to_application_traffic(*suite_cs_client);
                   advance_to_application_traffic(*suite_cs_server);
 
-                  TLS::DTLS_Record_Layer rl_out(TLS::Connection_Side::Client);
-                  TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Server);
+                  TLS::DTLS_Record_Layer rl_out;
+                  TLS::DTLS_Record_Layer rl_in;
 
                   // Short payload to make sure that certain cipher suites properly
                   // perform their implicit padding (See RFC 9147 4.2.3).
@@ -731,12 +787,12 @@ std::vector<Test::Result> protected_records() {
 }
 
 std::vector<Test::Result> retransmission() {
-   auto policy = create_policy();
+   const auto policy = create_policy();
 
    // Reads epoch and sequence number off a DTLSPlaintext record header:
    // type(1) || legacy_version(2) || epoch(2) || sequence_number(6) || length(2)
-   auto plaintext_record_number = [](const TLS::MarshalledRecord& record) -> std::pair<uint64_t, uint64_t> {
-      uint64_t epoch = (static_cast<uint64_t>(record[3]) << 8) | record[4];
+   const auto plaintext_record_number = [](const TLS::MarshalledRecord& record) -> std::pair<uint64_t, uint64_t> {
+      const uint64_t epoch = (static_cast<uint64_t>(record[3]) << 8) | record[4];
       uint64_t seqno = 0;
       for(size_t i = 0; i < 6; ++i) {
          seqno = (seqno << 8) | record[5 + i];
@@ -751,7 +807,7 @@ std::vector<Test::Result> retransmission() {
    return {
       CHECK("unacknowledged outgoing records are retransmitted until the flight state progresses",
             [&](Test::Result& result) {
-               TLS::DTLS_Record_Layer rl(TLS::Connection_Side::Client);
+               TLS::DTLS_Record_Layer rl;
 
                // a flight of two unprotected handshake records (epoch 0)
                Botan::secure_vector<uint8_t> out1;
@@ -790,11 +846,11 @@ std::vector<Test::Result> retransmission() {
       CHECK(
          "retransmission of a mixed flight with protected records",
          [&](Test::Result& result) {
-            auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
-            auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
+            const auto cs_server = make_cipher_state(TLS::Connection_Side::Server);
+            const auto cs_client = make_cipher_state(TLS::Connection_Side::Client);
 
-            TLS::DTLS_Record_Layer rl_server(TLS::Connection_Side::Server);
-            TLS::DTLS_Record_Layer rl_client(TLS::Connection_Side::Client);
+            TLS::DTLS_Record_Layer rl_server;
+            TLS::DTLS_Record_Layer rl_client;
 
             // Simulate a server's first flight, i.e., use an unprotected
             // record (ServerHello) followed by protected records (e.g.
@@ -818,10 +874,13 @@ std::vector<Test::Result> retransmission() {
             result.test_u64_eq("retransmission stays in epoch 0", rn.first, 0);
             result.test_u64_eq("fresh record sequence number", rn.second, 1);
 
-            // The protected records are encrypted afresh, i.e. their
-            // ciphertexts differ from the originals'.
-            result.test_is_true("fresh encryption of first protected record", retransmission[1].get() != protected1);
-            result.test_is_true("fresh encryption of second protected record", retransmission[2].get() != protected2);
+            // The protected records are freshly re-encrypted
+            const auto unified_header_len = TLS::UnifiedHeader_DTLS::expected_length(*policy, std::nullopt);
+            const auto ciphertext = [&](const auto& record) { return std::span{record}.subspan(unified_header_len); };
+            result.test_is_true("fresh encryption of first protected record",
+                                !std::ranges::equal(ciphertext(retransmission[1].get()), ciphertext(protected1)));
+            result.test_is_true("fresh encryption of second protected record",
+                                !std::ranges::equal(ciphertext(retransmission[2].get()), ciphertext(protected2)));
 
             // The peer can read all retransmitted records.
             const auto expected_payloads = std::array{payload1, payload2, payload3};
@@ -834,9 +893,9 @@ std::vector<Test::Result> retransmission() {
                // Plaintext records from an earlier epoch are discarded once a
                // cryptographic association exists (RFC 9147 Section 4.2.1), so
                // the retransmitted ServerHello is read without one.
-               auto read = (expected_epochs[i] == TLS::EpochNumber::Unprotected)
-                              ? rl_client.next_record()
-                              : rl_client.next_record(cs_client.get());
+               const auto read = (expected_epochs[i] == TLS::EpochNumber::Unprotected)
+                                    ? rl_client.next_record()
+                                    : rl_client.next_record(cs_client.get());
                result.require("record is delivered", !std::holds_alternative<TLS::BytesNeeded>(read));
                const auto& content = std::get<TLS::Handshake_Record>(read);
                result.test_bin_eq("payload round-trips", content.payload, expected_payloads[i]);
@@ -851,8 +910,8 @@ std::vector<Test::Result> retransmission() {
 
       CHECK("acknowledged records are not retransmitted",
             [&](Test::Result& result) {
-               TLS::DTLS_Record_Layer rl_out(TLS::Connection_Side::Client);
-               TLS::DTLS_Record_Layer rl_in(TLS::Connection_Side::Server);
+               TLS::DTLS_Record_Layer rl_out;
+               TLS::DTLS_Record_Layer rl_in;
 
                Botan::secure_vector<uint8_t> out;
                const auto rn = rl_out.prepare_handshake_record(packed(payload1), out, *policy, nullptr);
@@ -861,7 +920,7 @@ std::vector<Test::Result> retransmission() {
                // The peer receives the record and queues an acknowledgement
                // for it (RFC 9147 Section 7).
                result.require("ingestion is successful", rl_in.copy_data(out, false));
-               auto read = rl_in.next_record();
+               const auto read = rl_in.next_record();
                result.require("record is delivered", !std::holds_alternative<TLS::BytesNeeded>(read));
                const auto& content = std::get<TLS::Handshake_Record>(read);
 
@@ -880,6 +939,64 @@ std::vector<Test::Result> retransmission() {
                rl_in.clear_outstanding_acknowledgements();
                result.test_is_true("acknowledgement queue is cleared", !rl_in.has_outstanding_acknowledgements());
             }),
+
+      CHECK("acknowledgements for any transmission clear the retransmission state",
+            [&](Test::Result& result) {
+               TLS::DTLS_Record_Layer rl;
+
+               Botan::secure_vector<uint8_t> out_a;
+               Botan::secure_vector<uint8_t> out_b;
+               const auto rn_a1 = rl.prepare_handshake_record(packed(payload1), out_a, *policy, nullptr);
+               const auto rn_b1 = rl.prepare_handshake_record(packed(payload2), out_b, *policy, nullptr);
+
+               const auto retransmission = rl.prepare_unacknowledged_records(*policy, nullptr);
+               result.require("two records retransmitted", retransmission.size() == 2);
+
+               // Each retransmission gets a fresh record sequence number, but
+               // the record stays associated with all of its transmission
+               // numbers: acknowledging ANY of them clears it.
+               const TLS::RecordNumber rn_a2{TLS::EpochNumber::Unprotected,
+                                             plaintext_record_number(retransmission[0]).second};
+               const TLS::RecordNumber rn_b2{TLS::EpochNumber::Unprotected,
+                                             plaintext_record_number(retransmission[1]).second};
+
+               result.test_is_true("original transmission of first record is pending",
+                                   rl.has_unacknowledged_record(rn_a1));
+               result.test_is_true("retransmission of first record is pending", rl.has_unacknowledged_record(rn_a2));
+               result.test_is_true("original transmission of second record is pending",
+                                   rl.has_unacknowledged_record(rn_b1));
+               result.test_is_true("retransmission of second record is pending", rl.has_unacknowledged_record(rn_b2));
+
+               const TLS::RecordNumber bogus{TLS::EpochNumber::HandshakeTraffic, 42};
+               result.test_is_false("unknown acknowledgement is ignored",
+                                    rl.handle_acknowledgements(TLS::ACKs({bogus})));
+               result.test_is_true("records are still pending", rl.has_unacknowledged_records());
+
+               // Acknowledge the original transmission of the first record
+               // and the retransmission of the second record.
+               result.test_is_true("all records acknowledged", rl.handle_acknowledgements(TLS::ACKs({rn_a1, rn_b2})));
+               result.test_is_true("no unacknowledged records", !rl.has_unacknowledged_records());
+               result.test_is_true("nothing left to retransmit",
+                                   rl.prepare_unacknowledged_records(*policy, nullptr).empty());
+            }),
+
+      CHECK(
+         "acknowledgement queue is trimmed to the most recent record numbers",
+         [&](Test::Result& result) {
+            const auto ack_policy = create_policy({}, 2);
+            TLS::DTLS_Record_Layer rl;
+
+            rl.acknowledge_handshake_record({TLS::EpochNumber::HandshakeTraffic, 0}, *ack_policy);
+            rl.acknowledge_handshake_record({TLS::EpochNumber::HandshakeTraffic, 1}, *ack_policy);
+            rl.acknowledge_handshake_record({TLS::EpochNumber::HandshakeTraffic, 2}, *ack_policy);
+
+            // RFC 9147 7.1: If space is limited, implementations SHOULD
+            // favor including records which have not yet been acknowledged.
+            const auto acks = rl.acknowledgements();
+            result.require("queue is trimmed to the policy limit", acks.record_numbers().size() == 2);
+            result.test_u64_eq("oldest acknowledgement was evicted", acks.record_numbers().front().sequence_number, 1);
+            result.test_u64_eq("newest acknowledgement is retained", acks.record_numbers().back().sequence_number, 2);
+         }),
    };
 }
 
@@ -1147,7 +1264,7 @@ std::vector<Test::Result> unified_header() {
 
       CHECK("UnifiedHeader pre-determine header length",
             [&](Test::Result& result) {
-               auto policy = create_policy();
+               const auto policy = create_policy();
 
                const size_t r1 = TLS::UnifiedHeader_DTLS::expected_length(*policy, std::nullopt);
                result.test_sz_eq("UnifiedHeader w/o CID (default seqno and length)", r1, 5);
