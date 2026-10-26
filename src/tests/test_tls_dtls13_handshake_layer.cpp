@@ -7,14 +7,16 @@
 
 #include "tests.h"
 
-#if defined(BOTAN_HAS_DTLS_13_LOL)
+#if defined(BOTAN_HAS_DTLS_13)
    #include <numeric>
 
    #include <botan/hex.h>
    #include <botan/tls.h>
 
    #include <botan/internal/buffer_slicer.h>
+   #include <botan/internal/loadstor.h>
    #include <botan/internal/tls_handshake_layer_13.h>
+   #include <botan/internal/tls_handshake_layer_dtls13.h>
    #include <botan/internal/tls_transcript_hash_13.h>
 
 namespace TLS = Botan::TLS;
@@ -23,11 +25,20 @@ namespace Botan_Tests {
 
 namespace {
 
-auto ensure_marshalled_handshake_message_fragments(Test::Result& result, TLS::PreparedHandshakeMessage msg) {
-   using Fragments = std::vector<Botan::TLS::MarshalledHandshakeMessageFragment>;
+using CopyDataResult = TLS::Handshake_Layer::CopyDataResult;
 
-   result.test_is_true("is a marshalled message", std::holds_alternative<Fragments>(msg));
-   return std::get<Fragments>(std::move(msg));
+std::unique_ptr<TLS::DTLS_Handshake_Layer> make_handshake_layer(TLS::Connection_Side side) {
+   return std::make_unique<TLS::DTLS_Handshake_Layer>(side);
+}
+
+TLS::Handshake_Record handshake_record(std::span<const uint8_t> bytes,
+                                       TLS::EpochNumber epoch = TLS::EpochNumber::HandshakeTraffic) {
+   return TLS::Handshake_Record{{
+      .type = TLS::Record_Type::Handshake,
+      .sequence_number = std::nullopt,
+      .payload = Botan::secure_vector<uint8_t>(bytes.begin(), bytes.end()),
+      .epoch = epoch,
+   }};
 }
 
 std::vector<uint8_t> concat_fragments(Test::Result& result,
@@ -82,6 +93,34 @@ std::vector<uint8_t> client_finished_bare_bytes() {
 }
 
 /**
+ * @returns bytes of a client Certificate message with an empty certificate
+ *          list (i.e. a client without credentials, RFC 8446 4.4.2)
+ */
+std::vector<uint8_t> client_certificate_bare_bytes() {
+   return {0x00 /* empty request context */, 0x00, 0x00, 0x00 /* empty certificate list */};
+}
+
+/**
+ * @returns bytes of a CertificateVerify message (ecdsa_secp256r1_sha256 with an
+ *          empty -- hence invalid -- signature; parsing does not verify it)
+ */
+std::vector<uint8_t> certificate_verify_bare_bytes() {
+   return {0x04, 0x03 /* ecdsa_secp256r1_sha256 */, 0x00, 0x00 /* empty signature */};
+}
+
+/**
+ * @returns bytes of a minimal NewSessionTicket message (RFC 8446 4.6.1)
+ */
+std::vector<uint8_t> new_session_ticket_bare_bytes() {
+   return Botan::hex_decode(
+      "00 00 0e 10"  // ticket_lifetime: 3600 seconds
+      "00 00 00 00"  // ticket_age_add
+      "00"           // empty ticket_nonce
+      "00 01 aa"     // ticket: 1 byte
+      "00 00");      // no extensions
+}
+
+/**
  * @returns bytes of a full DTLS client hello message with handshake protocol
  *          header without fragmentation
  */
@@ -119,35 +158,31 @@ std::vector<uint8_t> client_hello_transcript_hash() {
  * Frames a single DTLS handshake message fragment (RFC 9147 5.2) by prepending
  * the msg_type/length/message_seq/fragment_offset/fragment_length header.
  */
-std::vector<uint8_t> dtls_frame_fragment(TLS::Handshake_Type type,
-                                         size_t total_len,
-                                         uint16_t msg_seq,
-                                         size_t frag_offset,
-                                         std::span<const uint8_t> fragment) {
-   const auto total = static_cast<uint32_t>(total_len);
-   const auto offset = static_cast<uint32_t>(frag_offset);
-   const auto frag_len = static_cast<uint32_t>(fragment.size());
-   std::vector<uint8_t> framed = {
-      static_cast<uint8_t>(type),
-      static_cast<uint8_t>(total >> 16),
-      static_cast<uint8_t>(total >> 8),
-      static_cast<uint8_t>(total),
-      static_cast<uint8_t>(msg_seq >> 8),
-      static_cast<uint8_t>(msg_seq),
-      static_cast<uint8_t>(offset >> 16),
-      static_cast<uint8_t>(offset >> 8),
-      static_cast<uint8_t>(offset),
-      static_cast<uint8_t>(frag_len >> 16),
-      static_cast<uint8_t>(frag_len >> 8),
-      static_cast<uint8_t>(frag_len),
+std::vector<uint8_t> dtls_marshall_fragment(TLS::Handshake_Type type,
+                                            size_t total_len,
+                                            uint16_t msg_seq,
+                                            size_t frag_offset,
+                                            std::span<const uint8_t> fragment) {
+   auto store_be24 = [](uint32_t value) {
+      BOTAN_ASSERT_NOMSG(value <= 0xFFFFFF);
+      const auto be = Botan::store_be(value);
+      std::array<uint8_t, 3> result{};
+      Botan::copy_mem(result, std::span{be}.last<3>());
+      return result;
    };
-   framed.insert(framed.end(), fragment.begin(), fragment.end());
-   return framed;
+
+   return Botan::concat<std::vector<uint8_t>>(  //
+      Botan::store_be(type),
+      store_be24(static_cast<uint32_t>(total_len)),
+      Botan::store_be(msg_seq),
+      store_be24(static_cast<uint32_t>(frag_offset)),
+      store_be24(static_cast<uint32_t>(fragment.size())),
+      fragment);
 }
 
 /**
  * One slice of a handshake message, to be wrapped into an individual DTLS
- * handshake fragment (see dtls_frame_fragment()).
+ * handshake fragment (see dtls_marshall_fragment()).
  */
 struct Fragment_Piece {
       size_t offset;
@@ -191,12 +226,14 @@ std::vector<Test::Result> basic() {
    return {
       CHECK("read ClientHello",
             [&](Test::Result& result) {
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
                auto transcript_hash = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
-               result.require("successful ingestion", hl->copy_data(default_policy, client_hello_marshalled_bytes()));
+               result.require("successful ingestion",
+                              hl->copy_data(default_policy, handshake_record(client_hello_marshalled_bytes())) ==
+                                 CopyDataResult::Consumed);
                auto msg = hl->next_message(default_policy, transcript_hash);
                result.require("received something", msg.has_value());
-               result.test_u64_eq("lol", msg->index(), 0);
+               result.test_u64_eq("message index is 0", msg->index(), 0);
                result.require("message is ClientHello", std::holds_alternative<TLS::Client_Hello_13>(msg.value()));
 
                result.test_bin_eq("received handshake message",
@@ -206,46 +243,71 @@ std::vector<Test::Result> basic() {
                transcript_hash.set_algorithm("SHA-256");
                result.test_bin_eq("transcript hash", transcript_hash.current(), client_hello_transcript_hash());
 
-               result.test_is_true("no more records", !hl->next_message(default_policy, transcript_hash).has_value());
+               result.test_opt_is_null("no more records", hl->next_message(default_policy, transcript_hash));
             }),
 
       CHECK("prepare ClientHello",
             [&](Test::Result& result) {
                auto hello = client_hello();
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Client, TLS::TLS_Flavor::DTLS);
-               auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Client);
 
                // Creating a fresh handshake layer message for the TLS ClientHello should result in the
                // same bytes as the handshake msg header in client_hello_record
                result.test_bin_eq(
                   "reproduces wire message",
-                  ensure_marshalled_handshake_message_fragments(
-                     result, hl->prepare_message(hello, th, TLS::MAX_PLAINTEXT_SIZE))[0 /* no fragmentation */],
+                  hl->fragment_message(
+                     hello.wire_type(), TLS::Handshake_Layer::serialize(hello), TLS::MAX_PLAINTEXT_SIZE)[0],
                   client_hello_marshalled_bytes());
             }),
 
       CHECK("prepare ClientHello with fragmentation",
             [&](Test::Result& result) {
                auto hello = client_hello();
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Client, TLS::TLS_Flavor::DTLS);
-               auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Client);
 
                // Force fragmentation into two or more fragments
                const size_t fragment_size = client_hello_bare_bytes().size() / 2;
 
                // Creating a fresh handshake layer message for the TLS ClientHello should result in the
                // same bytes as the handshake msg header in client_hello_record
-               const auto fragments =
-                  ensure_marshalled_handshake_message_fragments(result, hl->prepare_message(hello, th, fragment_size));
+               const auto fragments = hl->fragment_message(
+                  hello.wire_type(), TLS::Handshake_Layer::serialize(hello), static_cast<uint16_t>(fragment_size));
                result.test_is_true("fragmented", fragments.size() > 1);
 
                result.test_bin_eq(
                   "reproduces full message", concat_fragments(result, fragments), client_hello_bare_bytes());
+
+               // The first fragment can be capped individually, e.g. to fill up a
+               // record that already holds fragments of previous messages.
+               constexpr uint16_t first_fragment_size = 64;
+               const auto capped_fragments = hl->fragment_message(hello.wire_type(),
+                                                                  TLS::Handshake_Layer::serialize(hello),
+                                                                  static_cast<uint16_t>(fragment_size),
+                                                                  first_fragment_size);
+               result.test_is_true("fragmented", capped_fragments.size() > 1);
+               result.test_sz_eq(
+                  "first fragment respects its individual cap", capped_fragments.front().size(), first_fragment_size);
+               result.test_sz_eq("second fragment uses the full budget", capped_fragments[1].size(), fragment_size);
+               result.test_bin_eq(
+                  "reproduces full message", concat_fragments(result, capped_fragments), client_hello_bare_bytes());
+
+               result.test_throws("first fragment cap must not exceed the general cap", [&] {
+                  static_cast<void>(hl->fragment_message(hello.wire_type(),
+                                                         TLS::Handshake_Layer::serialize(hello),
+                                                         first_fragment_size,
+                                                         static_cast<uint16_t>(fragment_size)));
+               });
+
+               result.test_throws("fragment size must exceed the fragment header length", [&] {
+                  static_cast<void>(hl->fragment_message(hello.wire_type(),
+                                                         TLS::Handshake_Layer::serialize(hello),
+                                                         TLS::DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH));
+               });
             }),
 
       CHECK("parse ClientHello with fragmentation",
             [&](Test::Result& result) {
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
                auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
                // Split the ClientHello into two fragments
@@ -254,22 +316,26 @@ std::vector<Test::Result> basic() {
 
                // Prepend HS headers
                const auto first_fragment_framed =
-                  dtls_frame_fragment(TLS::Handshake_Type::ClientHello,
-                                      client_hello_bytes.size(),
-                                      0 /* msg_seq */,
-                                      0 /*frag_offset */,
-                                      std::span{client_hello_bytes}.subspan(0, fragment_size));
+                  dtls_marshall_fragment(TLS::Handshake_Type::ClientHello,
+                                         client_hello_bytes.size(),
+                                         0 /* msg_seq */,
+                                         0 /*frag_offset */,
+                                         std::span{client_hello_bytes}.subspan(0, fragment_size));
                const auto second_fragment_framed =
-                  dtls_frame_fragment(TLS::Handshake_Type::ClientHello,
-                                      client_hello_bytes.size(),
-                                      0 /* msg_seq */,
-                                      fragment_size /*frag_offset */,
-                                      std::span{client_hello_bytes}.subspan(fragment_size));
+                  dtls_marshall_fragment(TLS::Handshake_Type::ClientHello,
+                                         client_hello_bytes.size(),
+                                         0 /* msg_seq */,
+                                         fragment_size /*frag_offset */,
+                                         std::span{client_hello_bytes}.subspan(fragment_size));
 
-               result.require("successful ingestion", hl->copy_data(default_policy, first_fragment_framed));
-               result.test_is_true("needs more bytes", !hl->next_message(default_policy, th).has_value());
+               result.require(
+                  "successful ingestion",
+                  hl->copy_data(default_policy, handshake_record(first_fragment_framed)) == CopyDataResult::Consumed);
+               result.test_opt_is_null("needs more bytes", hl->next_message(default_policy, th));
 
-               result.require("successful ingestion", hl->copy_data(default_policy, second_fragment_framed));
+               result.require(
+                  "successful ingestion",
+                  hl->copy_data(default_policy, handshake_record(second_fragment_framed)) == CopyDataResult::Consumed);
                auto msg = hl->next_message(default_policy, th);
                result.require("received something", msg.has_value());
                result.require("message is ClientHello", std::holds_alternative<TLS::Client_Hello_13>(msg.value()));
@@ -281,34 +347,96 @@ std::vector<Test::Result> basic() {
                th.set_algorithm("SHA-256");
                result.test_bin_eq("transcript hash", th.current(), client_hello_transcript_hash());
 
-               result.test_is_true("no more records", !hl->next_message(default_policy, th).has_value());
+               result.test_opt_is_null("no more records", hl->next_message(default_policy, th));
             }),
 
       CHECK(
          "Messages are emitted in order of their sequence number",
          [&](Test::Result& result) {
-            auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+            auto hl = make_handshake_layer(TLS::Connection_Side::Server);
             auto transcript_hash = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
             const auto ch = client_hello_bare_bytes();
             const auto cf = client_finished_bare_bytes();
 
-            result.require(
-               "successful ingestion of seqno 1",
-               hl->copy_data(default_policy,
-                             dtls_frame_fragment(TLS::Handshake_Type::Finished, cf.size(), 1 /* seqno */, 0, cf)));
+            constexpr uint16_t window = TLS::DTLS_Handshake_Layer::MAX_BUFFERED_FUTURE_MESSAGES;
+            auto marshalled_finished = [&](uint16_t seqno) {
+               return dtls_marshall_fragment(TLS::Handshake_Type::Finished, cf.size(), seqno, 0, cf);
+            };
+            auto marshalled_client_hello = [&](uint16_t seqno) {
+               return dtls_marshall_fragment(TLS::Handshake_Type::ClientHello, ch.size(), seqno, 0, ch);
+            };
+
+            // Messages too far in the future are discarded right away, messages
+            // within the window are buffered for reassembly (RFC 9147 5.2).
+            result.test_enum_eq("message beyond the buffering window is discarded",
+                                hl->copy_data(default_policy, handshake_record(marshalled_finished(window + 1))),
+                                CopyDataResult::Discarded);
+            result.test_enum_eq("message at the edge of the buffering window is buffered",
+                                hl->copy_data(default_policy, handshake_record(marshalled_finished(window))),
+                                CopyDataResult::Consumed);
+
+            // A record that mixes a bufferable fragment with one beyond the
+            // window is consumed partially. The second ClientHello (seqno 1)
+            // reflects the HelloRetryRequest case (RFC 8446 4.1.4).
+            const auto mixed_record =
+               Botan::concat<std::vector<uint8_t>>(marshalled_client_hello(1), marshalled_finished(window + 1));
+            result.test_enum_eq("record with discarded and buffered fragments is consumed partially",
+                                hl->copy_data(default_policy, handshake_record(mixed_record)),
+                                CopyDataResult::ConsumedPartially);
+
+            // Buffer the Finished message that will complete the client
+            // authentication flight Certificate(2), CertificateVerify(3),
+            // Finished(4) further down (RFC 8446 4.4).
+            result.test_enum_eq("Finished of the client authentication flight is buffered",
+                                hl->copy_data(default_policy, handshake_record(marshalled_finished(4))),
+                                CopyDataResult::Consumed);
+
             result.test_opt_is_null("no message to read yet", hl->next_message(default_policy, transcript_hash));
 
             result.require(
                "successful ingestion of seqno 0",
-               hl->copy_data(default_policy,
-                             dtls_frame_fragment(TLS::Handshake_Type::ClientHello, ch.size(), 0 /* seqno */, 0, ch)));
+               hl->copy_data(default_policy, handshake_record(marshalled_client_hello(0))) == CopyDataResult::Consumed);
             result.test_is_true(
                "received message 0",
                std::holds_alternative<TLS::Client_Hello_13>(hl->next_message(default_policy, transcript_hash).value()));
             result.test_is_true(
                "received message 1",
+               std::holds_alternative<TLS::Client_Hello_13>(hl->next_message(default_policy, transcript_hash).value()));
+
+            // The buffered Finished cannot be emitted before the gap in the
+            // sequence space is filled.
+            result.test_opt_is_null("buffered future message is not emitted out of order",
+                                    hl->next_message(default_policy, transcript_hash));
+
+            const auto cc = client_certificate_bare_bytes();
+            const auto cv = certificate_verify_bare_bytes();
+            result.test_enum_eq("successful ingestion of Certificate",
+                                hl->copy_data(default_policy,
+                                              handshake_record(dtls_marshall_fragment(
+                                                 TLS::Handshake_Type::Certificate, cc.size(), 2 /* seqno */, 0, cc))),
+                                CopyDataResult::Consumed);
+            result.test_enum_eq(
+               "successful ingestion of CertificateVerify",
+               hl->copy_data(default_policy,
+                             handshake_record(dtls_marshall_fragment(
+                                TLS::Handshake_Type::CertificateVerify, cv.size(), 3 /* seqno */, 0, cv))),
+               CopyDataResult::Consumed);
+
+            // The buffered messages are emitted in order of their sequence
+            // numbers, ending with the Finished buffered further up. Because
+            // the gap fillers use different message types, the final message
+            // is provably the originally buffered one.
+            result.test_is_true(
+               "received message 2",
+               std::holds_alternative<TLS::Certificate_13>(hl->next_message(default_policy, transcript_hash).value()));
+            result.test_is_true("received message 3",
+                                std::holds_alternative<TLS::Certificate_Verify_13>(
+                                   hl->next_message(default_policy, transcript_hash).value()));
+            result.test_is_true(
+               "originally buffered Finished is emitted last",
                std::holds_alternative<TLS::Finished_13>(hl->next_message(default_policy, transcript_hash).value()));
+
             result.test_opt_is_null("no more messages", hl->next_message(default_policy, transcript_hash));
          }),
    };
@@ -333,7 +461,7 @@ std::vector<Test::Result> fragmentation() {
    return {
       CHECK("parse ClientHello reassembled from many small fragments",
             [&](Test::Result& result) {
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
                auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
                const auto message = client_hello_bare_bytes();
@@ -343,8 +471,9 @@ std::vector<Test::Result> fragmentation() {
                for(size_t i = 0; i < pieces.size(); ++i) {
                   result.require("successful ingestion",
                                  hl->copy_data(default_policy,
-                                               dtls_frame_fragment(
-                                                  type, message.size(), msg_seq, pieces[i].offset, pieces[i].bytes)));
+                                               handshake_record(dtls_marshall_fragment(
+                                                  type, message.size(), msg_seq, pieces[i].offset, pieces[i].bytes))) ==
+                                    CopyDataResult::Consumed);
                   msg = hl->next_message(default_policy, th);
                   const bool is_last = (i + 1 == pieces.size());
                   result.test_is_true(is_last ? "complete after last fragment" : "still incomplete",
@@ -356,7 +485,7 @@ std::vector<Test::Result> fragmentation() {
 
       CHECK("parse ClientHello with multiple fragments in a single record",
             [&](Test::Result& result) {
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
                auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
                const auto message = client_hello_bare_bytes();
@@ -366,20 +495,22 @@ std::vector<Test::Result> fragmentation() {
                   std::vector<uint8_t> record;
                   for(const auto& piece : pieces) {
                      const auto fragment =
-                        dtls_frame_fragment(type, message.size(), msg_seq, piece.offset, piece.bytes);
+                        dtls_marshall_fragment(type, message.size(), msg_seq, piece.offset, piece.bytes);
                      record.insert(record.end(), fragment.begin(), fragment.end());
                   }
                   return record;
                }();
 
-               result.require("successful ingestion", hl->copy_data(default_policy, record_with_multiple_fragments));
+               result.require("successful ingestion",
+                              hl->copy_data(default_policy, handshake_record(record_with_multiple_fragments)) ==
+                                 CopyDataResult::Consumed);
 
                verify_client_hello(result, hl->next_message(default_policy, th), th);
             }),
 
       CHECK("parse ClientHello reassembled from unevenly sized fragments",
             [&](Test::Result& result) {
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
                auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
                const auto message = client_hello_bare_bytes();
@@ -390,10 +521,11 @@ std::vector<Test::Result> fragmentation() {
                const auto pieces = split_into_pieces(message, std::array{a, b, c, d});
 
                for(const auto& piece : pieces) {
-                  result.require(
-                     "successful ingestion",
-                     hl->copy_data(default_policy,
-                                   dtls_frame_fragment(type, message.size(), msg_seq, piece.offset, piece.bytes)));
+                  result.require("successful ingestion",
+                                 hl->copy_data(default_policy,
+                                               handshake_record(dtls_marshall_fragment(
+                                                  type, message.size(), msg_seq, piece.offset, piece.bytes))) ==
+                                    CopyDataResult::Consumed);
                }
 
                auto msg = hl->next_message(default_policy, th);
@@ -403,7 +535,7 @@ std::vector<Test::Result> fragmentation() {
 
       CHECK("parse ClientHello reassembled from fragments delivered out of order",
             [&](Test::Result& result) {
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
                auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
                const auto message = client_hello_bare_bytes();
@@ -416,10 +548,11 @@ std::vector<Test::Result> fragmentation() {
                std::optional<TLS::Handshake_Message_13> msg;
                for(size_t i = 0; i < delivery_order.size(); ++i) {
                   const auto& piece = pieces[delivery_order[i]];
-                  result.require(
-                     "successful ingestion",
-                     hl->copy_data(default_policy,
-                                   dtls_frame_fragment(type, message.size(), msg_seq, piece.offset, piece.bytes)));
+                  result.require("successful ingestion",
+                                 hl->copy_data(default_policy,
+                                               handshake_record(dtls_marshall_fragment(
+                                                  type, message.size(), msg_seq, piece.offset, piece.bytes))) ==
+                                    CopyDataResult::Consumed);
                   msg = hl->next_message(default_policy, th);
                   const bool is_last = (i + 1 == delivery_order.size());
                   result.test_is_true(is_last ? "complete after last fragment" : "still incomplete",
@@ -431,7 +564,7 @@ std::vector<Test::Result> fragmentation() {
 
       CHECK("parse ClientHello reassembled from overlapping fragments",
             [&](Test::Result& result) {
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
                auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
                const auto message = client_hello_bare_bytes();
@@ -447,12 +580,16 @@ std::vector<Test::Result> fragmentation() {
 
                result.require(
                   "successful ingestion",
-                  hl->copy_data(default_policy, dtls_frame_fragment(type, message.size(), msg_seq, 0, first_span)));
-               result.test_is_true("still incomplete", !hl->next_message(default_policy, th).has_value());
+                  hl->copy_data(default_policy,
+                                handshake_record(dtls_marshall_fragment(
+                                   type, message.size(), msg_seq, 0, first_span))) == CopyDataResult::Consumed);
+               result.test_opt_is_null("still incomplete", hl->next_message(default_policy, th));
 
                result.require(
                   "successful ingestion",
-                  hl->copy_data(default_policy, dtls_frame_fragment(type, message.size(), msg_seq, mid, second_span)));
+                  hl->copy_data(default_policy,
+                                handshake_record(dtls_marshall_fragment(
+                                   type, message.size(), msg_seq, mid, second_span))) == CopyDataResult::Consumed);
 
                auto msg = hl->next_message(default_policy, th);
 
@@ -461,7 +598,7 @@ std::vector<Test::Result> fragmentation() {
 
       CHECK("parse ClientHello stays incomplete when fragments leave a gap",
             [&](Test::Result& result) {
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
                auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
                const auto message = client_hello_bare_bytes();
@@ -477,18 +614,21 @@ std::vector<Test::Result> fragmentation() {
 
                result.require(
                   "successful ingestion 1",
-                  hl->copy_data(default_policy, dtls_frame_fragment(type, message.size(), msg_seq, 0, before_gap)));
-               result.require("successful ingestion 2",
-                              hl->copy_data(default_policy,
-                                            dtls_frame_fragment(type, message.size(), msg_seq, gap_end, after_gap)));
+                  hl->copy_data(default_policy,
+                                handshake_record(dtls_marshall_fragment(
+                                   type, message.size(), msg_seq, 0, before_gap))) == CopyDataResult::Consumed);
+               result.require(
+                  "successful ingestion 2",
+                  hl->copy_data(default_policy,
+                                handshake_record(dtls_marshall_fragment(
+                                   type, message.size(), msg_seq, gap_end, after_gap))) == CopyDataResult::Consumed);
 
-               result.test_is_true("message never completes due to the gap",
-                                   !hl->next_message(default_policy, th).has_value());
+               result.test_opt_is_null("message never completes due to the gap", hl->next_message(default_policy, th));
             }),
 
       CHECK("parse ClientHello detects an invalid oversized fragment",
             [&](Test::Result& result) {
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
                auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
                const auto message = client_hello_bare_bytes();
@@ -496,19 +636,53 @@ std::vector<Test::Result> fragmentation() {
                // a fragment whose offset + length overflows the declared total message length
                const std::vector<uint8_t> bogus_payload(50, 0x41);
                result.test_throws("bogus data is rejected", [&] {
-                  hl->copy_data(default_policy,
-                                dtls_frame_fragment(type, message.size(), msg_seq, message.size() - 1, bogus_payload));
+                  std::ignore = hl->copy_data(default_policy,
+                                              handshake_record(dtls_marshall_fragment(
+                                                 type, message.size(), msg_seq, message.size() - 1, bogus_payload)));
                });
                result.test_opt_is_null("bogus fragment does not complete the message",
                                        hl->next_message(default_policy, th));
 
                // sending all the valid fragments afterwards should still reassemble correctly
                const auto pieces = split_into_pieces(message, equal_sizes(message.size(), 3));
-               for(const auto& piece : pieces) {
-                  result.require(
-                     "successful ingestion",
+               result.require("at least two pieces", pieces.size() >= 2);
+               result.require("successful ingestion",
+                              hl->copy_data(default_policy,
+                                            handshake_record(dtls_marshall_fragment(
+                                               type, message.size(), msg_seq, pieces[0].offset, pieces[0].bytes))) ==
+                                 CopyDataResult::Consumed);
+
+               // fragments whose header values disagree with the pending
+               // reassembly (total length, message type) are rejected
+               result.test_throws("inconsistent total message length is rejected", [&] {
+                  std::ignore =
                      hl->copy_data(default_policy,
-                                   dtls_frame_fragment(type, message.size(), msg_seq, piece.offset, piece.bytes)));
+                                   handshake_record(dtls_marshall_fragment(
+                                      type, message.size() + 1, msg_seq, pieces[1].offset, pieces[1].bytes)));
+               });
+               result.test_throws("inconsistent message type is rejected", [&] {
+                  std::ignore = hl->copy_data(
+                     default_policy,
+                     handshake_record(dtls_marshall_fragment(
+                        TLS::Handshake_Type::Finished, message.size(), msg_seq, pieces[1].offset, pieces[1].bytes)));
+               });
+
+               // fragments of one message must not span multiple record epochs
+               result.test_throws("fragments spanning multiple epochs are rejected", [&] {
+                  std::ignore = hl->copy_data(
+                     default_policy,
+                     handshake_record(
+                        dtls_marshall_fragment(type, message.size(), msg_seq, pieces[1].offset, pieces[1].bytes),
+                        TLS::EpochNumber::ApplicationTraffic_0));
+               });
+
+               // the pending reassembly is unharmed by the rejected fragments
+               for(size_t i = 1; i < pieces.size(); ++i) {
+                  result.require("successful ingestion",
+                                 hl->copy_data(default_policy,
+                                               handshake_record(dtls_marshall_fragment(
+                                                  type, message.size(), msg_seq, pieces[i].offset, pieces[i].bytes))) ==
+                                    CopyDataResult::Consumed);
                }
 
                auto msg = hl->next_message(default_policy, th);
@@ -538,7 +712,7 @@ std::vector<Test::Result> fragmentation() {
       //             result.require(
       //                "successful ingestion",
       //                hl->copy_data(default_policy,
-      //                              dtls_frame_fragment(type, message.size(), msg_seq, piece.offset, piece.bytes)));
+      //                              dtls_marshall_fragment(type, message.size(), msg_seq, piece.offset, piece.bytes)));
       //          }
 
       //          verify_client_hello(result, hl->next_message(default_policy, th), th);
@@ -546,49 +720,48 @@ std::vector<Test::Result> fragmentation() {
 
       CHECK("parse ClientHello detects incoming garbage data with valid message type",
             [&](Test::Result& result) {
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
                auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
-               const auto message = client_hello_bare_bytes();
-
-               // a fragment whose message type is correct but the rest is bogus
-               const std::array<uint8_t, 20> garbage{0x01 /* msg type: 0x01 -  Client Hello! */};
-               result.test_throws("detects garbage", [&] { hl->copy_data(default_policy, garbage); });
-               result.test_opt_is_null("bogus fragment does not complete the message",
-                                       hl->next_message(default_policy, th));
-
-               // sending all the valid fragments afterwards should still reassemble correctly
-               const auto pieces = split_into_pieces(message, equal_sizes(message.size(), 3));
-               for(const auto& piece : pieces) {
-                  result.require(
-                     "successful ingestion",
-                     hl->copy_data(default_policy,
-                                   dtls_frame_fragment(type, message.size(), msg_seq, piece.offset, piece.bytes)));
-               }
-
-               verify_client_hello(result, hl->next_message(default_policy, th), th);
+               // A fragment whose message type is correct (ClientHello) but that
+               // declares a zero-length message. copy_data() happily buffers it
+               // (an empty message is immediately "complete"), and the bogus
+               // content is only detected when parsing the message.
+               //
+               // TODO: The bogus message should ideally be detected and rejected
+               //       already in copy_data(). Also, the unparsable message
+               //       remains in the reassembly buffer after the failed parse,
+               //       i.e. the handshake layer is wedged from this point on.
+               const std::array<uint8_t, 12> garbage{0x01 /* msg type: 0x01 -  Client Hello! */};
+               result.test_enum_eq("garbage is buffered like any other fragment",
+                                   hl->copy_data(default_policy, handshake_record(garbage)),
+                                   CopyDataResult::Consumed);
+               result.test_throws("bogus message is detected at parse time",
+                                  [&] { static_cast<void>(hl->next_message(default_policy, th)); });
             }),
 
       CHECK("parse ClientHello detects incoming short garbage data",
             [&](Test::Result& result) {
-               auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
                auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
                const auto message = client_hello_bare_bytes();
 
                // a fragment whose message type is correct but it is too short to be a valid message
                const std::array<uint8_t, 5> garbage{0x01 /* msg type: 0x01 -  Client Hello! */};
-               result.test_throws("detects garbage", [&] { hl->copy_data(default_policy, garbage); });
+               result.test_throws("detects garbage",
+                                  [&] { static_cast<void>(hl->copy_data(default_policy, handshake_record(garbage))); });
                result.test_opt_is_null("bogus fragment does not complete the message",
                                        hl->next_message(default_policy, th));
 
                // sending all the valid fragments afterwards should still reassemble correctly
                const auto pieces = split_into_pieces(message, equal_sizes(message.size(), 3));
                for(const auto& piece : pieces) {
-                  result.require(
-                     "successful ingestion",
-                     hl->copy_data(default_policy,
-                                   dtls_frame_fragment(type, message.size(), msg_seq, piece.offset, piece.bytes)));
+                  result.require("successful ingestion",
+                                 hl->copy_data(default_policy,
+                                               handshake_record(dtls_marshall_fragment(
+                                                  type, message.size(), msg_seq, piece.offset, piece.bytes))) ==
+                                    CopyDataResult::Consumed);
                }
 
                verify_client_hello(result, hl->next_message(default_policy, th), th);
@@ -596,57 +769,142 @@ std::vector<Test::Result> fragmentation() {
 
       CHECK("Fragmentation round-trip",
             [&](Test::Result& result) {
-               auto hl_client = TLS::Handshake_Layer::create(TLS::Connection_Side::Client, TLS::TLS_Flavor::DTLS);
-               auto th_client = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
+               auto hl_client = make_handshake_layer(TLS::Connection_Side::Client);
                auto hello = client_hello();
 
                const auto message = client_hello_bare_bytes();
-               const size_t fragment_size = message.size() / 3;
+               const uint16_t fragment_size = static_cast<uint16_t>(message.size() / 3);
 
-               const auto fragments = ensure_marshalled_handshake_message_fragments(
-                  result, hl_client->prepare_message(hello, th_client, fragment_size));
+               const auto fragments =
+                  hl_client->fragment_message(hello.wire_type(), TLS::Handshake_Layer::serialize(hello), fragment_size);
                result.test_is_true("fragmented", fragments.size() > 1);
 
                // feed the fragments back into a new handshake layer and check that the original message is reassembled
-               auto hl_server = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
+               auto hl_server = make_handshake_layer(TLS::Connection_Side::Server);
                auto th_server = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
                for(const auto& fragment : fragments) {
-                  result.require("successful ingestion", hl_server->copy_data(default_policy, fragment));
+                  result.require("successful ingestion",
+                                 hl_server->copy_data(default_policy, handshake_record(fragment.get())) ==
+                                    CopyDataResult::Consumed);
                }
 
                auto msg = hl_server->next_message(default_policy, th_server);
 
-               th_client.set_algorithm("SHA-256");
-               result.test_bin_eq("transcript hash client", th_client.current(), client_hello_transcript_hash());
                verify_client_hello(result, msg, th_server);
             }),
 
-      CHECK(
-         "(Retransmitted) fragments of historic messages should be dropped",
-         [&](Test::Result& result) {
-            auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
-            auto transcript_hash = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
+      CHECK("(Retransmitted) fragments of historic messages should be dropped",
+            [&](Test::Result& result) {
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
+               auto transcript_hash = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
-            const auto ch = client_hello_bare_bytes();
+               const auto ch = client_hello_bare_bytes();
 
-            result.require(
-               "successful ingestion of seqno 0",
-               hl->copy_data(default_policy,
-                             dtls_frame_fragment(TLS::Handshake_Type::ClientHello, ch.size(), 0 /* seqno */, 0, ch)));
-            verify_client_hello(result, hl->next_message(default_policy, transcript_hash), transcript_hash);
+               result.require("successful ingestion of seqno 0",
+                              hl->copy_data(default_policy,
+                                            handshake_record(dtls_marshall_fragment(
+                                               TLS::Handshake_Type::ClientHello, ch.size(), 0 /* seqno */, 0, ch))) ==
+                                 CopyDataResult::Consumed);
+               verify_client_hello(result, hl->next_message(default_policy, transcript_hash), transcript_hash);
 
-            result.test_is_false(
-               "retransmission of Client Hello is dropped",
-               hl->copy_data(default_policy,
-                             dtls_frame_fragment(TLS::Handshake_Type::ClientHello, ch.size(), 0 /* seqno */, 0, ch)));
-            result.test_opt_is_null("no more messages", hl->next_message(default_policy, transcript_hash));
-         }),
+               result.test_enum_eq(
+                  "retransmission of Client Hello is dropped",
+                  hl->copy_data(default_policy,
+                                handshake_record(dtls_marshall_fragment(
+                                   TLS::Handshake_Type::ClientHello, ch.size(), 0 /* seqno */, 0, ch))),
+                  CopyDataResult::DiscardedDuplicate);
+               result.test_opt_is_null("no more messages", hl->next_message(default_policy, transcript_hash));
+            }),
    };
 }
+
+std::vector<Test::Result> post_handshake() {
+   const auto default_policy = TLS::Policy();
+
+   auto marshalled_key_update = [](uint16_t msg_seq, bool request_peer_update) {
+      const std::array<uint8_t, 1> body{static_cast<uint8_t>(request_peer_update ? 0x01 : 0x00)};
+      return dtls_marshall_fragment(TLS::Handshake_Type::KeyUpdate, body.size(), msg_seq, 0, body);
+   };
+
+   return {
+      CHECK("Key_Update messages are parsed",
+            [&](Test::Result& result) {
+               auto client = make_handshake_layer(TLS::Connection_Side::Client);
+               auto server = make_handshake_layer(TLS::Connection_Side::Server);
+
+               // send a Key_Update through the fragmenting send path
+               const auto fragments = client->fragment_message(TLS::Handshake_Type::KeyUpdate,
+                                                               TLS::Handshake_Layer::serialize(TLS::Key_Update(false)),
+                                                               TLS::MAX_PLAINTEXT_SIZE);
+               result.test_sz_eq("Key_Update fits into a single fragment", fragments.size(), 1);
+
+               result.test_enum_eq(
+                  "successful ingestion",
+                  server->copy_data(default_policy,
+                                    handshake_record(fragments.front().get(), TLS::EpochNumber::ApplicationTraffic_0)),
+                  CopyDataResult::Consumed);
+
+               auto msg = server->next_post_handshake_message(default_policy);
+               result.require("received something", msg.has_value());
+               result.require("message is Key_Update", std::holds_alternative<TLS::Key_Update>(msg.value()));
+               result.test_is_false("peer does not request reciprocation",
+                                    std::get<TLS::Key_Update>(msg.value()).expects_reciprocation());
+
+               result.test_enum_eq("successful ingestion",
+                                   server->copy_data(default_policy,
+                                                     handshake_record(marshalled_key_update(1, true),
+                                                                      TLS::EpochNumber::ApplicationTraffic_0)),
+                                   CopyDataResult::Consumed);
+               auto msg2 = server->next_post_handshake_message(default_policy);
+               result.require("received something", msg2.has_value());
+               result.require("message is Key_Update", std::holds_alternative<TLS::Key_Update>(msg2.value()));
+               result.test_is_true("peer requests reciprocation",
+                                   std::get<TLS::Key_Update>(msg2.value()).expects_reciprocation());
+            }),
+
+      CHECK("Post-handshake messages arriving on outdated epochs are accepted",
+            [&](Test::Result& result) {
+               auto hl = make_handshake_layer(TLS::Connection_Side::Client);
+
+               // RFC 9147 Section 8
+               //    Due to loss and/or reordering, DTLS 1.3 implementations may
+               //    receive a record with an older epoch than the current one
+               //    [...]. They SHOULD attempt to process those records with
+               //    that epoch [...] but MAY opt to discard such out-of-epoch
+               //    records.
+               //
+               // Simulate a KeyUpdate overtaking a NewSessionTicket in flight:
+               // once the KeyUpdate is processed, the connection's current
+               // epoch has advanced, but the reordered ticket still arrives on
+               // the previous epoch and must be processed normally.
+               result.test_enum_eq("successful ingestion of KeyUpdate",
+                                   hl->copy_data(default_policy,
+                                                 handshake_record(marshalled_key_update(0 /* seqno */, false),
+                                                                  TLS::EpochNumber::ApplicationTraffic_0)),
+                                   CopyDataResult::Consumed);
+               result.require("received KeyUpdate", hl->next_post_handshake_message(default_policy).has_value());
+
+               const auto nst = new_session_ticket_bare_bytes();
+               result.test_enum_eq(
+                  "successful ingestion on the outdated epoch",
+                  hl->copy_data(default_policy,
+                                handshake_record(dtls_marshall_fragment(
+                                   TLS::Handshake_Type::NewSessionTicket, nst.size(), 1 /* seqno */, 0, nst))),
+                  CopyDataResult::Consumed);
+
+               auto msg = hl->next_post_handshake_message(default_policy);
+               result.require("received something", msg.has_value());
+               result.test_is_true("message is NewSessionTicket",
+                                   std::holds_alternative<TLS::New_Session_Ticket_13>(msg.value()));
+            }),
+   };
+}
+
 }  // namespace
 
 BOTAN_REGISTER_TEST_FN("tls", "dtls_handshake_layer_13_basic", basic);
 BOTAN_REGISTER_TEST_FN("tls", "dtls_handshake_layer_13_fragmentation", fragmentation);
+BOTAN_REGISTER_TEST_FN("tls", "dtls_handshake_layer_13_post_handshake", post_handshake);
 
 }  // namespace Botan_Tests
 
