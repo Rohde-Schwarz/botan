@@ -48,10 +48,7 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
 
       explicit DTLS_Handshake_Layer(Connection_Side side) : Handshake_Layer(side) {}
 
-      bool has_pending_data() const override {
-         // TODO: This probably doesn't make sense for DTLS, not sure...
-         return false;
-      }
+      bool has_pending_data() const override { return !m_current_read_message.empty(); }
 
       CopyDataResult copy_data(const Policy& policy, const Handshake_Record& data_from_peer) override;
 
@@ -80,21 +77,19 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
          uint16_t max_fragment_size,
          std::optional<uint16_t> first_fragment_max_size = std::nullopt);
 
-      std::optional<Handshake_Message_13> next_message(const Policy& policy,
-                                                       Transcript_Hash_State& transcript_hash) override;
-
-      std::optional<Post_Handshake_Message_13> next_post_handshake_message(const Policy& policy) override;
-
    protected:
       TLS_Flavor tls_flavor() const override { return TLS_Flavor::DTLS; }
+
+      std::optional<MessageBufferView> fetch_next_message_buffer_view() override;
 
       Handshake_Message_13 parse_handshake_message(Handshake_Type type,
                                                    std::span<const uint8_t> msg,
                                                    const Policy& policy) const override;
 
    private:
-      uint16_t m_send_message_seq = 0;
-      uint32_t m_read_message_seq = 0;  // 32-bit to detect msg seqno exhaustion
+      // using 32-bit values to detect sequence number exhaustion
+      uint32_t m_send_message_seq = 0;
+      uint32_t m_read_message_seq = 0;
 
       struct ReassembledMessage {
             EpochNumber epoch;         // The record protection epoch this message was received in.

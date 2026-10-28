@@ -11,6 +11,7 @@
 #include <botan/tls_alert.h>
 #include <botan/tls_exceptn.h>
 #include <botan/tls_policy.h>
+#include <botan/internal/buffer_slicer.h>
 #include <botan/internal/concat_util.h>
 #include <botan/internal/fmt.h>
 #include <botan/internal/stl_util.h>
@@ -24,44 +25,30 @@ namespace {
 
 constexpr size_t HEADER_LENGTH = 4;
 
-template <typename Msg_Type>
-Handshake_Type handshake_type_from_byte(uint8_t byte_value) {
-   const auto type = static_cast<Handshake_Type>(byte_value);
-
-   if constexpr(std::is_same_v<Msg_Type, Handshake_Message_13>) {
-      switch(type) {
-         case Handshake_Type::ClientHello:
-         case Handshake_Type::ServerHello:
-         // case Handshake_Type::EndOfEarlyData:  // NYI: needs PSK/resumption support -- won't be offered in Client Hello for now
-         case Handshake_Type::EncryptedExtensions:
-         case Handshake_Type::Certificate:
-         case Handshake_Type::CertificateRequest:
-         case Handshake_Type::CertificateVerify:
-         case Handshake_Type::Finished:
-            return type;
-         default:
-            throw TLS_Exception(AlertType::UnexpectedMessage, "Unknown handshake message received");
-      }
-   } else {
-      switch(type) {
-         case Handshake_Type::NewSessionTicket:
-         case Handshake_Type::KeyUpdate:
-            // case Handshake_Type::CertificateRequest:  // NYI: post-handshake client auth (RFC 8446 4.6.2) -- won't be offered in Client Hello for now
-            return type;
-         default:
-            throw TLS_Exception(AlertType::UnexpectedMessage, "Unknown post-handshake message received");
-      }
-   }
 }
 
-void verify_handshake_message_size(size_t msg_len, size_t max_size) {
-   if(max_size > 0 && msg_len > max_size) {
-      throw TLS_Exception(Alert::HandshakeFailure,
-                          Botan::fmt("Handshake message is {} bytes, policy maximum is {}", msg_len, max_size));
+std::optional<Handshake_Type> Handshake_Layer::read_handshake_message_type(uint8_t value) {
+   const auto type = static_cast<Handshake_Type>(value);
+   switch(type) {
+      using enum Handshake_Type;
+
+      case ClientHello:
+      case ServerHello:
+      case HelloVerifyRequest:
+      // NYI: needs PSK/resumption support -- won't be offered in Client Hello for now
+      // case EndOfEarlyData:
+      case EncryptedExtensions:
+      case Certificate:
+      case CertificateRequest:
+      case CertificateVerify:
+      case Finished:
+      case NewSessionTicket:
+      case KeyUpdate:
+         return type;
+      default:
+         return std::nullopt;
    }
 }
-
-}  // namespace
 
 TLS_Handshake_Layer::CopyDataResult TLS_Handshake_Layer::copy_data(const Policy& policy,
                                                                    const Handshake_Record& data_from_peer) {
@@ -78,98 +65,148 @@ TLS_Handshake_Layer::CopyDataResult TLS_Handshake_Layer::copy_data(const Policy&
    return CopyDataResult::Consumed;
 }
 
-TLS_Handshake_Layer::NextMessageStep TLS_Handshake_Layer::next_message_buffer(std::span<const uint8_t> bytes,
-                                                                              const Policy& policy) {
-   // read the message header
-   if(bytes.size() < HEADER_LENGTH) {
-      return IncompleteNotProcessed{};
-   }
-
-   const auto type = read_handshake_message_type(bytes[0]);
-   const auto msg_len = make_uint32(0, bytes[1], bytes[2], bytes[3]);
-
-   // TODO(Botan4) this is split out due to a GCC 11 ICE, can be inlined
-   verify_handshake_message_size(msg_len, policy.maximum_handshake_message_size());
-
-   if(bytes.size() < HEADER_LENGTH + msg_len) {
-      return IncompleteNotProcessed{};
-   }
-
-   return NextMessageResult{
-      .type = type,
-      .tls_header_bytes = HandshakeProtocolHeader(std::array{bytes[0], bytes[1], bytes[2], bytes[3]}),
-      .message_bytes = StrongSpan<const SerializedHandshakeMessage>(bytes.subspan(HEADER_LENGTH, msg_len)),
-      .bytes_consumed = HEADER_LENGTH + msg_len,
-   };
-}
-
-std::optional<Handshake_Message_13> TLS_Handshake_Layer::next_message(const Policy& policy,
-                                                                      Transcript_Hash_State& transcript_hash) {
-   BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
-   auto pending = std::span<const uint8_t>{m_read_buffer}.subspan(m_read_offset);
-
-   while(!pending.empty()) {
-      const auto step = next_message_buffer(pending, policy);
-      if(std::holds_alternative<IncompleteNotProcessed>(step)) {
-         // We need more bytes and do not need to advance the read offset
-         break;
-      }
-
-      if(const auto* processed = std::get_if<IncompleteProcessed>(&step)) {
-         // We have processed a fragment and advanced the state accordingly, but
-         // the message is not complete yet. We need to advance the read offset
-         // and continue processing.
-         m_read_offset += processed->bytes_consumed;
-         BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
-         pending = std::span<const uint8_t>{m_read_buffer}.subspan(m_read_offset);
-         continue;
-      }
-
-      BOTAN_ASSERT_NOMSG(std::holds_alternative<NextMessageResult>(step));
-
-      const auto& result = std::get<NextMessageResult>(step);
-      auto msg = parse_handshake_message(result.type, result.message_bytes, policy);
-
-      transcript_hash.update(result.tls_header_bytes, result.message_bytes);
-      m_read_offset += result.bytes_consumed;
-      BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
-
-      if(m_read_offset == m_read_buffer.size()) {
-         m_read_buffer.clear();
-         m_read_offset = 0;
-      }
-
-      return msg;
-   }
-
-   return std::nullopt;
-}
-
-std::optional<Post_Handshake_Message_13> TLS_Handshake_Layer::next_post_handshake_message(const Policy& policy) {
-   // TODO: Looping like in next_message() to handle fragmented post-handshake messages.
-   BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
-   auto pending = std::span<const uint8_t>{m_read_buffer}.subspan(m_read_offset);
-
-   const auto header_and_msg = next_message_buffer(pending, policy);
-   if(std::holds_alternative<IncompleteNotProcessed>(header_and_msg)) {
+std::optional<Handshake_Layer::MessageBufferView> Handshake_Layer::next_message_buffer_view(const Policy& policy) {
+   auto buffer_view = fetch_next_message_buffer_view();
+   if(!buffer_view.has_value()) {
       return std::nullopt;
    }
 
-   if(const auto* processed = std::get_if<NextMessageResult>(&header_and_msg)) {
-      auto msg = parse_post_handshake_message(processed->type, processed->message_bytes);
-
-      m_read_offset += processed->bytes_consumed;
-      BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
-
-      if(m_read_offset == m_read_buffer.size()) {
-         m_read_buffer.clear();
-         m_read_offset = 0;
-      }
-
-      return msg;
+   const auto max_size = policy.maximum_handshake_message_size();
+   if(max_size > 0 && buffer_view->payload_size() > max_size) {
+      throw TLS_Exception(
+         Alert::HandshakeFailure,
+         Botan::fmt("Handshake message is {} bytes, policy maximum is {}", buffer_view->payload_size(), max_size));
    }
 
-   return std::nullopt;
+   return buffer_view;
+}
+
+std::optional<Handshake_Message_13> Handshake_Layer::next_message(const Policy& policy,
+                                                                  Transcript_Hash_State& transcript_hash) {
+   const auto buffer_view = next_message_buffer_view(policy);
+   if(!buffer_view.has_value()) {
+      return std::nullopt;
+   }
+
+   auto msg = parse_handshake_message(buffer_view->type(), buffer_view->payload(), policy);
+
+   // RFC 9846 5.1
+   //    Handshake messages MUST NOT span key changes.  Implementations
+   //    MUST verify that all messages immediately preceding a key change
+   //    align with a record boundary; if not, then they MUST terminate the
+   //    connection with an "unexpected_message" alert.  Because the
+   //    ClientHello, EndOfEarlyData, ServerHello, Finished, and KeyUpdate
+   //    messages can immediately precede a key change, implementations
+   //    MUST send these messages in alignment with a record boundary.
+   //
+   // Note: Hello_Retry_Request and Hello_Verify_Request were added to the list
+   //       below although they cannot immediately precede a key change.
+   //       However, there cannot be any further sensible messages in the record
+   //       after them.
+   //
+   // Note: Server_Hello_12 was deliberately not included in the check below
+   //       because in TLS 1.2 Server Hello and other handshake messages can
+   //       be legally coalesced in a single record.
+   if(holds_any_of<Client_Hello_12_Shim,
+                   Client_Hello_13,
+                   Server_Hello_13,
+                   Hello_Verify_Request,  // DTLS 1.3 -> 1.2 downgrade
+                   Hello_Retry_Request,
+                   Finished_13>(msg) &&
+      !buffer_view->was_final_message_in_queue()) {
+      throw TLS_Exception(Alert::UnexpectedMessage, "Unexpected additional handshake data at epoch boundary");
+   }
+
+   transcript_hash.update(buffer_view->header(), buffer_view->payload());
+   return msg;
+}
+
+std::optional<Post_Handshake_Message_13> Handshake_Layer::next_post_handshake_message(
+   const Policy& policy, EpochNumber latest_read_epoch_number) {
+   const auto buffer_view = next_message_buffer_view(policy);
+   if(!buffer_view.has_value()) {
+      return std::nullopt;
+   }
+
+   if(buffer_view->epoch_number().has_value() && buffer_view->epoch_number().value() != latest_read_epoch_number) {
+      throw TLS_Exception(Alert::UnexpectedMessage, "Received a new post-handshake message under an outdated epoch");
+   }
+
+   auto msg = parse_post_handshake_message(buffer_view->type(), buffer_view->payload());
+
+   // RFC 9846 5.1
+   //    Handshake messages MUST NOT span key changes.  Implementations
+   //    MUST verify that all messages immediately preceding a key change
+   //    align with a record boundary; if not, then they MUST terminate the
+   //    connection with an "unexpected_message" alert.  Because the
+   //    ClientHello, EndOfEarlyData, ServerHello, Finished, and KeyUpdate
+   //    messages can immediately precede a key change, implementations
+   //    MUST send these messages in alignment with a record boundary.
+   if(std::holds_alternative<Key_Update>(msg) && !buffer_view->was_final_message_in_queue()) {
+      throw TLS_Exception(Alert::UnexpectedMessage, "Unexpected additional post-handshake data at epoch boundary");
+   }
+
+   return msg;
+}
+
+std::optional<Handshake_Layer::MessageBufferView> TLS_Handshake_Layer::fetch_next_message_buffer_view() {
+   BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
+
+   BufferSlicer bs(m_read_buffer);
+   bs.skip(m_read_offset);
+
+   if(bs.empty()) {
+      return std::nullopt;
+   }
+
+   // Validate the message type early, before committing to wait for a
+   // potentially bogus and huge message body.
+   if(!read_handshake_message_type(bs.peek_byte()).has_value()) {
+      throw TLS_Exception(AlertType::UnexpectedMessage, "Unknown handshake message received");
+   }
+
+   if(bs.remaining() < HEADER_LENGTH) {
+      return std::nullopt;
+   }
+
+   const auto header = typecast_copy<HandshakeProtocolHeader>(bs.take<HEADER_LENGTH>());
+   const auto msg_len = load_be<uint32_t>(header) & 0x00FFFFFF;
+
+   if(bs.remaining() < msg_len) {
+      return std::nullopt;
+   }
+
+   const bool is_final_message = bs.remaining() == msg_len;
+   return MessageBufferView(std::nullopt,  // TLS 1.3 does not have epochs
+                            is_final_message,
+                            header,
+                            bs.take<SerializedHandshakeMessage>(msg_len),
+                            [this, msg_len]() {
+                               m_read_offset += HEADER_LENGTH + msg_len;
+                               BOTAN_ASSERT_NOMSG(m_read_offset <= m_read_buffer.size());
+
+                               if(m_read_offset == m_read_buffer.size()) {
+                                  m_read_buffer.clear();
+                                  m_read_offset = 0;
+                               }
+                            });
+}
+
+Handshake_Layer::MessageBufferView::MessageBufferView(std::optional<EpochNumber> epoch_number,
+                                                      bool final_message,
+                                                      HandshakeProtocolHeader header,
+                                                      StrongSpan<const SerializedHandshakeMessage> payload,
+                                                      CleanupFunction cleanup) :
+      m_epoch_number(epoch_number),
+      m_final_message(final_message),
+      m_header(header),
+      m_payload(payload),
+      m_cleanup(std::move(cleanup)) {
+   if(auto type = read_handshake_message_type(header[0])) {
+      m_type = *type;
+   } else {
+      throw TLS_Exception(AlertType::UnexpectedMessage, "Unknown handshake message received");
+   }
 }
 
 Handshake_Message_13 Handshake_Layer::parse_handshake_message(Handshake_Type type,
@@ -218,30 +255,6 @@ void Handshake_Layer::update_transcript_for_psk_binder_calc(const Client_Hello_1
                                                             Transcript_Hash_State& transcript_hash) {
    const auto msg_bytes = serialize(message);
    transcript_hash.update(TLS_Handshake_Layer::prepare_header(message.wire_type(), msg_bytes.size()), msg_bytes);
-}
-
-Handshake_Type Handshake_Layer::read_handshake_message_type(uint8_t value) {
-   constexpr auto supported_hs_msgs = std::array{
-      Handshake_Type::ClientHello,
-      Handshake_Type::ServerHello,
-      Handshake_Type::HelloVerifyRequest,
-      // NYI: needs PSK/resumption support -- won't be offered in Client Hello for now
-      // Handshake_Type::EndOfEarlyData,
-      Handshake_Type::EncryptedExtensions,
-      Handshake_Type::Certificate,
-      Handshake_Type::CertificateRequest,
-      Handshake_Type::CertificateVerify,
-      Handshake_Type::Finished,
-      Handshake_Type::NewSessionTicket,
-      Handshake_Type::KeyUpdate,
-   };
-
-   const auto type = static_cast<Handshake_Type>(value);
-   if(std::find(supported_hs_msgs.begin(), supported_hs_msgs.end(), type) == supported_hs_msgs.end()) {
-      throw TLS_Exception(AlertType::UnexpectedMessage, "Unknown handshake message received");
-   }
-
-   return type;
 }
 
 }  // namespace Botan::TLS

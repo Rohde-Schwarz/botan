@@ -531,125 +531,127 @@ std::vector<Test::Result> receive_protected_records() {
             }),
    #endif
 
-         CHECK("server receives encrypted client finished",
-               [&](Test::Result& result) {
-                  const auto callbacks = std::make_shared<Mock_Callbacks>();
-                  const auto io = make_channel_io(TLS::Connection_Side::Server, callbacks);
-                  auto th = make_transcript_hash();
+      CHECK("server receives encrypted client finished",
+            [&](Test::Result& result) {
+               const auto callbacks = std::make_shared<Mock_Callbacks>();
+               const auto io = make_channel_io(TLS::Connection_Side::Server, callbacks);
+               auto th = make_transcript_hash();
 
-                  // Epoch steering: install the handshake traffic keys
-                  const auto cs = rfc8448_handshake_traffic(TLS::Connection_Side::Server);
-                  io->set_cipher_state(cs);
+               // Epoch steering: install the handshake traffic keys
+               const auto cs = rfc8448_handshake_traffic(TLS::Connection_Side::Server);
+               io->set_cipher_state(cs);
 
-                  io->copy_data(Botan::hex_decode(rfc8448::client_finished_record));
-                  const auto drained = drain_events(*io, th, false);
+               io->copy_data(Botan::hex_decode(rfc8448::client_finished_record));
+               const auto drained = drain_events(*io, th, false);
 
-                  result.require("one event", drained.events.size() == 1);
-                  result.require("event is a handshake message",
-                                 std::holds_alternative<TLS::Handshake_Message_13>(drained.events.front()));
-                  result.test_is_true("event is a finished",
-                                      std::holds_alternative<TLS::Finished_13>(
-                                         std::get<TLS::Handshake_Message_13>(drained.events.front())));
-                  result.test_sz_eq("no more bytes needed", drained.bytes_needed, 0);
-               }),
+               result.require("one event", drained.events.size() == 1);
+               result.require("event is a handshake message",
+                              std::holds_alternative<TLS::Handshake_Message_13>(drained.events.front()));
+               result.test_is_true("event is a finished",
+                                   std::holds_alternative<TLS::Finished_13>(
+                                      std::get<TLS::Handshake_Message_13>(drained.events.front())));
+               result.test_sz_eq("no more bytes needed", drained.bytes_needed, 0);
+            }),
 
-         CHECK("receive post-handshake new session ticket and application data",
-               [&](Test::Result& result) {
-                  const auto callbacks = std::make_shared<Mock_Callbacks>();
-                  const auto io = make_channel_io(TLS::Connection_Side::Client, callbacks);
-                  auto th = make_transcript_hash();
+      CHECK("receive post-handshake new session ticket and application data",
+            [&](Test::Result& result) {
+               const auto callbacks = std::make_shared<Mock_Callbacks>();
+               const auto io = make_channel_io(TLS::Connection_Side::Client, callbacks);
+               auto th = make_transcript_hash();
 
-                  // Epoch steering: install the application traffic keys
-                  const auto cs = rfc8448_application_traffic(TLS::Connection_Side::Client);
-                  io->set_cipher_state(cs);
+               // Epoch steering: install the application traffic keys
+               const auto cs = rfc8448_application_traffic(TLS::Connection_Side::Client);
+               io->set_cipher_state(cs);
 
-                  // Feed the records in RFC order to match the sequence numbers
-                  // the RFC 8448 transcripts were produced with
-                  io->copy_data(Botan::concat(Botan::hex_decode(rfc8448::new_session_ticket_record),
-                                              Botan::hex_decode(rfc8448::server_app_data_record)));
-                  const auto drained = drain_events(*io, th, true /* handshake complete */);
+               // Feed the records in RFC order to match the sequence numbers
+               // the RFC 8448 transcripts were produced with
+               io->copy_data(Botan::concat(Botan::hex_decode(rfc8448::new_session_ticket_record),
+                                           Botan::hex_decode(rfc8448::server_app_data_record)));
+               const auto drained = drain_events(*io, th, true /* handshake complete */);
 
-                  result.require("two events", drained.events.size() == 2);
-                  result.require("first event is a post-handshake message",
-                                 std::holds_alternative<TLS::Post_Handshake_Message_13>(drained.events.at(0)));
-                  result.test_is_true("first event is a new session ticket",
-                                      std::holds_alternative<TLS::New_Session_Ticket_13>(
-                                         std::get<TLS::Post_Handshake_Message_13>(drained.events.at(0))));
+               result.require("two events", drained.events.size() == 2);
+               result.require("first event is a post-handshake message",
+                              std::holds_alternative<TLS::Post_Handshake_Message_13>(drained.events.at(0)));
+               result.test_is_true("first event is a new session ticket",
+                                   std::holds_alternative<TLS::New_Session_Ticket_13>(
+                                      std::get<TLS::Post_Handshake_Message_13>(drained.events.at(0))));
 
-                  result.require("second event is application data",
-                                 std::holds_alternative<TLS::ApplicationData_Record>(drained.events.at(1)));
-                  result.test_bin_eq("application payload",
-                                     std::get<TLS::ApplicationData_Record>(drained.events.at(1)).payload,
-                                     Botan::hex_decode(rfc8448::app_data));
-                  result.test_sz_eq("no more bytes needed", drained.bytes_needed, 0);
-               }),
+               result.require("second event is application data",
+                              std::holds_alternative<TLS::ApplicationData_Record>(drained.events.at(1)));
+               result.test_bin_eq("application payload",
+                                  std::get<TLS::ApplicationData_Record>(drained.events.at(1)).payload,
+                                  Botan::hex_decode(rfc8448::app_data));
+               result.test_sz_eq("no more bytes needed", drained.bytes_needed, 0);
+            }),
 
-         CHECK("receive application data and close-notify alert",
-               [&](Test::Result& result) {
-                  const auto callbacks = std::make_shared<Mock_Callbacks>();
-                  const auto io = make_channel_io(TLS::Connection_Side::Server, callbacks);
-                  auto th = make_transcript_hash();
+      CHECK("receive application data and close-notify alert",
+            [&](Test::Result& result) {
+               const auto callbacks = std::make_shared<Mock_Callbacks>();
+               const auto io = make_channel_io(TLS::Connection_Side::Server, callbacks);
+               auto th = make_transcript_hash();
 
-                  // Epoch steering: install the application traffic keys
-                  const auto cs = rfc8448_application_traffic(TLS::Connection_Side::Server);
-                  io->set_cipher_state(cs);
+               // Epoch steering: install the application traffic keys
+               const auto cs = rfc8448_application_traffic(TLS::Connection_Side::Server);
+               io->set_cipher_state(cs);
 
-                  // Feed the records in RFC order to match the sequence numbers
-                  // the RFC 8448 transcripts were produced with
-                  io->copy_data(Botan::concat(Botan::hex_decode(rfc8448::client_app_data_record),
-                                              Botan::hex_decode(rfc8448::client_close_notify_record)));
-                  const auto drained = drain_events(*io, th, true /* handshake complete */);
+               // Feed the records in RFC order to match the sequence numbers
+               // the RFC 8448 transcripts were produced with
+               io->copy_data(Botan::concat(Botan::hex_decode(rfc8448::client_app_data_record),
+                                           Botan::hex_decode(rfc8448::client_close_notify_record)));
+               const auto drained = drain_events(*io, th, true /* handshake complete */);
 
-                  result.require("two events", drained.events.size() == 2);
+               result.require("two events", drained.events.size() == 2);
 
-                  result.require("first event is application data",
-                                 std::holds_alternative<TLS::ApplicationData_Record>(drained.events.at(0)));
-                  result.test_bin_eq("application payload",
-                                     std::get<TLS::ApplicationData_Record>(drained.events.at(0)).payload,
-                                     Botan::hex_decode(rfc8448::app_data));
+               result.require("first event is application data",
+                              std::holds_alternative<TLS::ApplicationData_Record>(drained.events.at(0)));
+               result.test_bin_eq("application payload",
+                                  std::get<TLS::ApplicationData_Record>(drained.events.at(0)).payload,
+                                  Botan::hex_decode(rfc8448::app_data));
 
-                  result.require("second event is an alert",
-                                 std::holds_alternative<TLS::Alert_Record>(drained.events.at(1)));
-                  const TLS::Alert alert(std::get<TLS::Alert_Record>(drained.events.at(1)).payload);
-                  result.test_enum_eq("alert is close-notify", alert.type(), TLS::AlertType::CloseNotify);
-                  result.test_is_false("close-notify is not fatal", alert.is_fatal());
-                  result.test_sz_eq("no more bytes needed", drained.bytes_needed, 0);
-               }),
+               result.require("second event is an alert",
+                              std::holds_alternative<TLS::Alert_Record>(drained.events.at(1)));
+               const TLS::Alert alert(std::get<TLS::Alert_Record>(drained.events.at(1)).payload);
+               result.test_enum_eq("alert is close-notify", alert.type(), TLS::AlertType::CloseNotify);
+               result.test_is_false("close-notify is not fatal", alert.is_fatal());
+               result.test_sz_eq("no more bytes needed", drained.bytes_needed, 0);
+            }),
 
-         CHECK("receive fragmented application data record", [&](Test::Result& result) {
-            const auto callbacks = std::make_shared<Mock_Callbacks>();
-            const auto io = make_channel_io(TLS::Connection_Side::Server, callbacks);
-            auto th = make_transcript_hash();
+      CHECK("receive fragmented application data record",
+            [&](Test::Result& result) {
+               const auto callbacks = std::make_shared<Mock_Callbacks>();
+               const auto io = make_channel_io(TLS::Connection_Side::Server, callbacks);
+               auto th = make_transcript_hash();
 
-            // Epoch steering: install the application traffic keys
-            const auto cs = rfc8448_application_traffic(TLS::Connection_Side::Server);
-            io->set_cipher_state(cs);
+               // Epoch steering: install the application traffic keys
+               const auto cs = rfc8448_application_traffic(TLS::Connection_Side::Server);
+               io->set_cipher_state(cs);
 
-            const auto record = Botan::hex_decode(rfc8448::client_app_data_record);
+               const auto record = Botan::hex_decode(rfc8448::client_app_data_record);
 
-            io->copy_data(std::span{record}.first(3));
-            auto drained = drain_events(*io, th, true);
-            result.test_sz_eq("missing bytes to complete the header", drained.bytes_needed, TLS::TLS_HEADER_SIZE - 3);
+               io->copy_data(std::span{record}.first(3));
+               auto drained = drain_events(*io, th, true);
+               result.test_sz_eq(
+                  "missing bytes to complete the header", drained.bytes_needed, TLS::TLS_HEADER_SIZE - 3);
 
-            io->copy_data(std::span{record}.subspan(3, 2));
-            drained = drain_events(*io, th, true);
-            result.test_sz_eq("missing payload bytes", drained.bytes_needed, record.size() - TLS::TLS_HEADER_SIZE);
+               io->copy_data(std::span{record}.subspan(3, 2));
+               drained = drain_events(*io, th, true);
+               result.test_sz_eq("missing payload bytes", drained.bytes_needed, record.size() - TLS::TLS_HEADER_SIZE);
 
-            const auto partial_length = 30;
-            io->copy_data(std::span{record}.subspan(TLS::TLS_HEADER_SIZE, partial_length));
-            drained = drain_events(*io, th, true);
-            result.test_sz_eq(
-               "missing payload bytes", drained.bytes_needed, record.size() - TLS::TLS_HEADER_SIZE - partial_length);
+               const auto partial_length = 30;
+               io->copy_data(std::span{record}.subspan(TLS::TLS_HEADER_SIZE, partial_length));
+               drained = drain_events(*io, th, true);
+               result.test_sz_eq(
+                  "missing payload bytes", drained.bytes_needed, record.size() - TLS::TLS_HEADER_SIZE - partial_length);
 
-            io->copy_data(std::span{record}.subspan(TLS::TLS_HEADER_SIZE + partial_length));
-            drained = drain_events(*io, th, true);
-            result.require("one event", drained.events.size() == 1);
-            result.require("event is application data",
-                           std::holds_alternative<TLS::ApplicationData_Record>(drained.events.front()));
-            result.test_bin_eq("application payload",
-                               std::get<TLS::ApplicationData_Record>(drained.events.front()).payload,
-                               Botan::hex_decode(rfc8448::app_data));
-         }),
+               io->copy_data(std::span{record}.subspan(TLS::TLS_HEADER_SIZE + partial_length));
+               drained = drain_events(*io, th, true);
+               result.require("one event", drained.events.size() == 1);
+               result.require("event is application data",
+                              std::holds_alternative<TLS::ApplicationData_Record>(drained.events.front()));
+               result.test_bin_eq("application payload",
+                                  std::get<TLS::ApplicationData_Record>(drained.events.front()).payload,
+                                  Botan::hex_decode(rfc8448::app_data));
+            }),
    };
 }
 
@@ -672,7 +674,7 @@ std::vector<Test::Result> receive_error_cases() {
 
                io->copy_data(record);
                result.test_throws("server hello must not be followed by more data in the same record",
-                                  "Unexpected additional handshake message data found in record",
+                                  "Unexpected additional handshake data at epoch boundary",
                                   [&] { drain_events(*io, th, false); });
             }),
 

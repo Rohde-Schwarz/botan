@@ -40,7 +40,7 @@ class DTLS_Channel_IO final : public Channel_IO,
       void send_data(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override;
       void send_acknowledgements();
       void send_key_update(const Key_Update& msg) override;
-      bool can_send_key_update() const override;
+      bool can_send_post_handshake_messages() const override;
 
       void handle_key_update(const Key_Update& key_update) override;
 

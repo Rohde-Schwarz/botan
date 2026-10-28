@@ -17,6 +17,7 @@
 
 #include <botan/internal/concat_util.h>
 #include <botan/internal/loadstor.h>
+#include <botan/internal/scoped_cleanup.h>
 #include <botan/internal/tls_record_13.h>
 #include <botan/internal/tls_types_13.h>
 
@@ -70,6 +71,12 @@ class BOTAN_TEST_API Handshake_Layer {
          return SerializedHandshakeMessage(message.serialize());
       }
 
+      /**
+       * Reads and verifies the handshake message type byte. If the byte does
+       * not represent a valid handshake message type, std::nullopt is returned.
+       */
+      [[nodiscard]] static std::optional<Handshake_Type> read_handshake_message_type(uint8_t byte_value);
+
    public:
       Handshake_Layer(const Handshake_Layer&) = delete;
       Handshake_Layer(Handshake_Layer&&) = delete;
@@ -104,17 +111,18 @@ class BOTAN_TEST_API Handshake_Layer {
        *
        * @return the parsed handshake message, or nullopt if more data is needed to complete the message
        */
-      virtual std::optional<Handshake_Message_13> next_message(const Policy& policy,
-                                                               Transcript_Hash_State& transcript_hash) = 0;
+      std::optional<Handshake_Message_13> next_message(const Policy& policy, Transcript_Hash_State& transcript_hash);
 
       /**
        * Parses one post-handshake message off the internal buffer that is being filled using `copy_data`.
        *
-       * @param policy the TLS policy
+       * @param policy                   the TLS policy
+       * @param latest_read_epoch_number the number of the latest available read epoch
        *
        * @return the parsed post-handshake message, or nullopt if more data is needed to complete the message
        */
-      virtual std::optional<Post_Handshake_Message_13> next_post_handshake_message(const Policy& policy) = 0;
+      std::optional<Post_Handshake_Message_13> next_post_handshake_message(const Policy& policy,
+                                                                           EpochNumber latest_read_epoch_number);
 
       /**
        * Marshals a ClientHello prematurely for a truncated transcript hash
@@ -150,26 +158,41 @@ class BOTAN_TEST_API Handshake_Layer {
       void set_selected_certificate_type(Certificate_Type cert_type) { m_certificate_type = cert_type; }
 
    protected:
-      static Handshake_Type read_handshake_message_type(uint8_t value);
+      class MessageBufferView final {
+         public:
+            using CleanupFunction = std::function<void()>;
 
-      /// Could not process a message because not enough bytes were available.
-      /// The read offset must not be advanced.
-      using IncompleteNotProcessed = std::monostate;
+         public:
+            MessageBufferView(std::optional<EpochNumber> epoch_number,
+                              bool final_message,
+                              HandshakeProtocolHeader header,
+                              StrongSpan<const SerializedHandshakeMessage> payload,
+                              CleanupFunction cleanup);
 
-      /// Relevant for DTLS (a fragment was processed, but the message is not
-      /// complete yet). We now have to advance the read offset
-      struct IncompleteProcessed {
-            size_t bytes_consumed;
+            bool was_final_message_in_queue() const { return m_final_message; }
+
+            Handshake_Type type() const { return m_type; }
+
+            std::optional<EpochNumber> epoch_number() const { return m_epoch_number; }
+
+            HandshakeProtocolHeader header() const { return m_header; }
+
+            StrongSpan<const SerializedHandshakeMessage> payload() const { return m_payload; }
+
+            size_t payload_size() const { return m_payload.size(); }
+
+         private:
+            Handshake_Type m_type;
+            std::optional<EpochNumber> m_epoch_number;
+            bool m_final_message;
+            HandshakeProtocolHeader m_header;
+            StrongSpan<const SerializedHandshakeMessage> m_payload;
+            scoped_cleanup<CleanupFunction> m_cleanup;
       };
 
-      struct NextMessageResult {
-            Handshake_Type type;
-            HandshakeProtocolHeader tls_header_bytes;
-            StrongSpan<const SerializedHandshakeMessage> message_bytes;
-            size_t bytes_consumed;  // only includes the bytes processed by the last next_message_buffer() call
-      };
+      std::optional<MessageBufferView> next_message_buffer_view(const Policy& policy);
 
-      using NextMessageStep = std::variant<IncompleteNotProcessed, IncompleteProcessed, NextMessageResult>;
+      virtual std::optional<MessageBufferView> fetch_next_message_buffer_view() = 0;
 
       virtual TLS_Flavor tls_flavor() const = 0;
 
@@ -206,18 +229,13 @@ class TLS_Handshake_Layer final : public Handshake_Layer {
 
       CopyDataResult copy_data(const Policy& policy, const Handshake_Record& data_from_peer) override;
 
-      std::optional<Handshake_Message_13> next_message(const Policy& policy,
-                                                       Transcript_Hash_State& transcript_hash) override;
-
-      std::optional<Post_Handshake_Message_13> next_post_handshake_message(const Policy& policy) override;
-
       static auto marshal(const Handshake_Message& message) {
          const auto bytes = serialize(message);
          return concat<MarshalledHandshakeMessage>(prepare_header(message.wire_type(), bytes.size()), bytes);
       }
 
    protected:
-      NextMessageStep next_message_buffer(std::span<const uint8_t> bytes, const Policy& policy);
+      std::optional<MessageBufferView> fetch_next_message_buffer_view() override;
 
       TLS_Flavor tls_flavor() const override { return TLS_Flavor::TLS; }
 

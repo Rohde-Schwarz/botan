@@ -207,11 +207,29 @@ void DTLS_Channel_IO::handle_key_update(const Key_Update& key_update) {
       });
 }
 
-bool DTLS_Channel_IO::can_send_key_update() const {
-   // RFC 9147 8.
-   //    [...] implementations MUST NOT send [...] a new KeyUpdate until the
+bool DTLS_Channel_IO::can_send_post_handshake_messages() const {
+   // RFC 9147 5.8.4
+   //    Sending multiple instances of messages of a given category without
+   //    having completed earlier transmissions is allowed for some categories,
+   //    but not for others. Specifically, a server MAY send multiple
+   //    NewSessionTicket messages at once without awaiting ACKs for earlier
+   //    NewSessionTicket messages first. [...] In contrast, implementations
+   //    MUST NOT send KeyUpdate, NewConnectionId, or RequestConnectionId
+   //    messages if an earlier message of the same type has not yet been
+   //    acknowledged.
+   //
+   // RFC 9147 8. Key Updates
+   //    In order to facilitate epoch reconstruction, implementations MUST NOT
+   //    send records with the new keys or send a new KeyUpdate until the
    //    previous KeyUpdate has been acknowledged [...].
-   return !has_unacknowledged_key_update();
+   //
+   // Right now, the only post-handshake messages we support are KeyUpdate and
+   // NewSessionTicket. For simplicity, we block all post-handshake messages
+   // while a KeyUpdate is unacknowledged so that no further post-handshake
+   // messages are sent in the already-doomed epoch. That makes us compatible
+   // with BoringSSL, which enforces this restriction even though the RFC does
+   // not require it explicitly (see BoGo test "KeyUpdate-ExtraMessage-DTLS").
+   return Channel_IO::can_send_post_handshake_messages() && !has_unacknowledged_key_update();
 }
 
 void DTLS_Channel_IO::send_key_update(const Key_Update& msg) {

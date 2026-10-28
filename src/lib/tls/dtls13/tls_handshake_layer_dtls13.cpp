@@ -44,7 +44,7 @@ struct PreparedHeader {
 struct DTLS_Handshake_Header {
       // NOLINTBEGIN(*-non-private-member-variables-in-classes)
 
-      Handshake_Type msg_type;
+      uint8_t msg_type;
       uint32_t message_length;
       uint16_t message_sequence_number;
       uint32_t fragment_offset;
@@ -54,7 +54,7 @@ struct DTLS_Handshake_Header {
 
       static DTLS_Handshake_Header parse(std::span<const uint8_t, DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH> bytes) {
          return {
-            .msg_type = static_cast<Handshake_Type>(bytes[0]),
+            .msg_type = bytes[0],
             .message_length = load_be24(bytes.subspan<1, 3>()),
             .message_sequence_number = load_be<uint16_t>(bytes.subspan<4, 2>()),
             .fragment_offset = load_be24(bytes.subspan<6, 3>()),
@@ -63,7 +63,7 @@ struct DTLS_Handshake_Header {
       }
 
       std::array<uint8_t, DTLS_Handshake_Layer::FRAGMENT_HEADER_LENGTH> serialize() const {
-         return concat(store_be(to_underlying(msg_type)),
+         return concat(store_be(msg_type),
                        store_be24(message_length),
                        store_be(message_sequence_number),
                        store_be24(fragment_offset),
@@ -71,7 +71,7 @@ struct DTLS_Handshake_Header {
       }
 
       HandshakeProtocolHeader serialize_tls_header_portion() const {
-         return TLS_Handshake_Layer::prepare_header(msg_type, message_length);
+         return TLS_Handshake_Layer::prepare_header(static_cast<Handshake_Type>(msg_type), message_length);
       }
 };
 
@@ -135,23 +135,25 @@ Handshake_Layer::CopyDataResult DTLS_Handshake_Layer::copy_data(const Policy& po
          continue;
       }
 
+      // If the fragment header appeared to be valid and was not discarded for
+      // other reasons, but now we find that the message type is unknown, we
+      // hard-reject the entire datagram.
+      if(!read_handshake_message_type(header.msg_type).has_value()) {
+         throw TLS_Exception(AlertType::UnexpectedMessage, "Unknown handshake message received");
+      }
+
       // TODO: iterative allocation of the reassembled message to avoid DoS attacks with large messages
       // TODO: It could make sense to commit fragments only once the entire `bytes` buffer was
       //       processed successfully. It might be surprising that datagrams are processed
       //       partially. E.g., in the record layer we're using this approach as well.
-      auto [itr, _] = m_current_read_message.try_emplace(
-         header.message_sequence_number,
-         ReassembledMessage{
-            // TODO: Parse the header already now and error-out if the header
-            //       appears bogus. Note: There's also a commented-out test
-            //       for that in test_tls_dtls13_handshake_layer.cpp, called
-            //       "parse ClientHello detects incoming garbage data with invalid message type".
-            .epoch = *data_from_peer.epoch,
-            .header = header.serialize_tls_header_portion(),
-            .payload = DTLSPayload(header.message_length),
-            .received_bytes = bitvector(header.message_length),
-            .complete = false,
-         });
+      auto [itr, _] = m_current_read_message.try_emplace(header.message_sequence_number,
+                                                         ReassembledMessage{
+                                                            .epoch = *data_from_peer.epoch,
+                                                            .header = header.serialize_tls_header_portion(),
+                                                            .payload = DTLSPayload(header.message_length),
+                                                            .received_bytes = bitvector(header.message_length),
+                                                            .complete = false,
+                                                         });
       auto& reassembled = itr->second;
 
       if(reassembled.epoch != data_from_peer.epoch) {
@@ -215,30 +217,7 @@ Handshake_Layer::CopyDataResult DTLS_Handshake_Layer::copy_data(const Policy& po
    return CopyDataResult::DiscardedDuplicate;
 }
 
-std::optional<Handshake_Message_13> DTLS_Handshake_Layer::next_message(const Policy& policy,
-                                                                       Transcript_Hash_State& transcript_hash) {
-   auto message = m_current_read_message.find(m_read_message_seq);
-   if(message == m_current_read_message.end()) {
-      return std::nullopt;
-   }
-
-   auto& reassembled = message->second;
-   if(!reassembled.complete) {
-      return std::nullopt;
-   }
-
-   auto msg = parse_handshake_message(read_handshake_message_type(reassembled.header[0]), reassembled.payload, policy);
-
-   // Update the transcript hash and remove the reassembled message from the map in case of successful parsing
-   transcript_hash.update(reassembled.header, reassembled.payload);
-   m_current_read_message.erase(m_read_message_seq++);
-
-   return msg;
-}
-
-std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handshake_message(const Policy& policy) {
-   BOTAN_UNUSED(policy);
-
+std::optional<Handshake_Layer::MessageBufferView> DTLS_Handshake_Layer::fetch_next_message_buffer_view() {
    auto message = m_current_read_message.find(static_cast<uint16_t>(m_read_message_seq));
    if(message == m_current_read_message.end()) {
       return std::nullopt;
@@ -249,12 +228,20 @@ std::optional<Post_Handshake_Message_13> DTLS_Handshake_Layer::next_post_handsha
       return std::nullopt;
    }
 
-   const auto msg_type = read_handshake_message_type(reassembled.header[0]);
-   auto msg = parse_post_handshake_message(msg_type, reassembled.payload);
+   const bool is_final_message = m_current_read_message.size() == 1;
 
-   m_current_read_message.erase(static_cast<uint16_t>(m_read_message_seq++));
+   // We are going to emit the next message, and increase the incoming message
+   // sequence number. Note that this increment might take the sequence number
+   // above the protocol-mandated maximum of 2^16-1. After that, copy_data()
+   // will just drop any further incoming handshake messages as duplicates
+   // because their advertised sequence number is capped at 16-bits.
+   static_assert(sizeof(m_read_message_seq) > sizeof(uint16_t));
 
-   return msg;
+   return MessageBufferView(reassembled.epoch,
+                            is_final_message,
+                            reassembled.header,
+                            reassembled.payload,
+                            [this, seqno = m_read_message_seq++] { m_current_read_message.erase(seqno); });
 }
 
 std::vector<MarshalledHandshakeMessageFragment> DTLS_Handshake_Layer::fragment_message(
@@ -271,11 +258,14 @@ std::vector<MarshalledHandshakeMessageFragment> DTLS_Handshake_Layer::fragment_m
                       "DTLS first fragment max size must not exceed the general max fragment size");
    }
 
-   if(m_send_message_seq == std::numeric_limits<uint16_t>::max()) {
+   // Eventually the increment will take the sequence number above the protocol
+   // mandated maximum of 2^16-1. After that, future calls to fragment_message()
+   // will abort the connection.
+   static_assert(sizeof(m_send_message_seq) > sizeof(uint16_t));
+   if(m_send_message_seq > std::numeric_limits<uint16_t>::max()) {
       throw Invalid_State("Maximum DTLS message sequence number reached");
    }
-
-   const uint16_t message_seq = m_send_message_seq++;
+   const auto message_seq = static_cast<uint16_t>(m_send_message_seq++);
 
    std::vector<MarshalledHandshakeMessageFragment> fragments;
 
@@ -285,7 +275,7 @@ std::vector<MarshalledHandshakeMessageFragment> DTLS_Handshake_Layer::fragment_m
    while(!bs.empty()) {
       const auto bytes_in_this_fragment = std::min(bs.remaining(), max_bytes_per_fragment);
       const auto header = DTLS_Handshake_Header{
-         .msg_type = type,
+         .msg_type = to_underlying(type),
          .message_length = static_cast<uint32_t>(msg_bytes.size()),
          .message_sequence_number = message_seq,
          .fragment_offset = static_cast<uint32_t>(msg_bytes.size() - bs.remaining()),

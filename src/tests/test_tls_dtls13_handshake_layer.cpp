@@ -332,6 +332,7 @@ std::vector<Test::Result> basic() {
                   "successful ingestion",
                   hl->copy_data(default_policy, handshake_record(first_fragment_framed)) == CopyDataResult::Consumed);
                result.test_opt_is_null("needs more bytes", hl->next_message(default_policy, th));
+               result.test_is_true("holds pending message data", hl->has_pending_data());
 
                result.require(
                   "successful ingestion",
@@ -350,95 +351,119 @@ std::vector<Test::Result> basic() {
                result.test_opt_is_null("no more records", hl->next_message(default_policy, th));
             }),
 
-      CHECK(
-         "Messages are emitted in order of their sequence number",
-         [&](Test::Result& result) {
-            auto hl = make_handshake_layer(TLS::Connection_Side::Server);
-            auto transcript_hash = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
+      CHECK("Messages are emitted in order of their sequence number",
+            [&](Test::Result& result) {
+               const auto ch = client_hello_bare_bytes();
+               const auto cc = client_certificate_bare_bytes();
+               const auto cv = certificate_verify_bare_bytes();
+               const auto cf = client_finished_bare_bytes();
 
-            const auto ch = client_hello_bare_bytes();
-            const auto cf = client_finished_bare_bytes();
+               constexpr uint16_t window = TLS::DTLS_Handshake_Layer::MAX_BUFFERED_FUTURE_MESSAGES;
+               auto marshalled_finished = [&](uint16_t seqno) {
+                  return dtls_marshall_fragment(TLS::Handshake_Type::Finished, cf.size(), seqno, 0, cf);
+               };
+               auto marshalled_client_hello = [&](uint16_t seqno) {
+                  return dtls_marshall_fragment(TLS::Handshake_Type::ClientHello, ch.size(), seqno, 0, ch);
+               };
 
-            constexpr uint16_t window = TLS::DTLS_Handshake_Layer::MAX_BUFFERED_FUTURE_MESSAGES;
-            auto marshalled_finished = [&](uint16_t seqno) {
-               return dtls_marshall_fragment(TLS::Handshake_Type::Finished, cf.size(), seqno, 0, cf);
-            };
-            auto marshalled_client_hello = [&](uint16_t seqno) {
-               return dtls_marshall_fragment(TLS::Handshake_Type::ClientHello, ch.size(), seqno, 0, ch);
-            };
+               // Buffering window semantics for out-of-order messages. Messages
+               // too far in the future are discarded right away, messages within
+               // the window are buffered for reassembly (RFC 9147 5.2).
+               //
+               // The messages buffered here are deliberately never pulled: they
+               // could only be emitted after a ClientHello or Finished, both of
+               // which must be the final pending message when pulled because they
+               // may immediately precede a key change (RFC 9846 5.1).
+               {
+                  auto hl = make_handshake_layer(TLS::Connection_Side::Server);
+                  auto transcript_hash = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
-            // Messages too far in the future are discarded right away, messages
-            // within the window are buffered for reassembly (RFC 9147 5.2).
-            result.test_enum_eq("message beyond the buffering window is discarded",
-                                hl->copy_data(default_policy, handshake_record(marshalled_finished(window + 1))),
-                                CopyDataResult::Discarded);
-            result.test_enum_eq("message at the edge of the buffering window is buffered",
-                                hl->copy_data(default_policy, handshake_record(marshalled_finished(window))),
-                                CopyDataResult::Consumed);
+                  result.test_enum_eq("message beyond the buffering window is discarded",
+                                      hl->copy_data(default_policy, handshake_record(marshalled_finished(window + 1))),
+                                      CopyDataResult::Discarded);
+                  result.test_enum_eq("message at the edge of the buffering window is buffered",
+                                      hl->copy_data(default_policy, handshake_record(marshalled_finished(window))),
+                                      CopyDataResult::Consumed);
 
-            // A record that mixes a bufferable fragment with one beyond the
-            // window is consumed partially. The second ClientHello (seqno 1)
-            // reflects the HelloRetryRequest case (RFC 8446 4.1.4).
-            const auto mixed_record =
-               Botan::concat<std::vector<uint8_t>>(marshalled_client_hello(1), marshalled_finished(window + 1));
-            result.test_enum_eq("record with discarded and buffered fragments is consumed partially",
-                                hl->copy_data(default_policy, handshake_record(mixed_record)),
-                                CopyDataResult::ConsumedPartially);
+                  // A record that mixes a bufferable fragment with one beyond the
+                  // window is consumed partially.
+                  const auto mixed_record =
+                     Botan::concat<std::vector<uint8_t>>(marshalled_client_hello(1), marshalled_finished(window + 1));
+                  result.test_enum_eq("record with discarded and buffered fragments is consumed partially",
+                                      hl->copy_data(default_policy, handshake_record(mixed_record)),
+                                      CopyDataResult::ConsumedPartially);
 
-            // Buffer the Finished message that will complete the client
-            // authentication flight Certificate(2), CertificateVerify(3),
-            // Finished(4) further down (RFC 8446 4.4).
-            result.test_enum_eq("Finished of the client authentication flight is buffered",
-                                hl->copy_data(default_policy, handshake_record(marshalled_finished(4))),
-                                CopyDataResult::Consumed);
+                  // Nothing is emitted as long as the start of the sequence space
+                  // is missing.
+                  result.test_opt_is_null("no message to read yet", hl->next_message(default_policy, transcript_hash));
+               }
 
-            result.test_opt_is_null("no message to read yet", hl->next_message(default_policy, transcript_hash));
+               // Messages are emitted in order of their sequence number. Each
+               // ClientHello and the final Finished are pulled without further
+               // pending data, as they must align with a record boundary
+               // (RFC 9846 5.1).
+               {
+                  auto hl = make_handshake_layer(TLS::Connection_Side::Server);
+                  auto transcript_hash = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
-            result.require(
-               "successful ingestion of seqno 0",
-               hl->copy_data(default_policy, handshake_record(marshalled_client_hello(0))) == CopyDataResult::Consumed);
-            result.test_is_true(
-               "received message 0",
-               std::holds_alternative<TLS::Client_Hello_13>(hl->next_message(default_policy, transcript_hash).value()));
-            result.test_is_true(
-               "received message 1",
-               std::holds_alternative<TLS::Client_Hello_13>(hl->next_message(default_policy, transcript_hash).value()));
+                  result.require("successful ingestion of seqno 0",
+                                 hl->copy_data(default_policy, handshake_record(marshalled_client_hello(0))) ==
+                                    CopyDataResult::Consumed);
+                  result.test_is_true("received message 0",
+                                      std::holds_alternative<TLS::Client_Hello_13>(
+                                         hl->next_message(default_policy, transcript_hash).value()));
 
-            // The buffered Finished cannot be emitted before the gap in the
-            // sequence space is filled.
-            result.test_opt_is_null("buffered future message is not emitted out of order",
-                                    hl->next_message(default_policy, transcript_hash));
+                  // The second ClientHello (seqno 1) reflects the HelloRetryRequest
+                  // case (RFC 8446 4.1.4).
+                  result.require("successful ingestion of seqno 1",
+                                 hl->copy_data(default_policy, handshake_record(marshalled_client_hello(1))) ==
+                                    CopyDataResult::Consumed);
+                  result.test_is_true("received message 1",
+                                      std::holds_alternative<TLS::Client_Hello_13>(
+                                         hl->next_message(default_policy, transcript_hash).value()));
 
-            const auto cc = client_certificate_bare_bytes();
-            const auto cv = certificate_verify_bare_bytes();
-            result.test_enum_eq("successful ingestion of Certificate",
-                                hl->copy_data(default_policy,
-                                              handshake_record(dtls_marshall_fragment(
-                                                 TLS::Handshake_Type::Certificate, cc.size(), 2 /* seqno */, 0, cc))),
-                                CopyDataResult::Consumed);
-            result.test_enum_eq(
-               "successful ingestion of CertificateVerify",
-               hl->copy_data(default_policy,
-                             handshake_record(dtls_marshall_fragment(
-                                TLS::Handshake_Type::CertificateVerify, cv.size(), 3 /* seqno */, 0, cv))),
-               CopyDataResult::Consumed);
+                  // Buffer the Finished message that will complete the client
+                  // authentication flight Certificate(2), CertificateVerify(3),
+                  // Finished(4) further down (RFC 8446 4.4).
+                  result.test_enum_eq("Finished of the client authentication flight is buffered",
+                                      hl->copy_data(default_policy, handshake_record(marshalled_finished(4))),
+                                      CopyDataResult::Consumed);
 
-            // The buffered messages are emitted in order of their sequence
-            // numbers, ending with the Finished buffered further up. Because
-            // the gap fillers use different message types, the final message
-            // is provably the originally buffered one.
-            result.test_is_true(
-               "received message 2",
-               std::holds_alternative<TLS::Certificate_13>(hl->next_message(default_policy, transcript_hash).value()));
-            result.test_is_true("received message 3",
-                                std::holds_alternative<TLS::Certificate_Verify_13>(
-                                   hl->next_message(default_policy, transcript_hash).value()));
-            result.test_is_true(
-               "originally buffered Finished is emitted last",
-               std::holds_alternative<TLS::Finished_13>(hl->next_message(default_policy, transcript_hash).value()));
+                  // The buffered Finished cannot be emitted before the gap in the
+                  // sequence space is filled.
+                  result.test_opt_is_null("buffered future message is not emitted out of order",
+                                          hl->next_message(default_policy, transcript_hash));
 
-            result.test_opt_is_null("no more messages", hl->next_message(default_policy, transcript_hash));
-         }),
+                  result.test_enum_eq(
+                     "successful ingestion of Certificate",
+                     hl->copy_data(default_policy,
+                                   handshake_record(dtls_marshall_fragment(
+                                      TLS::Handshake_Type::Certificate, cc.size(), 2 /* seqno */, 0, cc))),
+                     CopyDataResult::Consumed);
+                  result.test_enum_eq(
+                     "successful ingestion of CertificateVerify",
+                     hl->copy_data(default_policy,
+                                   handshake_record(dtls_marshall_fragment(
+                                      TLS::Handshake_Type::CertificateVerify, cv.size(), 3 /* seqno */, 0, cv))),
+                     CopyDataResult::Consumed);
+
+                  // The buffered messages are emitted in order of their sequence
+                  // numbers, ending with the Finished buffered further up. Because
+                  // the gap fillers use different message types, the final message
+                  // is provably the originally buffered one.
+                  result.test_is_true("received message 2",
+                                      std::holds_alternative<TLS::Certificate_13>(
+                                         hl->next_message(default_policy, transcript_hash).value()));
+                  result.test_is_true("received message 3",
+                                      std::holds_alternative<TLS::Certificate_Verify_13>(
+                                         hl->next_message(default_policy, transcript_hash).value()));
+                  result.test_is_true("originally buffered Finished is emitted last",
+                                      std::holds_alternative<TLS::Finished_13>(
+                                         hl->next_message(default_policy, transcript_hash).value()));
+
+                  result.test_opt_is_null("no more messages", hl->next_message(default_policy, transcript_hash));
+               }
+            }),
    };
 }
 
@@ -690,33 +715,35 @@ std::vector<Test::Result> fragmentation() {
                verify_client_hello(result, msg, th);
             }),
 
-      // CHECK("parse ClientHello detects incoming garbage data with invalid message type",
-      //       [&](Test::Result& result) {
-      //          auto hl = TLS::Handshake_Layer::create(TLS::Connection_Side::Server, TLS::TLS_Flavor::DTLS);
-      //          auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
+      CHECK("parse ClientHello detects incoming garbage data with invalid message type",
+            [&](Test::Result& result) {
+               auto hl = make_handshake_layer(TLS::Connection_Side::Server);
+               auto th = TLS::Transcript_Hash_State(TLS::TLS_Flavor::DTLS);
 
-      //          const auto message = client_hello_bare_bytes();
+               const auto message = client_hello_bare_bytes();
 
-      //          // This resembles a fragment with a message length of 0 (which is allowed),
-      //          // but the message type is invalid (0x00 does not exist in (D)TLS 1.3). The
-      //          // message should be rejected because of the invalid message type, but the
-      //          // rest of the fragment is in fact valid.
-      //          const std::array<uint8_t, 12> garbage{0x00 /* msg type: 0x00 does not exist! */};
-      //          result.test_throws("invalid message type is detected", [&] { hl->copy_data(default_policy, garbage); });
-      //          result.test_opt_is_null("bogus fragment does not complete the message",
-      //                                  hl->next_message(default_policy, th));
+               // This resembles a fragment with a message length of 0 (which is allowed),
+               // but the message type is invalid (0x00 does not exist in (D)TLS 1.3). The
+               // message should be rejected because of the invalid message type, but the
+               // rest of the fragment is in fact valid.
+               const std::array<uint8_t, 12> garbage{0x00 /* msg type: 0x00 does not exist! */};
+               result.test_throws("invalid message type is detected",
+                                  [&] { std::ignore = hl->copy_data(default_policy, handshake_record(garbage)); });
+               result.test_opt_is_null("bogus fragment does not complete the message",
+                                       hl->next_message(default_policy, th));
 
-      //          // sending all the valid fragments afterwards should still reassemble correctly
-      //          const auto pieces = split_into_pieces(message, equal_sizes(message.size(), 3));
-      //          for(const auto& piece : pieces) {
-      //             result.require(
-      //                "successful ingestion",
-      //                hl->copy_data(default_policy,
-      //                              dtls_marshall_fragment(type, message.size(), msg_seq, piece.offset, piece.bytes)));
-      //          }
+               // sending all the valid fragments afterwards should still reassemble correctly
+               const auto pieces = split_into_pieces(message, equal_sizes(message.size(), 3));
+               for(const auto& piece : pieces) {
+                  result.test_enum_eq("successful ingestion",
+                                      hl->copy_data(default_policy,
+                                                    handshake_record(dtls_marshall_fragment(
+                                                       type, message.size(), msg_seq, piece.offset, piece.bytes))),
+                                      CopyDataResult::Consumed);
+               }
 
-      //          verify_client_hello(result, hl->next_message(default_policy, th), th);
-      //       }),
+               verify_client_hello(result, hl->next_message(default_policy, th), th);
+            }),
 
       CHECK("parse ClientHello detects incoming garbage data with valid message type",
             [&](Test::Result& result) {
@@ -844,7 +871,7 @@ std::vector<Test::Result> post_handshake() {
                                     handshake_record(fragments.front().get(), TLS::EpochNumber::ApplicationTraffic_0)),
                   CopyDataResult::Consumed);
 
-               auto msg = server->next_post_handshake_message(default_policy);
+               auto msg = server->next_post_handshake_message(default_policy, TLS::EpochNumber::ApplicationTraffic_0);
                result.require("received something", msg.has_value());
                result.require("message is Key_Update", std::holds_alternative<TLS::Key_Update>(msg.value()));
                result.test_is_false("peer does not request reciprocation",
@@ -855,14 +882,14 @@ std::vector<Test::Result> post_handshake() {
                                                      handshake_record(marshalled_key_update(1, true),
                                                                       TLS::EpochNumber::ApplicationTraffic_0)),
                                    CopyDataResult::Consumed);
-               auto msg2 = server->next_post_handshake_message(default_policy);
+               auto msg2 = server->next_post_handshake_message(default_policy, TLS::EpochNumber::ApplicationTraffic_0);
                result.require("received something", msg2.has_value());
                result.require("message is Key_Update", std::holds_alternative<TLS::Key_Update>(msg2.value()));
                result.test_is_true("peer requests reciprocation",
                                    std::get<TLS::Key_Update>(msg2.value()).expects_reciprocation());
             }),
 
-      CHECK("Post-handshake messages arriving on outdated epochs are accepted",
+      CHECK("Post-handshake messages arriving on outdated epochs are rejected",
             [&](Test::Result& result) {
                auto hl = make_handshake_layer(TLS::Connection_Side::Client);
 
@@ -882,7 +909,9 @@ std::vector<Test::Result> post_handshake() {
                                                  handshake_record(marshalled_key_update(0 /* seqno */, false),
                                                                   TLS::EpochNumber::ApplicationTraffic_0)),
                                    CopyDataResult::Consumed);
-               result.require("received KeyUpdate", hl->next_post_handshake_message(default_policy).has_value());
+               result.require(
+                  "received KeyUpdate",
+                  hl->next_post_handshake_message(default_policy, TLS::EpochNumber::ApplicationTraffic_0).has_value());
 
                const auto nst = new_session_ticket_bare_bytes();
                result.test_enum_eq(
@@ -892,10 +921,9 @@ std::vector<Test::Result> post_handshake() {
                                    TLS::Handshake_Type::NewSessionTicket, nst.size(), 1 /* seqno */, 0, nst))),
                   CopyDataResult::Consumed);
 
-               auto msg = hl->next_post_handshake_message(default_policy);
-               result.require("received something", msg.has_value());
-               result.test_is_true("message is NewSessionTicket",
-                                   std::holds_alternative<TLS::New_Session_Ticket_13>(msg.value()));
+               result.test_throws<TLS::TLS_Exception>("NST was protected with a now-outdated epoch", [&] {
+                  hl->next_post_handshake_message(default_policy, TLS::EpochNumber::ApplicationTraffic_0 + 1);
+               });
             }),
    };
 }

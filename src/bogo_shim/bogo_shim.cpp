@@ -181,7 +181,6 @@ std::string map_to_bogo_error(const std::string& e, std::string_view test_name) 
       {"Client: No certificates sent by server", ":DECODE_ERROR:"},
       {"Decoded polynomial coefficients out of range", ":BAD_ECPOINT:"},
       {"Deprotected DTLS record had unexpected content type: 42", ":UNEXPECTED_RECORD:"},
-      {"DTLS handshake message sequence number exhausted", ":TOO_MANY_KEY_UPDATES:"},
       {"Received DTLSPlaintext with unexpected content type: 23", ":UNEXPECTED_RECORD:"},
       {"Non-PSK Client Hello did not contain supported_groups and signature_algorithms extensions",
        ":NO_SHARED_GROUP:"},
@@ -209,7 +208,8 @@ std::string map_to_bogo_error(const std::string& e, std::string_view test_name) 
       {"Have data remaining in buffer after Finished", ":EXCESS_HANDSHAKE_DATA:"},
       {"Have data remaining in buffer after ServerHelloDone", ":EXCESS_HANDSHAKE_DATA:"},
       {"Hello Retry Request does not request any changes to Client Hello", ":EMPTY_HELLO_RETRY_REQUEST:"},
-      {"Unexpected additional handshake message data found in record", ":EXCESS_HANDSHAKE_DATA:"},
+      {"Unexpected additional handshake data at epoch boundary", ":EXCESS_HANDSHAKE_DATA:"},
+      {"Unexpected additional post-handshake data at epoch boundary", ":EXCESS_HANDSHAKE_DATA:"},
       {"Inconsistent length in certificate request", ":DECODE_ERROR:"},
       {"Inconsistent length in certificate_authorities extension", ":DECODE_ERROR:"},
       {"unexpected key_update parameter", ":DECODE_ERROR:"},
@@ -248,6 +248,7 @@ std::string map_to_bogo_error(const std::string& e, std::string_view test_name) 
       {"PSK binder does not check out", ":DIGEST_CHECK_FAILED:"},
       {"PSK identity selected by server is out of bounds", ":PSK_IDENTITY_NOT_FOUND:"},
       {"PSK and ciphersuite selected by server are not compatible", ":OLD_SESSION_PRF_HASH_MISMATCH:"},
+      {"Received a new post-handshake message under an outdated epoch", ":EXCESS_HANDSHAKE_DATA:"},
       {"Received an unexpectedly non-empty Certificate_Status_Request", ":DECODE_ERROR:"},
       {"Received a record that exceeds maximum size", ":ENCRYPTED_LENGTH_TOO_LONG:"},
       {"Received a protected record that exceeds maximum size", ":ENCRYPTED_LENGTH_TOO_LONG:"},
@@ -325,7 +326,6 @@ std::string map_to_bogo_error(const std::string& e, std::string_view test_name) 
       {"Too many PSK binders", ":PSK_IDENTITY_BINDER_COUNT_MISMATCH:"},
       {"Peer sent too many consecutive useless records", ":TOO_MANY_EMPTY_FRAGMENTS:"},
       {"Server selected an ALPN protocol not offered by the client", ":INVALID_ALPN_PROTOCOL:"},
-      {"Unexpected post-handshake message received", ":EXCESS_HANDSHAKE_DATA:"},
       {"Unexpected record type 42 from counterparty", ":UNEXPECTED_RECORD:"},
       {"Unexpected state transition in handshake got a certificate_request expected server_hello_done seen server_hello+server_key_exchange",
        ":UNEXPECTED_MESSAGE:"},
@@ -2343,7 +2343,11 @@ int main(int /*argc*/, char* argv[]) {
             for(;;) {
                if(callbacks->key_update_before_read_pending() && chan->is_handshake_complete()) {
                   shim_log("Updating traffic keys before read");
-                  chan->update_traffic_keys(false /* don't request reciprocal update */);
+                  try {
+                     chan->update_traffic_keys(false /* don't request reciprocal update */);
+                  } catch(const Botan::Invalid_State&) {
+                     shim_log("Traffic key update rejected because another KeyUpdate is in progress");
+                  }
                   callbacks->key_update_before_read_sent();
                }
 
