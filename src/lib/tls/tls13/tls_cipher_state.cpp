@@ -112,11 +112,19 @@
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_channel_impl_13.h>
 
+#if defined(BOTAN_HAS_DTLS_13)
+   #include <botan/internal/tls_cipher_state_dtls13.h>
+#endif
+
 namespace Botan::TLS {
 
 std::unique_ptr<Cipher_State> Cipher_State::create(Connection_Side side, TLS_Flavor flavor, std::string_view prf_algo) {
    if(flavor == TLS_Flavor::DTLS) {
-      throw Not_Implemented("DTLS 1.3 is not yet supported");
+#if defined(BOTAN_HAS_DTLS_13)
+      return std::make_unique<DTLS_Cipher_State>(side, prf_algo);
+#else
+      throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
+#endif
    } else {
       return std::make_unique<TLS_Cipher_State>(side, prf_algo);
    }

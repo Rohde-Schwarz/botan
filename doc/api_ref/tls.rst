@@ -352,6 +352,10 @@ available:
       the same key. Applications only need to call this method to force a
       key update at a specific point in time.
 
+      On a DTLS 1.3 channel, this method might throw ``Invalid_State`` when
+      there is a pending key update that was not acknowledged by the peer yet.
+      In that case, the application should retry the request after some time.
+
       Note that this is a TLS 1.3 feature and invocations on a channel
       using TLS 1.2 will throw.
 
@@ -484,21 +488,40 @@ TLS Servers
          size_t reserved_io_buffer_size = 16*1024 \
          )
 
-The first 5 arguments as well as the final argument
-*reserved_io_buffer_size*, are treated similarly to the :ref:`client
-<tls_client>`.
+      The first 5 arguments as well as the final argument
+      *reserved_io_buffer_size*, are treated similarly to the :ref:`client
+      <tls_client>`.
 
-If a client sends the ALPN extension, the ``callbacks`` function
-``tls_server_choose_app_protocol`` will be called and the result
-sent back to the client. If the empty string is returned, the server
-will not send an ALPN response. The function can also throw an exception
-to abort the handshake entirely, the ALPN specification says that if this
-occurs the alert should be of type `NO_APPLICATION_PROTOCOL`.
+      If a client sends the ALPN extension, the ``callbacks`` function
+      ``tls_server_choose_app_protocol`` will be called and the result
+      sent back to the client. If the empty string is returned, the server
+      will not send an ALPN response. The function can also throw an exception
+      to abort the handshake entirely, the ALPN specification says that if this
+      occurs the alert should be of type `NO_APPLICATION_PROTOCOL`.
 
-The optional argument *is_datagram* specifies if this is a TLS or DTLS
-server; unlike clients, which know what type of protocol (TLS vs DTLS)
-they are negotiating from the start via the *offer_version*, servers
-would not until they actually received a client hello.
+      The optional argument *is_datagram* specifies if this is a TLS or DTLS
+      server; unlike clients, which know what type of protocol (TLS vs DTLS)
+      they are negotiating from the start via the *offer_version*, servers
+      would not until they actually received a client hello.
+
+   .. cpp:function:: size_t send_new_session_tickets(size_t tickets)
+
+      Allows sending new session tickets to the client at any time after the
+      handshake has completed. The *tickets* parameter specifies how many
+      tickets to send. The return value is the number of tickets actually sent.
+
+      Note that this is supported on (D)TLS 1.3 channels only, other channels
+      will always return 0. See also ``new_session_ticket_supported()``
+
+      On a DTLS 1.3 channel, this method might throw ``Invalid_State`` when
+      there is a pending key update that was not acknowledged by the peer yet.
+      In that case, the application should retry the request after some time.
+
+   .. cpp:function:: bool new_session_ticket_supported() const
+
+      Returns true if the channel supports sending new session tickets to the
+      client. This is true for (D)TLS 1.3 servers whose client offered any
+      PSK-based key exchange methods.
 
 .. _tls_server_example:
 

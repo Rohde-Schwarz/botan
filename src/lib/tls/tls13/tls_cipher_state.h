@@ -17,6 +17,7 @@
 #include <botan/tls_magic.h>
 
 #include <botan/internal/tls_record_13.h>
+#include <botan/internal/tls_record_dtls13.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 #include <botan/internal/tls_types_13.h>
 

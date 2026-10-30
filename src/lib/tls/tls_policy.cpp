@@ -327,6 +327,12 @@ bool Policy::acceptable_protocol_version(Protocol_Version version) const {
    }
 #endif
 
+#if defined(BOTAN_HAS_DTLS_13)
+   if(version == Protocol_Version::DTLS_V13 && allow_dtls13()) {
+      return true;
+   }
+#endif
+
 #if defined(BOTAN_HAS_TLS_12)
    if(version == Protocol_Version::TLS_V12 && allow_tls12()) {
       return true;
@@ -403,7 +409,7 @@ bool Policy::allow_dtls12() const {
 }
 
 bool Policy::allow_dtls13() const {
-   return false;  // DTLS 1.3 is not yet supported
+   return false;  // TODO: Opportunistically enable once DTLS 1.3 is supported
 }
 
 bool Policy::include_time_in_hello_random() const {
