@@ -273,7 +273,7 @@ void Client_Impl_13::handle(const Server_Hello_12_Shim& server_hello_msg) {
 #endif
 }
 
-void Client_Impl_13::handle(const Hello_Verify_Request& /*hello_verify_request*/) {
+void Client_Impl_13::handle(const Hello_Verify_Request_Shim& /*hello_verify_request*/) {
    BOTAN_ASSERT_NONNULL(m_handshake);
 
    // HelloVerifyRequest exists only in DTLS. A TLS peer must never reach this

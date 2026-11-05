@@ -298,7 +298,7 @@ Handshake_Message_13 DTLS_Handshake_Layer::parse_handshake_message(Handshake_Typ
       case Handshake_Type::HelloVerifyRequest:
          // DTLS 1.2 cookie exchange; triggers a client-side downgrade when
          // DTLS 1.2 is allowed. Acceptance is enforced by Client_Impl_13.
-         return Hello_Verify_Request(msg);
+         return Hello_Verify_Request_Shim(msg);
       default:
          return Handshake_Layer::parse_handshake_message(type, msg, policy);
    }

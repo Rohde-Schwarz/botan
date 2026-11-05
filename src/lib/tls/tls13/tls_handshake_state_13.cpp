@@ -50,8 +50,8 @@ Hello_Retry_Request& Handshake_State_13_Base::store(Hello_Retry_Request hello_re
    return m_hello_retry_request.value();
 }
 
-Hello_Verify_Request& Handshake_State_13_Base::store(Hello_Verify_Request hello_verify_request,
-                                                     const bool /*from_peer*/) {
+Hello_Verify_Request_Shim& Handshake_State_13_Base::store(Hello_Verify_Request_Shim hello_verify_request,
+                                                          const bool /*from_peer*/) {
    BOTAN_STATE_CHECK(!m_hello_verify_request_12.has_value());
    m_hello_verify_request_12 = std::move(hello_verify_request);
    return m_hello_verify_request_12.value();
