@@ -11,6 +11,7 @@
 
 #include <botan/tls_magic.h>
 #include <botan/internal/tls_cipher_state.h>
+#include <botan/internal/tls_record_dtls13.h>
 #include <string_view>
 
 namespace Botan::TLS {

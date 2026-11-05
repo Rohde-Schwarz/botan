@@ -399,7 +399,11 @@ bool Policy::allow_dtls12() const {
 }
 
 bool Policy::allow_dtls13() const {
-   return false;  // TODO: Opportunistically enable once DTLS 1.3 is supported
+#if defined(BOTAN_HAS_DTLS_13)
+   return true;
+#else
+   return false;
+#endif
 }
 
 bool Policy::include_time_in_hello_random() const {
