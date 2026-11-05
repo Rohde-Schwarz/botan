@@ -84,7 +84,7 @@ struct BOTAN_TEST_API UnifiedHeader_DTLS {
  * Plaintext header of unprotected records "DTLSPlaintext" RFC 9147 4. Figure 2.
  * This encapsulates the header fields without the payload.
  */
-struct PlaintextHeader_DTLS {
+struct BOTAN_TEST_API PlaintextHeader_DTLS {
       /// NOLINTBEGIN(*-non-private-member-variables-in-classes)
 
       Record_Type type;

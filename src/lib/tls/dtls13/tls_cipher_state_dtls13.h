@@ -16,7 +16,7 @@
 
 namespace Botan::TLS {
 
-class DTLS_Cipher_State final : public Cipher_State {
+class BOTAN_TEST_API DTLS_Cipher_State final : public Cipher_State {
    public:
       struct Epoch : Cipher_State::Epoch {
             secure_vector<uint8_t> sequence_number_key;

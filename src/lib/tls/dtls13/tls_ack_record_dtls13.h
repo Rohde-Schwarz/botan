@@ -13,7 +13,7 @@
 
 namespace Botan::TLS {
 
-class ACKs {
+class BOTAN_TEST_API ACKs {
    public:
       explicit ACKs(std::vector<RecordNumber> record_numbers);
       explicit ACKs(std::span<const uint8_t> ack_record);
