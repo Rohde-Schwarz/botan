@@ -4,7 +4,7 @@ Transport Layer Security (TLS)
 Botan has client and server implementations of TLS 1.2 and 1.3. Support for
 older versions of the protocol was removed with Botan 3.0.
 
-There is also support for DTLS (currently v1.2 only), a variant of TLS
+There is also support for DTLS 1.2 and 1.3 (experimental), a variant of TLS
 adapted for operation on datagram transports such as UDP and
 SCTP. DTLS support should be considered as beta quality and further
 testing is invited.
@@ -196,12 +196,13 @@ additional information about the connection.
                                                         std::function<void()> op)
 
      ..
-        TODO(Botan4): When timeout_check is removed, this becomes _required_ for DTLS.
+        TODO(Botan4): When timeout_check is removed, this becomes _required_
+                      for DTLS 1.2 as well.
 
-     Optional, but recommended for DTLS. This callback is used to schedule a
-     deferred operation to be invoked after a specified number of milliseconds.
-     This is used by DTLS to schedule retransmissions of handshake messages that
-     are considered lost in transit.
+     Optional, but recommended for DTLS 1.2 and required for DTLS 1.3. This
+     callback is used to schedule a deferred operation to be invoked after a
+     specified number of milliseconds. This is used by DTLS to schedule
+     retransmissions of handshake messages that are considered lost in transit.
 
      If this is not used, the application must call ``Channel::timeout_check()``
      independently and regularly whenever a DTLS handshake is in progress. In
@@ -930,7 +931,8 @@ policy settings from a file.
      Return true if this version of the protocol is one that we are
      willing to negotiate.
 
-     Default: Accepts TLS v1.2 and DTLS v1.2, and rejects all older versions.
+     Default: Accepts TLS v1.3 and DTLS v1.2/DTLS v1.3 (experimental), and
+     rejects all older versions.
 
  .. cpp:function:: bool server_uses_own_ciphersuite_preferences() const
 
@@ -1020,6 +1022,14 @@ policy settings from a file.
  .. cpp:function:: bool allow_tls13() const
 
       Return true from here to allow TLS v1.3. Returns ``true`` by default.
+
+ .. cpp:function:: bool allow_dtls12() const
+
+      Return true from here to allow DTLS v1.2. Returns ``true`` by default.
+
+ .. cpp:function:: bool allow_dtls13() const
+
+      Return true from here to allow DTLS v1.3. Returns ``true`` by default.
 
  .. cpp:function:: size_t minimum_rsa_bits() const
 
@@ -1202,7 +1212,8 @@ The ``TLS::Protocol_Version`` class represents a specific version:
 
  .. cpp:enum:: Version_Code
 
-     ``TLS_V10``, ``TLS_V11``, ``TLS_V12``, ``DTLS_V10``, ``DTLS_V12``
+     ``TLS_V10``, ``TLS_V11``, ``TLS_V12``, ``TLS_V13``, ``DTLS_V10``,
+     ``DTLS_V12``, ``DTLS_V13``
 
  .. cpp:function:: Protocol_Version(Version_Code named_version)
 
@@ -1219,17 +1230,17 @@ The ``TLS::Protocol_Version`` class represents a specific version:
  .. cpp:function:: std::string to_string() const
 
       Returns string description of the version, for instance "TLS
-      v1.1" or "DTLS v1.0".
+      v1.3" or "DTLS v1.2".
 
  .. cpp:function:: static Protocol_Version latest_tls_version()
 
       Returns the latest version of the TLS protocol known to the library
-      (currently TLS v1.2)
+      (currently TLS v1.3)
 
  .. cpp:function:: static Protocol_Version latest_dtls_version()
 
       Returns the latest version of the DTLS protocol known to the
-      library (currently DTLS v1.2)
+      library (currently DTLS v1.2, or experimental DTLS v1.3)
 
 
 Post-quantum-secure key exchange
