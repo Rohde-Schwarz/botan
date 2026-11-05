@@ -145,9 +145,6 @@ PlaintextRecord_DTLS DTLS_Record_Layer::read_plaintext_record(BufferSlicer& bs) 
    //    records other than the initial ClientHello (i.e., one not generated
    //    after a HelloRetryRequest), where it may also be {254, 255} for
    //    compatibility purposes.
-   //
-   // TODO: Does it really make sense to make this rely on m_receiving_compat_mode of TLS?
-   // In that case, m_receiving_compat_mode can move to just the TLS impl.
    if(header.legacy_version != Protocol_Version::DTLS_V12 &&
       (header.legacy_version != Protocol_Version::DTLS_V10 || !receiving_compat_mode())) {
       throw TLS_Exception(Alert::IllegalParameter, "Received unexpected record version");
@@ -372,11 +369,6 @@ RecordNumber DTLS_Record_Layer::prepare_record(Record_Type type,
       //    numbers that would exceed 2^48-1, so the upper 16 bits will always be 0.
       BOTAN_ASSERT_NOMSG(m_unprotected_write_seq_no < (uint64_t(1) << 48) - 1);
 
-      // Currently, the Record_Layer handles sequence numbers for unprotected
-      // records. For protected records this is handled by the Cipher_State, which
-      // feels somewhat inconsistent.
-      //
-      // TODO: evaluate if we find a better way to handle the sequence numbers.
       const auto write_seq_no = m_unprotected_write_seq_no++;
 
       const auto header = PlaintextHeader_DTLS{
@@ -404,8 +396,6 @@ RecordNumber DTLS_Record_Layer::prepare_record(Record_Type type,
       // record fully, because then we can't add any padding anyway.
       // If the user requests more padding than we can actually add, we will
       // truncate the padding to fill up the record entirely.
-      //
-      // TODO: This is very similar to TLS, consider extracting it.
       const size_t padding_length =
          (pt_size_with_type_tag < max_record_size)
             ? std::min(policy.record_padding_bytes(pt_size_with_type_tag), max_record_size - pt_size_with_type_tag)

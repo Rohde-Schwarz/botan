@@ -175,7 +175,10 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       std::map<EpochNumber, Replay_Window_13> m_replay_windows;
       size_t m_deprotection_failure_limit;
 
+      /// epoch=0 outgoing record sequence number (all other epochs are tracked in Cipher_State)
       uint64_t m_unprotected_write_seq_no = 0;
+
+      /// epoch=0 incoming record sequence number (all other epochs are tracked in Cipher_State)
       uint64_t m_unprotected_read_seq_no = 0;
 
       std::vector<RecordNumber> m_record_numbers_to_ack;

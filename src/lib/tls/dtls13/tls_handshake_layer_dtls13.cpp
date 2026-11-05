@@ -142,10 +142,10 @@ Handshake_Layer::CopyDataResult DTLS_Handshake_Layer::copy_data(const Policy& po
          throw TLS_Exception(AlertType::UnexpectedMessage, "Unknown handshake message received");
       }
 
-      // TODO: iterative allocation of the reassembled message to avoid DoS attacks with large messages
-      // TODO: It could make sense to commit fragments only once the entire `bytes` buffer was
-      //       processed successfully. It might be surprising that datagrams are processed
-      //       partially. E.g., in the record layer we're using this approach as well.
+      // TODO: See if we can re-use the reassembly mechanic of DTLS 1.2 that
+      //       handles iterative allocation and fragment memory budgets in a
+      //       secure manner.
+      // See: https://github.com/randombit/botan/pull/5803
       auto [itr, _] = m_current_read_message.try_emplace(header.message_sequence_number,
                                                          ReassembledMessage{
                                                             .epoch = *data_from_peer.epoch,
