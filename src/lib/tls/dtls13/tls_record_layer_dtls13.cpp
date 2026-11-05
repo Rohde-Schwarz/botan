@@ -259,6 +259,11 @@ Record_Layer::ReadResult DTLS_Record_Layer::next_record(Cipher_State* cipher_sta
                   return std::nullopt;
                }
 
+               // The unprotected sequence number of received records is tracked
+               // rudimentarily. We pass the highest seen sequence number to the
+               // DTLS 1.2 implementation during downgrade.
+               m_unprotected_read_seq_no = std::max(m_unprotected_read_seq_no, record.header.sequence_number);
+
                return annotate_record_type({
                   .type = record.header.type,
                   .sequence_number = record.header.sequence_number,
