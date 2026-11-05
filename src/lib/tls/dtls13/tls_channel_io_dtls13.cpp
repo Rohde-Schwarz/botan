@@ -241,20 +241,7 @@ void DTLS_Channel_IO::send_key_update(const Key_Update& msg) {
    // deferred to the handling of the respective acknowledgement.
    m_pending_key_update_record = record_number;
 
-   // TODO: BoGo is completely green if we forget to
-   // arm the retransmission timer here -> add a regression test.
-   // But here it may be possible that the timer is not started.
-   // If we just reset it, it may possibly interfere with
-   // a retransmission of the last client flight, have to check
-   // that again.
-   if(!m_retransmission_timer.armed()) {
-      arm_retransmission_timer();
-   }
-
-   // TODO: There is a case where the user requests a KeyUpdate while the channel does one
-   // automatically - one of them will lock the ACK mechanism, the other will fail because
-   // 2 KeyUpdates are not allowed to be outstanding. Add a test and maybe find a way
-   // to avoid this.
+   arm_retransmission_timer();
 }
 
 void DTLS_Channel_IO::send_acknowledgements() {
@@ -384,11 +371,13 @@ void DTLS_Channel_IO::maybe_schedule_read_epoch_pruning(EpochNumber epoch_used_f
 }
 
 void DTLS_Channel_IO::arm_retransmission_timer() {
-   m_retransmission_timer.start([weak = weak_from_this()] {
-      if(auto self = weak.lock()) {
-         self->retransmit();
-      }
-   });
+   if(!m_retransmission_timer.armed()) {
+      m_retransmission_timer.start([weak = weak_from_this()] {
+         if(auto self = weak.lock()) {
+            self->retransmit();
+         }
+      });
+   }
 }
 
 void DTLS_Channel_IO::process(const Handshake_Record& record) {
