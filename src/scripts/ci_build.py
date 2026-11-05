@@ -951,7 +951,7 @@ def main(args=None):
 
             if target == 'no_tls12':
                 shim_config = os.path.abspath(os.path.join(root_dir, 'src', 'bogo_shim', 'config_no_tls12.json'))
-                extra_args = ['-skip-tls12', '-skip-dtls']
+                extra_args = ['-skip-tls12']
             elif target == 'no_tls13':
                 shim_config = os.path.abspath(os.path.join(root_dir, 'src', 'bogo_shim', 'config_no_tls13.json'))
                 extra_args = ['-skip-tls13']

@@ -61,7 +61,7 @@ def main():
 
     bogo_args = ';'.join(args.bogo_args) if args.bogo_args else ''
     extra_args = "-wait-for-debugger " if args.wait_for_debugger else ""
-    extra_args += "-skip-tls12 -skip-dtls " if args.without_tls_12 else ""
+    extra_args += "-skip-tls12 " if args.without_tls_12 else ""
     extra_args += "-skip-tls13 " if args.without_tls_13 else ""
     extra_args += "-debug -test '%s'" % bogo_args if bogo_args else ''
 
