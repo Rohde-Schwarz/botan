@@ -25,6 +25,7 @@ BORING_PATH = os.path.join(REPO_ROOT, "build_deps", "boringssl")
 BOGO_PATH = os.path.join(BORING_PATH, "ssl", "test", "runner")
 
 SHIM_PATH = os.path.join(REPO_ROOT, "botan_bogo_shim")
+SHIM_CONFIG_NO_DTLS13 = os.path.join(REPO_ROOT, "src", "bogo_shim", "config_no_dtls13.json")
 SHIM_CONFIG_NO_TLS13 = os.path.join(REPO_ROOT, "src", "bogo_shim", "config_no_tls13.json")
 SHIM_CONFIG_NO_TLS12 = os.path.join(REPO_ROOT, "src", "bogo_shim", "config_no_tls12.json")
 SHIM_CONFIG = os.path.join(REPO_ROOT, "src", "bogo_shim", "config.json")
@@ -32,6 +33,8 @@ SHIM_CONFIG = os.path.join(REPO_ROOT, "src", "bogo_shim", "config.json")
 
 def main():
     parser = argparse.ArgumentParser(description='Run BoringSSL Bogo tests with Botan shim')
+    parser.add_argument('--without-dtls-13', action='store_true',
+                        help='Use shim config that disables DTLS 1.3')
     parser.add_argument('--without-tls-12', action='store_true',
                         help='Use shim config that disables TLS 1.2')
     parser.add_argument('--without-tls-13', action='store_true',
@@ -44,7 +47,9 @@ def main():
     repo_config = RepoConfig()
 
     # Select config depending on the option
-    if args.without_tls_13:
+    if args.without_dtls_13:
+        config_path = SHIM_CONFIG_NO_DTLS13
+    elif args.without_tls_13:
         config_path = SHIM_CONFIG_NO_TLS13
     elif args.without_tls_12:
         config_path = SHIM_CONFIG_NO_TLS12
