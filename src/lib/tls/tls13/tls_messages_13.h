@@ -457,7 +457,7 @@ using Handshake_Message_13 = std::variant<Client_Hello_13,
                                           Server_Hello_13,
                                           Server_Hello_12_Shim,  // downgrade trigger: (D)TLS 1.2 Server Hello
                                           Hello_Retry_Request,
-                                          Hello_Verify_Request,  // downgrade trigger: DTLS 1.2 cookie exchange
+                                          Hello_Verify_Request_Shim,  // downgrade trigger: DTLS 1.2 cookie exchange
                                           // End_Of_Early_Data,
                                           Encrypted_Extensions,
                                           Certificate_13,
@@ -478,7 +478,7 @@ using Server_Handshake_13_Message =
    std::variant<Server_Hello_13,
                 Server_Hello_12_Shim,  // indicates a (D)TLS version downgrade
                 Hello_Retry_Request,
-                Hello_Verify_Request,  // indicates a DTLS peer that does not offer TLS 1.3
+                Hello_Verify_Request_Shim,  // indicates a DTLS peer that does not offer TLS 1.3
                 Encrypted_Extensions,
                 Certificate_13,
                 Certificate_Request_13,

@@ -9,29 +9,40 @@
 
 #if defined(BOTAN_HAS_TLS)
 
+   #include <botan/exceptn.h>
    #include <botan/tls_version.h>
 
 namespace Botan_Tests {
+
+   #if defined(BOTAN_HAS_TLS_13) || defined(BOTAN_HAS_TLS_12)
+      #define BOTAN_PROVIDES_SOME_TLS_VERSION
+   #endif
+
+   #if defined(BOTAN_HAS_DTLS_13) || defined(BOTAN_HAS_TLS_12) /* DTLS 1.2 is not split off from TLS 1.2 */
+      #define BOTAN_PROVIDES_SOME_DTLS_VERSION
+   #endif
 
 namespace {
 
 namespace TLS = Botan::TLS;
 
-TLS::Protocol_Version latest_tls_version_in_this_build() {
+[[maybe_unused]] TLS::Protocol_Version latest_tls_version_in_this_build() {
    #if defined(BOTAN_HAS_TLS_13)
    return TLS::Protocol_Version::TLS_V13;
    #elif defined(BOTAN_HAS_TLS_12)
    return TLS::Protocol_Version::TLS_V12;
    #else
-   static_assert(false, "No TLS in this build, some #ifdef issue in the test code?");
+   throw Test_Error("No TLS in this build, some #ifdef issue in the test code?");
    #endif
 }
 
-TLS::Protocol_Version latest_dtls_version_in_this_build() {
-   #if defined(BOTAN_HAS_TLS_12)
+[[maybe_unused]] TLS::Protocol_Version latest_dtls_version_in_this_build() {
+   #if defined(BOTAN_HAS_DTLS_13)
+   return TLS::Protocol_Version::DTLS_V13;
+   #elif defined(BOTAN_HAS_TLS_12)
    return TLS::Protocol_Version::DTLS_V12;
    #else
-   static_assert(false, "No DTLS in this build, some #ifdef issue in the test code?");
+   throw Test_Error("No DTLS in this build, some #ifdef issue in the test code?");
    #endif
 }
 
@@ -39,10 +50,23 @@ std::vector<Test::Result> tls_protocol_version_wrapper() {
    return {
       CHECK("protocol version factories",
             [&](Test::Result& result) {
+   #if defined(BOTAN_PROVIDES_SOME_TLS_VERSION)
                result.test_is_true("latest_tls_version() returns correct version",
                                    TLS::Protocol_Version::latest_tls_version() == latest_tls_version_in_this_build());
+   #else
+               result.test_throws<Botan::Not_Implemented>(
+                  "latest_tls_version() not available in this build",
+                  []{ TLS::Protocol_Version::latest_tls_version(); });
+   #endif
+
+   #if defined(BOTAN_PROVIDES_SOME_DTLS_VERSION)
                result.test_is_true("latest_dtls_version() returns correct version",
                                    TLS::Protocol_Version::latest_dtls_version() == latest_dtls_version_in_this_build());
+   #else
+                                   result.test_throws<Botan::Not_Implemented>(
+                                      "latest_dtls_version() not available in this build",
+                                    []{ TLS::Protocol_Version::latest_dtls_version(); });
+   #endif
             }),
 
       CHECK("default constructor",

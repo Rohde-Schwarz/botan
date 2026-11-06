@@ -472,8 +472,23 @@ Hello_Retry_Request::Hello_Retry_Request(const Client_Hello_13& ch,
    //    HelloRetryRequest message and conveys the cookie to the client via an
    //    extension.
    if(flavor == TLS_Flavor::DTLS && policy.dtls_server_require_cookie_exchange()) {
-      m_data->extensions().add(new Cookie(calculate_cookie(
-         ch.cookie_input_data(), cb.tls_peer_network_identity(), credentials_manager.dtls_cookie_secret())));
+      const std::string client_identity = cb.tls_peer_network_identity();
+      if(client_identity.empty()) {
+         // RFC 9147 Section 11
+         //    Some key properties required of the cookie for the cookie-exchange
+         //    mechanism to be functional [...]:
+         //     - The cookie MUST depend on the client's address.
+         //
+         // Without an application-supplied identity the cookie is reusable from
+         // any source address, defeating the whole point of the cookie exchange.
+         //
+         // TODO(Botan4): Remove the version hint about the breaking change.
+         throw Invalid_State(
+            "Since Botan 3.13 DTLS server requires tls_peer_network_identity() return a non-empty value");
+      }
+
+      m_data->extensions().add(new Cookie(
+         calculate_cookie(ch.cookie_input_data(), client_identity, credentials_manager.dtls_cookie_secret())));
    }
 
    // NOLINTEND(*-owning-memory)
