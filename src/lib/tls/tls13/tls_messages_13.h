@@ -457,6 +457,7 @@ using Handshake_Message_13 = std::variant<Client_Hello_13,
                                           Server_Hello_13,
                                           Server_Hello_12_Shim,  // downgrade trigger: (D)TLS 1.2 Server Hello
                                           Hello_Retry_Request,
+                                          Hello_Verify_Request_Shim,  // downgrade trigger: DTLS 1.2 cookie exchange
                                           // End_Of_Early_Data,
                                           Encrypted_Extensions,
                                           Certificate_13,
@@ -473,14 +474,16 @@ using Post_Handshake_Message_13 = std::variant<New_Session_Ticket_13, Key_Update
 using Server_Post_Handshake_13_Message = std::variant<New_Session_Ticket_13, Key_Update>;
 using Client_Post_Handshake_13_Message = std::variant<Key_Update>;
 
-using Server_Handshake_13_Message = std::variant<Server_Hello_13,
-                                                 Server_Hello_12_Shim,  // indicates a (D)TLS version downgrade
-                                                 Hello_Retry_Request,
-                                                 Encrypted_Extensions,
-                                                 Certificate_13,
-                                                 Certificate_Request_13,
-                                                 Certificate_Verify_13,
-                                                 Finished_13>;
+using Server_Handshake_13_Message =
+   std::variant<Server_Hello_13,
+                Server_Hello_12_Shim,  // indicates a (D)TLS version downgrade
+                Hello_Retry_Request,
+                Hello_Verify_Request_Shim,  // indicates a DTLS peer that does not offer TLS 1.3
+                Encrypted_Extensions,
+                Certificate_13,
+                Certificate_Request_13,
+                Certificate_Verify_13,
+                Finished_13>;
 using Server_Handshake_13_Message_Ref = detail::as_wrapped_references_t<Server_Handshake_13_Message>;
 
 using Client_Handshake_13_Message =

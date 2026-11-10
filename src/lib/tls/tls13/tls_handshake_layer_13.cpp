@@ -102,8 +102,8 @@ std::optional<Handshake_Message_13> Handshake_Layer::next_message(const Policy& 
    //    messages can immediately precede a key change, implementations
    //    MUST send these messages in alignment with a record boundary.
    //
-   // Note: Hello_Retry_Request and Hello_Verify_Request were added to the list
-   //       below although they cannot immediately precede a key change.
+   // Note: Hello_Retry_Request and Hello_Verify_Request_Shim were added to the
+   //       list below although they cannot immediately precede a key change.
    //       However, there cannot be any further sensible messages in the record
    //       after them.
    //
@@ -118,7 +118,12 @@ std::optional<Handshake_Message_13> Handshake_Layer::next_message(const Policy& 
    // available handshake messages. (Any legal follow-up handshake message
    // cannot be present in the queue yet, because we can successfully deprotect
    // it only after said key change.)
-   if(holds_any_of<Client_Hello_12_Shim, Client_Hello_13, Server_Hello_13, Hello_Retry_Request, Finished_13>(msg) &&
+   if(holds_any_of<Client_Hello_12_Shim,
+                   Client_Hello_13,
+                   Server_Hello_13,
+                   Hello_Verify_Request_Shim,  // DTLS 1.3 -> 1.2 downgrade
+                   Hello_Retry_Request,
+                   Finished_13>(msg) &&
       !buffer_view->was_final_message_in_queue()) {
       throw TLS_Exception(Alert::UnexpectedMessage, "Unexpected additional handshake data at epoch boundary");
    }
