@@ -20,6 +20,10 @@
 #include <botan/internal/tls_record_layer_13.h>
 #include <botan/internal/tls_transcript_hash_13.h>
 
+#if defined(BOTAN_HAS_DTLS_13)
+   #include <botan/internal/tls_channel_io_dtls13.h>
+#endif
+
 namespace Botan::TLS {
 
 std::optional<Channel_IO::ReceiveEvent> Channel_IO::next_pending_handshake_message(
@@ -100,6 +104,10 @@ Channel_IO::ReceiveEvent Channel_IO::next_pending_event(std::optional<Transcript
                process(record);
                return std::nullopt;  // continue looping, the handshake layer may have progressed...
             },
+            [&](const ACK_Record& record) -> std::optional<Channel_IO::ReceiveEvent> {
+               process(record);
+               return std::nullopt;  // continue looping, the record layer may have more data...
+            },
             [&](TransparentRecord anything_else) -> std::optional<Channel_IO::ReceiveEvent> {
                validate(anything_else);
                return generalize_to<Channel_IO::ReceiveEvent>(std::move(anything_else));
@@ -156,6 +164,25 @@ void Channel_IO::maybe_send_opportunistic_key_update() {
       return write_limit > 0 && cs->current_read_sequence_number() >= read_limit;
    };
 
+   // RFC 9147 4.7.3
+   //    Implementations SHOULD initiate a key update with update_requested
+   //    before reaching [the deprotection failure limit].
+   const auto deprotection_failure_limit_reached = [&] {
+      if(m_flavor != TLS_Flavor::DTLS) {
+         return false;
+      }
+
+      // This only makes sense if the limit set by the user is >= 2.
+      const size_t failure_limit = policy().dtls_maximum_deprotection_failures();
+      if(failure_limit < 2) {
+         return false;
+      }
+
+      // Ask for the update a quarter before the limit, but at least one failure ahead of it.
+      const uint64_t threshold = failure_limit - std::max<size_t>(1, failure_limit / 4);
+      return cs->current_read_epoch_deprotection_failures() >= threshold;
+   };
+
    // RFC 9846 4.7.3
    //    If the request_update field [of a received KeyUpdate] is set to
    //    "update_requested", then the receiver MUST send a KeyUpdate of its own
@@ -178,7 +205,8 @@ void Channel_IO::maybe_send_opportunistic_key_update() {
    // write keys, provided that we are allowed to request one.
    const bool request_peer_update = may_request_peer_update &&  //
                                     (write_limit_reached ||     //
-                                     read_limit_reached());
+                                     read_limit_reached() ||    //
+                                     deprotection_failure_limit_reached());
 
    if(m_key_update_reciprocation_pending || write_limit_reached || request_peer_update) {
       update_traffic_keys(request_peer_update);
@@ -327,7 +355,9 @@ constexpr size_t max_retained_write_buffer_size = 4 * (TLS_HEADER_SIZE + MAX_CIP
 class TLS_Channel_IO final : public Channel_IO {
    public:
       TLS_Channel_IO(Connection_Side side, std::shared_ptr<const Policy> policy, std::shared_ptr<Callbacks> callbacks) :
-            Channel_IO(side, std::move(policy), std::move(callbacks)), m_record_layer(side), m_handshake_layer(side) {}
+            Channel_IO(side, TLS_Flavor::TLS, std::move(policy), std::move(callbacks)),
+            m_record_layer(side),
+            m_handshake_layer(side) {}
 
       void send_data(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) override {
          const size_t max_plaintext_payload_size = record_layer().record_payload_size_limit(policy(), cipher_state);
@@ -456,6 +486,11 @@ class TLS_Channel_IO final : public Channel_IO {
          std::ignore = m_handshake_layer.copy_data(policy(), record);
       }
 
+      void process(const ACK_Record& ack_record) override {
+         BOTAN_UNUSED(ack_record);
+         throw Unexpected_Message("Received ACK record in TLS 1.3");
+      }
+
       void validate(const TransparentRecord& record) override {
          BOTAN_UNUSED(record);
 
@@ -503,7 +538,11 @@ std::shared_ptr<Channel_IO> Channel_IO::create(Connection_Side side,
                                                std::shared_ptr<const Policy> policy,
                                                std::shared_ptr<Callbacks> callbacks) {
    if(flavor == TLS_Flavor::DTLS) {
-      throw Not_Implemented("DTLS 1.3 is not yet supported");
+#if defined(BOTAN_HAS_DTLS_13)
+      return std::make_shared<DTLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
+#else
+      throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
+#endif
    } else {
       return std::make_shared<TLS_Channel_IO>(side, std::move(policy), std::move(callbacks));
    }

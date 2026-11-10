@@ -112,11 +112,19 @@
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_channel_impl_13.h>
 
+#if defined(BOTAN_HAS_DTLS_13)
+   #include <botan/internal/tls_cipher_state_dtls13.h>
+#endif
+
 namespace Botan::TLS {
 
 std::unique_ptr<Cipher_State> Cipher_State::create(Connection_Side side, TLS_Flavor flavor, std::string_view prf_algo) {
    if(flavor == TLS_Flavor::DTLS) {
-      throw Not_Implemented("DTLS 1.3 is not yet supported");
+#if defined(BOTAN_HAS_DTLS_13)
+      return std::make_unique<DTLS_Cipher_State>(side, prf_algo);
+#else
+      throw Not_Implemented("DTLS 1.3 is not enabled in this build of Botan");
+#endif
    } else {
       return std::make_unique<TLS_Cipher_State>(side, prf_algo);
    }
@@ -688,6 +696,7 @@ Cipher_State::Epoch Cipher_State::create_epoch(EpochNumber epoch_number,
       }(),
       .iv = hkdf_expand_label(traffic_secret, "iv", {}, NONCE_LENGTH),
       .sequence_number = 0,
+      .deprotection_failures = 0,
       .traffic_secret = traffic_secret,
       .finished_key = [&]() -> std::optional<secure_vector<uint8_t>> {
          if(epoch_number.is_handshake_traffic()) {
@@ -795,6 +804,10 @@ uint64_t Cipher_State::current_write_sequence_number() const {
 
 uint64_t Cipher_State::current_read_sequence_number() const {
    return latest_read_epoch().sequence_number;
+}
+
+uint64_t Cipher_State::current_read_epoch_deprotection_failures() const {
+   return latest_read_epoch().deprotection_failures;
 }
 
 EpochNumber Cipher_State::current_write_epoch_number() const {
