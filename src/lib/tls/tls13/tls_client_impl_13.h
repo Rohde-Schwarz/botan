@@ -104,6 +104,7 @@ class Client_Impl_13 final : public Channel_Impl_13 {
 
       using Channel_Impl_13::handle;
       void handle(const Server_Hello_12_Shim& server_hello_msg);
+      void handle(const Hello_Verify_Request_Shim& hello_verify_request);
       void handle(const Server_Hello_13& server_hello_msg);
       void handle(const Hello_Retry_Request& hrr_msg);
       void handle(const Encrypted_Extensions& encrypted_extensions_msg);

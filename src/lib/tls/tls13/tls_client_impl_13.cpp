@@ -15,6 +15,8 @@
 #include <botan/tls_messages_13.h>
 #include <botan/tls_policy.h>
 #include <botan/x509cert.h>
+#include <botan/internal/concat_util.h>
+#include <botan/internal/loadstor.h>
 #include <botan/internal/stl_util.h>
 #include <botan/internal/tls_channel_impl_13.h>
 #include <botan/internal/tls_channel_io.h>
@@ -271,6 +273,32 @@ void Client_Impl_13::handle(const Server_Hello_12_Shim& server_hello_msg) {
 #endif
 }
 
+void Client_Impl_13::handle(const Hello_Verify_Request_Shim& /*hello_verify_request*/) {
+   BOTAN_ASSERT_NONNULL(m_handshake);
+
+   // HelloVerifyRequest exists only in DTLS. A TLS peer must never reach this
+   // handler because HelloVerifyRequest is not among the TLS expected messages.
+   BOTAN_STATE_CHECK(is_datagram());
+
+   if(!expects_downgrade()) {
+      throw TLS_Exception(Alert::ProtocolVersion, "Received an unexpected Hello Verify Request");
+   }
+
+   if(m_handshake->state.has_hello_retry_request()) {
+      throw TLS_Exception(Alert::UnexpectedMessage, "Hello Verify Request received after Hello Retry");
+   }
+
+#if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
+   preserve_client_hello(m_handshake->state.take_client_hello());
+   preserve_sequence_numbers(m_channel_io->epoch0_sequence_numbers());
+   request_downgrade();
+
+   // After this, no further messages are expected here because this instance will be replaced
+   // by a Client_Impl_12.
+   m_handshake->transitions.set_expected_next({});
+#endif
+}
+
 namespace {
 // validate Server_Hello_13 and Hello_Retry_Request
 void validate_server_hello_ish(const Client_Hello_13& ch, const Server_Hello_13& sh, TLS_Flavor flavor) {
@@ -364,6 +392,13 @@ void Client_Impl_13::handle(const Server_Hello_13& sh) {
       // This is a no-op for TLS; in DTLS this notification drives the
       // retransmission state once the peer has committed to the protocol
       // version (see Channel_IO::notify_protocol_version_committed()).
+      //
+      // Conceptually, DTLS could now clear the resend buffer and rely on the
+      // ACKing of DTLS 1.3 in case the encrypted portion of the server flight
+      // was lost. However, we don't do that here for compliance with BoGo,
+      // i.e., we keep the resend buffer and the next timeout_check() call will
+      // trigger a full resend of all ClientHello fragments, which is still
+      // valid behavior.
       m_channel_io->notify_protocol_version_committed();
    }
 
