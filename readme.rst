@@ -93,12 +93,12 @@ Find Enclosed
 Transport Layer Security (TLS) Protocol
 ----------------------------------------
 
-* TLS v1.2/v1.3, and DTLS v1.2
+* TLS v1.2/v1.3, DTLS v1.2, and DTLS v1.3 (experimental)
 * Supported extensions include session tickets, SNI, ALPN, OCSP stapling,
   encrypt-then-mac CBC, and extended master secret.
 * Supports authentication using certificates or preshared keys (PSK)
 * Supports record encryption with modern AEAD modes as well as legacy CBC ciphersuites.
-* TLS 1.3 supports hybrid post-quantum key exchange using ML-KEM or FrodoKEM
+* (D)TLS 1.3 supports hybrid post-quantum key exchange using ML-KEM or FrodoKEM
 
 Public Key Infrastructure
 ----------------------------------------
