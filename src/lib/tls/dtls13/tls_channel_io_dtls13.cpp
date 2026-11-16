@@ -270,7 +270,11 @@ void DTLS_Channel_IO::notify_received_final_flight() {
    //     When a handshake flight is sent without any expected response, as
    //     is the case with the client's final flight [...], the flight must
    //     be acknowledged with an ACK message.
+   //
+   // The final flight must always be acknowledged. We do that instantly, and
+   // cancel the opportunistic timer so that the ACK isn't emitted twice.
    send_acknowledgements();
+   m_ack_timer.cancel();
 }
 
 void DTLS_Channel_IO::notify_closed_for_writing() {

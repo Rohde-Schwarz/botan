@@ -130,8 +130,8 @@ class BOTAN_TEST_API DTLS_Record_Layer final : public Record_Layer {
       /**
       * Generates a serialized ACK message containing all records that were
       * successfully received and processed by the record layer. This list is
-      * cleared whenever progress is made in the handshake state machine, see
-      * `clear_dtls_outstanding_acknowledgements()`.
+      * cleared whenever progress is made in the handshake state machine (see
+      * `clear_outstanding_acknowledgements()`).
       */
       ACKs acknowledgements() const;
 
