@@ -1100,6 +1100,42 @@ std::vector<Test::Result> retransmissions_and_acknowledgements() {
                result.test_is_true("ACK lists the peer's Finished", acknowledged_by(output) == finished_numbers);
             }),
 
+      CHECK(
+         "the final flight's ACK is not repeated by the ACK timer but retained for retransmissions",
+         [](Test::Result& result) {
+            Exchange exchange(result);
+            exchange.commit();
+
+            const auto finished = exchange.client_sends(Finished, 32);
+            result.require("peer sends a single datagram", finished.size() == 1);
+            const auto original_numbers = record_numbers(exchange.decode_client_datagrams(finished));
+            result.require("peer sends a single record", original_numbers.size() == 1);
+            result.test_sz_eq("Finished is delivered", exchange.deliver_to_server(finished.front()).events.size(), 1);
+
+            exchange.server().io->notify_received_final_flight();
+            result.test_sz_eq("the final flight is acknowledged", count_records(exchange.take_server_output(), ACK), 1);
+
+            exchange.advance_server_clock(ack_timeout_ms);
+            result.test_is_true("ACK timer does not repeat the ACK", exchange.take_server_output().empty());
+
+            // The peer never saw the ACK and retransmits its Finished in a new record
+            exchange.client().callbacks->advance_clock(initial_timeout_ms);
+            const auto retransmission = exchange.client().callbacks->take_datagrams();
+            result.require("peer retransmits a single datagram", retransmission.size() == 1);
+            const auto retransmitted_numbers = record_numbers(exchange.decode_client_datagrams(retransmission));
+            result.require("peer retransmits a single record", retransmitted_numbers.size() == 1);
+            result.test_is_true("retransmission is not processed again",
+                                exchange.deliver_to_server(retransmission.front()).events.empty());
+
+            exchange.advance_server_clock(ack_timeout_ms);
+            const auto output = exchange.take_server_output();
+            result.test_sz_eq("one ACK record is sent", count_records(output, ACK), 1);
+            result.test_is_true("ACK covers the original record",
+                                contains(acknowledged_by(output), original_numbers.front()));
+            result.test_is_true("ACK covers the retransmitted record",
+                                contains(acknowledged_by(output), retransmitted_numbers.front()));
+         }),
+
       CHECK("closing for writing or shutting down cancels the retransmission and ACK timers",
             [](Test::Result& result) {
                // Closing the write side (close_notify sent) is sufficient, a full shutdown includes it
