@@ -148,7 +148,8 @@ std::vector<uint8_t> client_hello_bare_bytes() {
  * @returns a DTLS ClientHello object
  */
 TLS::Client_Hello_13 client_hello() {
-   return std::get<TLS::Client_Hello_13>(TLS::Client_Hello_13::parse(client_hello_bare_bytes(), TLS::TLS_Flavor::DTLS));
+   return std::get<TLS::Client_Hello_13>(
+      TLS::Client_Hello_13::parse(client_hello_bare_bytes(), Botan::TLS::TLS_Flavor::DTLS));
 }
 
 /**
