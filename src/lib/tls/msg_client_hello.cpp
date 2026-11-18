@@ -132,9 +132,12 @@ Protocol_Version Client_Hello_Internal::version() const {
    //    the highest version indicated therein.
    const bool is_dtls = m_legacy_version.is_datagram_protocol();
    const auto protocol_version_13 = is_dtls ? Protocol_Version::DTLS_V13 : Protocol_Version::TLS_V13;
+
    if(!extensions().has<Supported_Versions>() ||
       !extensions().get<Supported_Versions>()->supports(protocol_version_13)) {
-      return is_dtls ? Protocol_Version::DTLS_V12 : Protocol_Version::TLS_V12;
+      // The exact legacy_version is ignored we just inspect it to
+      // distinguish TLS and DTLS.
+      return m_legacy_version.flavor().legacy_version();
    }
 
    // Note: The Client_Hello_13 class will make sure that legacy_version
