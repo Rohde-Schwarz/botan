@@ -130,9 +130,10 @@ Protocol_Version Client_Hello_Internal::version() const {
    //    TLS 1.3 ClientHellos are identified as having a legacy_version of
    //    0x0303 and a supported_versions extension present with 0x0304 as
    //    the highest version indicated therein.
-   if(!extensions().has<Supported_Versions>() ||
-      (!extensions().get<Supported_Versions>()->supports(Protocol_Version::TLS_V13) &&
-       !extensions().get<Supported_Versions>()->supports(Protocol_Version::DTLS_V13))) {
+   const bool is_datagram = m_legacy_version.is_datagram_protocol();
+   const auto version_13 = is_datagram ? Protocol_Version::DTLS_V13 : Protocol_Version::TLS_V13;
+
+   if(!extensions().has<Supported_Versions>() || !extensions().get<Supported_Versions>()->supports(version_13)) {
       // The exact legacy_version is ignored we just inspect it to
       // distinguish TLS and DTLS.
       return m_legacy_version.flavor().legacy_version();

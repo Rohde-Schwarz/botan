@@ -278,6 +278,11 @@ class Shim_Policy final : public Botan::TLS::Policy {
          return m_cfg.is_dtls() && version_in_range(Botan::TLS::Protocol_Version::DTLS_V12);
       }
 
+      bool allow_dtls13() const override {
+         return false;
+         // return m_cfg.is_dtls() && version_in_range(Botan::TLS::Protocol_Version::DTLS_V13);
+      }
+
       // Accept peer-initiated renegotiation when the runner asks for it (these
       // are the real Botan policy virtuals; the library defaults are false). A
       // server honours a client's renegotiation ClientHello; a client honours a
