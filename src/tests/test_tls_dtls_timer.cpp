@@ -494,20 +494,40 @@ std::vector<Test::Result> retransmission_timer() {
                });
                result.test_u32_eq("early invocations did not retransmit", op, 2);
 
+               // The timer expires and throws even though no timeout handler
+               // was set.
                result.test_throws<TLS_Exception>("timer gave up after the maximum number of retransmissions",
                                                  "DTLS handshake timed out: maximum retransmissions exceeded",
                                                  [&] { cb->advance(250ms); });
                result.test_u32_eq("no further retransmission was emitted", op, 2);
                result.test_is_false("timer is no longer armed after giving up", timer.armed());
 
-               // a new flight can still be sent after the previous one timed out
+               // A new flight can still be sent after the previous one timed
+               // out. The timeout handler set here persists across restarts and
+               // is only invoked when the retransmission budget is exhausted.
+               Timer_Operation timeout_op;
+               timer.set_timeout_handler(timeout_op.callback());
                timer.start(op.callback());
                result.test_is_true("timer is armed after restart", timer.armed());
+               result.test_u32_eq("timeout handler not called while the timer is armed", timeout_op, 0);
 
                cb->advance(99ms);
                result.test_u32_eq("did not retransmit before the initial timeout", op, 2);
+               result.test_u32_eq("timeout handler not called before the retransmission", timeout_op, 0);
                cb->advance(1ms);
                result.test_u32_eq("retransmission ran after the initial timeout", op, 3);
+               result.test_u32_eq("timeout handler not called on the retransmission", timeout_op, 0);
+
+               cb->advance(200ms);
+               result.test_u32_eq("second retransmission ran", op, 4);
+               result.test_u32_eq("timeout handler not called on retransmissions", timeout_op, 0);
+
+               result.test_throws<TLS_Exception>("timer gave up again after the maximum number of retransmissions",
+                                                 "DTLS handshake timed out: maximum retransmissions exceeded",
+                                                 [&] { cb->advance(250ms); });
+               result.test_u32_eq("timeout handler was called when the timer expired", timeout_op, 1);
+               result.test_u32_eq("no further retransmission was emitted", op, 4);
+               result.test_is_false("timer is no longer armed after giving up again", timer.armed());
             }),
 
       CHECK("restarting a retransmission timer resets the exponential backoff and replaces the operation",
@@ -547,41 +567,49 @@ std::vector<Test::Result> retransmission_timer() {
             [&](Test::Result& result) {
                auto cb = std::make_shared<Timer_Callbacks>();
                Timer_Operation op;
+               Timer_Operation timeout_op;
 
                {
                   RetransmissionTimer timer(Retransmission_Test_Policy(100ms, 250ms, std::nullopt), cb);
 
                   timer.start(op.callback());
+                  timer.set_timeout_handler(timeout_op.callback());
                   result.test_is_true("timer is armed", timer.armed());
 
                   cb->advance(100ms);
                   result.test_u32_eq("first retransmission ran", op, 1);
                   result.test_is_true("timer is still armed", timer.armed());
+                  result.test_u32_eq("timeout handler not called while the timer is armed", timeout_op, 0);
                }
 
                cb->advance(1000ms);
                result.test_u32_eq("no further retransmissions ran", op, 1);
+               result.test_u32_eq("timeout handler not called after the timer was destroyed", timeout_op, 0);
             }),
 
       CHECK("cancelling a running retransmission timer stops further retransmissions",
             [&](Test::Result& result) {
                auto cb = std::make_shared<Timer_Callbacks>();
                Timer_Operation op;
+               Timer_Operation timeout_op;
 
                RetransmissionTimer timer(Retransmission_Test_Policy(100ms, 250ms, std::nullopt), cb);
 
                timer.start(op.callback());
+               timer.set_timeout_handler(timeout_op.callback());
                result.test_is_true("timer is armed", timer.armed());
 
                cb->advance(100ms);
                result.test_u32_eq("first retransmission ran", op, 1);
                result.test_is_true("timer is still armed", timer.armed());
+               result.test_u32_eq("timeout handler not called while the timer is armed", timeout_op, 0);
 
                timer.cancel();
                result.test_is_false("timer is no longer armed", timer.armed());
 
                cb->advance(1000ms);
                result.test_u32_eq("no further retransmissions ran", op, 1);
+               result.test_u32_eq("timeout handler not called after cancellation", timeout_op, 0);
 
                // restarting after a cancel starts with the initial timeout again
                timer.start(op.callback());
@@ -591,6 +619,7 @@ std::vector<Test::Result> retransmission_timer() {
                result.test_u32_eq("did not retransmit before the initial timeout", op, 1);
                cb->advance(1ms);
                result.test_u32_eq("retransmission ran after the initial timeout", op, 2);
+               result.test_u32_eq("timeout handler still not called after the restart", timeout_op, 0);
             }),
    };
 }

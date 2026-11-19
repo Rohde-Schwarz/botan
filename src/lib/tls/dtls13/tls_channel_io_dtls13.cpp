@@ -385,6 +385,14 @@ void DTLS_Channel_IO::arm_retransmission_timer() {
    }
 }
 
+void DTLS_Channel_IO::init(const std::shared_ptr<Channel_Impl_13>& channel) {
+   m_retransmission_timer.set_timeout_handler([weak_channel = std::weak_ptr(channel)] {
+      if(auto c = weak_channel.lock()) {
+         c->shutdown();
+      }
+   });
+}
+
 void DTLS_Channel_IO::process(const Handshake_Record& record) {
    BOTAN_ASSERT_NOMSG(record.epoch.has_value());
    maybe_schedule_read_epoch_pruning(*record.epoch);

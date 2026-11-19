@@ -65,6 +65,10 @@ Channel_Impl_13::Channel_Impl_13(const std::shared_ptr<Callbacks>& callbacks,
    BOTAN_ASSERT_NONNULL(m_policy);
 }
 
+void Channel_Impl_13::init() {
+   m_channel_io->init(std::dynamic_pointer_cast<Channel_Impl_13>(shared_from_this()));
+}
+
 Cipher_State& Channel_Impl_13::setup_cipher_state(std::unique_ptr<Cipher_State> cipher_state) {
    BOTAN_ASSERT_NONNULL(cipher_state);
    m_cipher_state = std::move(cipher_state);
