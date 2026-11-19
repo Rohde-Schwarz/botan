@@ -21,6 +21,7 @@ class Alert;
 class Record_Layer;
 class Handshake_Layer;
 class Cipher_State;
+class Channel_Impl_13;
 struct RecordNumber;
 
 /**
@@ -200,6 +201,8 @@ class BOTAN_TEST_API Channel_IO {
          notify_closed_for_reading();
          notify_closed_for_writing();
       }
+
+      virtual void init(const std::shared_ptr<Channel_Impl_13>& channel) { BOTAN_UNUSED(channel); }
 
       void set_cipher_state(std::weak_ptr<Cipher_State> cipher_state) { m_cipher_state = std::move(cipher_state); }
 

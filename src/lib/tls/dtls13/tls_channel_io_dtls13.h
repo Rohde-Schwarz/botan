@@ -44,6 +44,8 @@ class DTLS_Channel_IO final : public Channel_IO,
       void notify_closed_for_writing() override;
 
    private:
+      void init(const std::shared_ptr<Channel_Impl_13>& channel) override;
+
       void process(const Handshake_Record& record) override;
       void process(const ACK_Record& ack_record) override;
       void validate(const TransparentRecord& record) override;

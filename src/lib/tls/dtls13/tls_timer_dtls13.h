@@ -211,6 +211,7 @@ class SingleshotTimer final {
 class RetransmissionTimer final {
    public:
       using DeferredOperation = std::function<void()>;
+      using TimeoutHandler = std::function<void()>;
 
    private:
       /**
@@ -230,6 +231,7 @@ class RetransmissionTimer final {
             const std::shared_ptr<Callbacks> callbacks;
 
             DeferredOperation on_retransmission;
+            TimeoutHandler on_timeout;
             size_t retransmissions;
             std::chrono::milliseconds next_timeout;
             SingleshotTimer retransmission_timer;
@@ -243,6 +245,7 @@ class RetransmissionTimer final {
                .max_retransmissions = policy.dtls_maximum_retransmissions(),
                .callbacks = std::move(callbacks),
                .on_retransmission = {},
+               .on_timeout = {},
                .retransmissions = 0,
                .next_timeout = std::chrono::milliseconds(policy.dtls_initial_timeout()),
                .retransmission_timer = {},
@@ -283,6 +286,15 @@ class RetransmissionTimer final {
          set_timer(m_token);
       }
 
+      /**
+       * Allows registering a callback that is invoked when the maximum
+       * retransmission count is reached and the timer expires. The callback is
+       * needed because the emitted exception from within the deferred operation
+       * cannot be caught by higher layers as they typically aren't in the stack
+       * frame.
+       */
+      void set_timeout_handler(TimeoutHandler handler) { m_token->on_timeout = std::move(handler); }
+
    private:
       void reset(DeferredOperation on_retransmission = {}) {
          m_token->on_retransmission = std::move(on_retransmission);
@@ -300,6 +312,9 @@ class RetransmissionTimer final {
             if(auto handle = weak_token.lock()) {
                if(handle->max_retransmissions.has_value() &&
                   handle->retransmissions >= handle->max_retransmissions.value()) {
+                  if(handle->on_timeout) {
+                     handle->on_timeout();
+                  }
                   throw TLS_Exception(Alert::None, "DTLS handshake timed out: maximum retransmissions exceeded");
                }
 
