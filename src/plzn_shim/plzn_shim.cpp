@@ -383,7 +383,23 @@ class Shim_Policy final : public Botan::TLS::Policy {
       }
 
       bool dtls_server_require_cookie_exchange() const override {
-         return m_cfg.dtls_require_cookie.value_or(Botan::TLS::Policy::dtls_server_require_cookie_exchange());
+         if(m_cfg.dtls_require_cookie.has_value()) {
+            return *m_cfg.dtls_require_cookie;
+         }
+
+         // plzn's DTLS 1.3 corpus assumes a cookieless server by default: its
+         // reference implementation (BoringSSL) has no DTLS 1.3 cookie exchange,
+         // and the tests that exercise the cookie flow opt in via
+         // `dtls_require_cookie`. RFC 9147 11 merely recommends ("SHOULD use")
+         // the exchange, so declining it is a valid server posture.
+         //
+         // DTLS 1.2 keeps the library default (HelloVerifyRequest): several
+         // dtls12 tests require the exchange without setting the knob.
+         if(m_cfg.requests_dtls13()) {
+            return false;
+         }
+
+         return Botan::TLS::Policy::dtls_server_require_cookie_exchange();
       }
 
       bool allow_dtls_epoch0_restart() const override {
