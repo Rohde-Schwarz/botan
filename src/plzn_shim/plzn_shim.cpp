@@ -353,7 +353,7 @@ class Shim_Policy final : public Botan::TLS::Policy {
       // than N ms after the previous one is rejected with unexpected_message
       // (a solicited reciprocation is exempt); 0 disables the rate limit.
       uint64_t minimum_key_update_interval_ms() const override {
-         return m_cfg.min_key_update_interval_ms.value_or(Botan::TLS::Policy::minimum_key_update_interval_ms());
+         return m_cfg.min_key_update_interval_ms.value_or(0);
       }
 
       size_t new_session_tickets_upon_handshake_success() const override {
