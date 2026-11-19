@@ -12,7 +12,10 @@
 #include <botan/tls_callbacks.h>
 #include <botan/tls_exceptn.h>
 #include <botan/tls_policy.h>
+#include <botan/internal/stl_util.h>
+#include <algorithm>
 #include <chrono>
+#include <memory>
 #include <optional>
 
 namespace Botan::TLS {
@@ -23,14 +26,31 @@ class Callbacks;
  * A convenience wrapper for Callbacks::tls_register_deferred_operation() that
  * allows scheduling an asynchronous operation that is run exactly once after
  * a specified delay.
+ *
+ * If the application invokes the registered operation before the deadline, the
+ * timer is re-armed for the remaining time. A duplicate invocation of the same
+ * registered operation is a no-op.
  */
 class SingleshotTimer final {
+   public:
+      using DeferredOperation = std::function<void()>;
+
    private:
+      /**
+       * Tracks a single registration of a deferred operation. This is needed to
+       * avoid re-arming a deferred operation more than once if an application
+       * calls it prematurely multiple times, and to ensure the user operation
+       * runs at most once across the whole registration chain.
+       */
+      struct Registration {
+            bool consumed = false;
+      };
+
       /**
        * This Token is owned by the SingleshotTimer object and shared with the
        * cancellable deferred operation as a weak_ptr. If the Token is destroyed
-       * before the deferred operation deferred operation is executed, the
-       * operation will act as a no-op.
+       * before the deferred operation is executed, the operation will act as a
+       * no-op.
        *
        * If the using application (accidentally) calls the deferred operation
        * more than once on the same SingleshotTimer object it will still only be
@@ -38,14 +58,96 @@ class SingleshotTimer final {
        * is executed, the operation will not be executed at all.
        */
       struct Token {
-            bool executed = false;
+            uint64_t deadline_ms = 0;
+            std::shared_ptr<Registration> registration;
       };
+
+      using TokenHandle = std::variant<std::weak_ptr<Token>, std::shared_ptr<Token>>;
 
       explicit SingleshotTimer(std::shared_ptr<Token> token) : m_token(std::move(token)) {}
 
-   public:
-      using DeferredOperation = std::function<void()>;
+      static std::shared_ptr<Registration> register_deferred_operation(const std::shared_ptr<Callbacks>& callbacks,
+                                                                       const TokenHandle& token_handle,
+                                                                       uint64_t delay_ms,
+                                                                       DeferredOperation operation) {
+         auto registration = std::make_shared<Registration>();
 
+         std::visit(
+            [&](auto&& handle) mutable {
+               callbacks->tls_register_deferred_operation(delay_ms,
+                                                          [weak_cb = std::weak_ptr(callbacks),
+                                                           handle,
+                                                           registration,
+                                                           operation = std::move(operation)]() mutable {
+                                                             run_or_rearm(
+                                                                weak_cb, handle, registration, std::move(operation));
+                                                          });
+            },
+            token_handle);
+
+         return registration;
+      }
+
+      static void run_or_rearm(const std::weak_ptr<Callbacks>& weak_callbacks,
+                               const TokenHandle& token_handle,
+                               const std::shared_ptr<Registration>& registration,
+                               DeferredOperation operation) {
+         // If the deferred operation was called previously this becomes a no-op
+         // so that timers aren't re-armed multiple times and the user operation
+         // is only executed exactly once.
+         if(registration->consumed) {
+            return;
+         }
+
+         // If our Callbacks object is gone, we have to assume that the deferred
+         // operation survived the underlying TLS channel and its dependencies.
+         const auto cb = weak_callbacks.lock();
+         if(!cb) {
+            return;
+         }
+
+         // The `token_handle` might be a shared or a weak pointer. In the latter
+         // case, the Token might have been destroyed already (timer cancelled),
+         // and we have to treat this as a no-op.
+         std::shared_ptr<Token> token =
+            std::visit(overloaded{
+                          [&](const std::weak_ptr<Token>& weak_token) { return weak_token.lock(); },
+                          [&](const std::shared_ptr<Token>& shared_token) { return shared_token; },
+                       },
+                       token_handle);
+         if(!token) {
+            return;
+         }
+
+         // We are now past the sanity checks and it is time to act. In any case
+         // this particular registration is now being consumed.
+         registration->consumed = true;
+
+         const uint64_t now_ms = cb->tls_current_monotonic_clock_ms();
+
+         const uint64_t remaining_ms = token->deadline_ms > now_ms ? token->deadline_ms - now_ms : 0;
+         if(remaining_ms > DTLS_RETRANSMISSION_TIMER_FUDGE) {
+            // The timer was called pre-maturely. We re-arm it with a new
+            // registration for the remaining time until the deadline.
+            token->registration = register_deferred_operation(cb, token_handle, remaining_ms, std::move(operation));
+         } else {
+            // The timer has expired and we can execute the deferred operation.
+            // No new registration is created, because the operation served
+            // its purpose and is now retired.
+            token->registration.reset();
+            operation();
+         }
+      }
+
+      static std::shared_ptr<Token> make_token(const std::shared_ptr<Callbacks>& callbacks,
+                                               std::chrono::milliseconds delay) {
+         auto token = std::make_shared<Token>();
+         const uint64_t now_ms = callbacks->tls_current_monotonic_clock_ms();
+         token->deadline_ms = now_ms + static_cast<uint64_t>(delay.count());
+         return token;
+      }
+
+   public:
       SingleshotTimer() = default;
       ~SingleshotTimer() = default;
 
@@ -59,14 +161,11 @@ class SingleshotTimer final {
        * Start a deferred operation that will be executed after the given delay.
        * This operation cannot be cancelled.
        */
-      static void start_detached(Callbacks& callbacks, std::chrono::milliseconds delay, DeferredOperation operation) {
-         callbacks.tls_register_deferred_operation(
-            delay.count(), [token = std::make_shared<Token>(), operation = std::move(operation)] {
-               if(!token->executed) {
-                  token->executed = true;  // set it first, in case operation() throws
-                  operation();
-               }
-            });
+      static void start_detached(const std::shared_ptr<Callbacks>& callbacks,
+                                 std::chrono::milliseconds delay,
+                                 DeferredOperation operation) {
+         auto token = make_token(callbacks, delay);
+         token->registration = register_deferred_operation(callbacks, token, delay.count(), std::move(operation));
       }
 
       /**
@@ -75,18 +174,12 @@ class SingleshotTimer final {
        * delay unless the SingleshotTimer object is destroyed or cancel() is
        * called before the operation is executed.
        */
-      [[nodiscard]] static SingleshotTimer start(Callbacks& callbacks,
+      [[nodiscard]] static SingleshotTimer start(const std::shared_ptr<Callbacks>& callbacks,
                                                  std::chrono::milliseconds delay,
                                                  DeferredOperation operation) {
-         auto token = std::make_shared<Token>();
-         callbacks.tls_register_deferred_operation(
-            delay.count(), [weak_token = std::weak_ptr(token), operation = std::move(operation)] {
-               if(auto handle = weak_token.lock(); handle && !handle->executed) {
-                  handle->executed = true;  // set it first, in case operation() throws
-                  operation();
-               }
-            });
-
+         auto token = make_token(callbacks, delay);
+         token->registration =
+            register_deferred_operation(callbacks, std::weak_ptr(token), delay.count(), std::move(operation));
          return SingleshotTimer(std::move(token));
       }
 
@@ -95,7 +188,7 @@ class SingleshotTimer final {
 
       /// @returns true if the deferred operation is currently armed and was
       ///          not yet executed; false otherwise
-      bool armed() const { return m_token != nullptr && !m_token->executed; }
+      bool armed() const { return m_token != nullptr && m_token->registration != nullptr; }
 
       // NOLINTNEXTLINE(*-explicit-conversions)
       operator bool() const { return armed(); }
@@ -111,6 +204,9 @@ class SingleshotTimer final {
  *
  * The user can cancel and restart the timer as needed. If the timer object is
  * destroyed, the timer is automatically cancelled.
+ *
+ * Premature invocations of the underlying deferred operation are handled by
+ * SingleshotTimer (re-arm for remaining time).
  */
 class RetransmissionTimer final {
    public:
@@ -196,7 +292,7 @@ class RetransmissionTimer final {
       }
 
       static void set_timer(const std::shared_ptr<Token>& token) {
-         token->retransmission_timer = SingleshotTimer::start(*token->callbacks, token->next_timeout, on(token));
+         token->retransmission_timer = SingleshotTimer::start(token->callbacks, token->next_timeout, on(token));
       }
 
       static SingleshotTimer::DeferredOperation on(const std::shared_ptr<Token>& token) {
