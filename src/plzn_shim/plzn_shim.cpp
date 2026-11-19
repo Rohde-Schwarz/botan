@@ -954,7 +954,8 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
       // queued; it runs from run_deferred_operations() once the flow advances
       // the virtual clock, never from this callback.
       void tls_register_deferred_operation(uint64_t monotonic_delay_ms, std::function<void()> op) override {
-         m_deferred_operations.push_back({tls_current_monotonic_clock_ms() + monotonic_delay_ms, std::move(op)});
+         const uint64_t now = tls_current_monotonic_clock_ms();
+         m_deferred_operations.push_back({now + monotonic_delay_ms, monotonic_delay_ms, std::move(op)});
       }
 
       // Runs every queued operation, due or not. One that fires early re-arms
@@ -969,11 +970,35 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
          }
       }
 
-      // Remaining time until the armed retransmission timer fires, if any
+      // The largest delay with which a protocol timer can ever be registered:
+      // the retransmission backoff schedule starts at dtls_initial_timeout()
+      // and caps at dtls_maximum_timeout(), the ACK delay is
+      // dtls_initial_timeout()/4. Anything registered with a larger delay is a
+      // housekeeping timer (see next_timeout_ms()).
+      uint64_t maximum_protocol_timeout_ms() const {
+         static const Botan::TLS::Policy default_policy;
+         const auto configured_max = m_cfg.dtls_max_timeout_ms.value_or(default_policy.dtls_maximum_timeout());
+         return std::max<uint64_t>(configured_max, m_cfg.initial_timeout_ms);
+      }
+
+      // Remaining time until the next armed protocol timer (retransmission or
+      // ACK) fires, if any.
+      //
+      // Housekeeping timers must not show up in plzn's timeout assertions, as
+      // they are not part of the protocol's retransmission/ACK behavior. The
+      // most prominent example is Botan's DTLS 1.3 epoch pruning, which arms
+      // detached timers with 2min/4min delays (see
+      // DTLS_Channel_IO::maybe_schedule_read_epoch_pruning). Such timers are
+      // identified by their registration delay; the config validation in
+      // main() guarantees that this stays below
+      // maximum_protocol_timeout_ms().
       std::optional<uint64_t> next_timeout_ms() const {
          std::optional<uint64_t> next;
          const uint64_t now = tls_current_monotonic_clock_ms();
          for(const auto& deferred : m_deferred_operations) {
+            if(deferred.delay_ms > maximum_protocol_timeout_ms()) {
+               continue;
+            }
             const uint64_t remaining = deferred.deadline_ms > now ? deferred.deadline_ms - now : 0;
             next = std::min(next.value_or(remaining), remaining);
          }
@@ -1029,6 +1054,7 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
 
       struct Deferred_Operation {
             uint64_t deadline_ms;
+            uint64_t delay_ms;  // registration delay; see next_timeout_ms()
             std::function<void()> op;
       };
 
@@ -1328,6 +1354,27 @@ int main(int argc, char* argv[]) {
    if(cfg.requires_dynamic_timeout) {
       plzn::report_result(plzn::ShimResult::UnsupportedConfig,
                           "set_timeout: Botan has no API to rescale a live DTLS retransmission timer");
+   }
+
+   // The shim distinguishes protocol timers (retransmission, ACK) from
+   // housekeeping timers by their registration delay: no protocol timer is
+   // ever registered with a delay above the retransmission schedule maximum.
+   // The most prominent housekeeping timers are Botan's DTLS 1.3 epoch-prune
+   // timers, registered with 2min (application traffic epochs) and 4min
+   // (handshake epoch) delays based on the TCP MSL (see
+   // DTLS_Channel_IO::maybe_schedule_read_epoch_pruning). Enforce that
+   // protocol timer configurations stay below the smallest housekeeping delay
+   // so that next_timeout_ms() can tell the two apart.
+   constexpr uint64_t minimum_housekeeping_delay_ms = 2 * 60 * 1000;
+   if(cfg.dtls_max_timeout_ms.value_or(0) >= minimum_housekeeping_delay_ms) {
+      plzn::report_result(
+         plzn::ShimResult::UnsupportedConfig,
+         "uut.dtls_max_timeout_ms: must stay below the 2-minute housekeeping (epoch-prune) timer delay");
+   }
+   if(cfg.initial_timeout_ms >= minimum_housekeeping_delay_ms) {
+      plzn::report_result(
+         plzn::ShimResult::UnsupportedConfig,
+         "uut.initial_timeout_ms: must stay below the 2-minute housekeeping (epoch-prune) timer delay");
    }
    if(cfg.compress_certificate) {
       plzn::report_result(plzn::ShimResult::UnsupportedConfig,
