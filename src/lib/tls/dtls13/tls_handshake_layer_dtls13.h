@@ -41,10 +41,9 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
        * from lingering until the message sequence space eventually reaches it.
        *
        * The value covers the longest possible flight (ServerHello..Finished
-       * including client authentication, 6 messages) plus some slack for
-       * multiple post-handshake messages (e.g. NewSessionTicket)
+       * including client authentication, 6 messages)
        */
-      static constexpr uint16_t MAX_BUFFERED_FUTURE_MESSAGES = 8;
+      static constexpr uint16_t MAX_BUFFERED_FUTURE_MESSAGES = 6;
 
       explicit DTLS_Handshake_Layer(Connection_Side side) : Handshake_Layer(side) {}
 
