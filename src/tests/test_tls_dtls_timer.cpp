@@ -9,6 +9,7 @@
 
 #if defined(BOTAN_HAS_DTLS_13)
 
+   #include <botan/tls_magic.h>
    #include <botan/internal/tls_timer_dtls13.h>
    #include <algorithm>
 
@@ -34,6 +35,8 @@ class Timer_Callbacks final : public Botan::TLS::Callbacks {
          });
       }
 
+      void set_clock_forward(std::chrono::milliseconds delta) { m_now_ms += delta.count(); }
+
       void advance(std::chrono::milliseconds delta) {
          m_now_ms += delta.count();
 
@@ -54,8 +57,8 @@ class Timer_Callbacks final : public Botan::TLS::Callbacks {
          }
       }
 
-      std::function<void()>& get_next_scheduled_operations() {
-         auto next_op = std::min_element(
+      [[nodiscard]] std::function<void()> get_next_scheduled_operation() const {
+         const auto next_op = std::min_element(
             m_deferred_ops.begin(), m_deferred_ops.end(), [](const Deferred_Operation& a, const Deferred_Operation& b) {
                return a.deadline_ms < b.deadline_ms;
             });
@@ -65,6 +68,21 @@ class Timer_Callbacks final : public Botan::TLS::Callbacks {
          }
 
          return next_op->op;
+      }
+
+      [[nodiscard]] size_t deferred_op_count() const { return m_deferred_ops.size(); }
+
+      [[nodiscard]] uint64_t next_remaining_ms() const {
+         const auto next_op = std::min_element(
+            m_deferred_ops.begin(), m_deferred_ops.end(), [](const Deferred_Operation& a, const Deferred_Operation& b) {
+               return a.deadline_ms < b.deadline_ms;
+            });
+
+         if(next_op == m_deferred_ops.end()) {
+            throw Botan_Tests::Test_Error("No scheduled operations");
+         }
+
+         return next_op->deadline_ms > m_now_ms ? next_op->deadline_ms - m_now_ms : 0;
       }
 
    private:
@@ -129,7 +147,7 @@ std::vector<Test::Result> singleshot_timer() {
    return {
       CHECK("deferred operation runs after deadline",
             [&](Test::Result& result) {
-               Timer_Callbacks cb;
+               auto cb = std::make_shared<Timer_Callbacks>();
                Timer_Operation op;
 
                auto token = SingleshotTimer::start(cb, 100ms, op.callback());
@@ -138,9 +156,21 @@ std::vector<Test::Result> singleshot_timer() {
                result.test_is_true("token is armed", token.armed());
 
                result.test_is_false("did not run yet", op);
-               cb.advance(99ms);
+
+               cb->set_clock_forward(10ms);
+               const auto early_op = cb->get_next_scheduled_operation();
+               early_op();
+               result.test_is_false("early invocation did not run operation", op);
+               result.test_is_true("timer still armed after early invocation", token.armed());
+               result.test_u64_eq("re-armed for remaining time", cb->next_remaining_ms(), 90);
+               const auto op_count_after_early = cb->deferred_op_count();
+               early_op();
+               result.test_sz_eq(
+                  "duplicate early invocation did not schedule again", cb->deferred_op_count(), op_count_after_early);
+
+               cb->advance(89ms);
                result.test_is_false("still didn't run yet", op);
-               cb.advance(1ms);
+               cb->advance(1ms);
                result.test_is_true("deferred operation ran", op);
 
                result.test_is_false("token is no longer valid", token);
@@ -149,59 +179,72 @@ std::vector<Test::Result> singleshot_timer() {
 
       CHECK("detached operation runs after deadline",
             [&](Test::Result& result) {
-               Timer_Callbacks cb;
+               auto cb = std::make_shared<Timer_Callbacks>();
                Timer_Operation op;
 
                SingleshotTimer::start_detached(cb, 100ms, op.callback());
 
                result.test_is_false("did not run yet", op);
-               cb.advance(99ms);
+
+               cb->set_clock_forward(10ms);
+               const auto early_op = cb->get_next_scheduled_operation();
+               early_op();
+               result.test_is_false("early invocation did not run operation", op);
+               result.test_u64_eq("re-armed for remaining time", cb->next_remaining_ms(), 90);
+               const auto op_count_after_early = cb->deferred_op_count();
+               early_op();
+               result.test_sz_eq(
+                  "duplicate early invocation did not schedule again", cb->deferred_op_count(), op_count_after_early);
+
+               cb->advance(89ms);
                result.test_is_false("still didn't run yet", op);
-               cb.advance(1ms);
+               cb->advance(1ms);
                result.test_is_true("deferred operation ran", op);
             }),
 
       CHECK("deferred operation runs only once, even when called multiple times",
             [&](Test::Result& result) {
-               Timer_Callbacks cb;
+               auto cb = std::make_shared<Timer_Callbacks>();
                Timer_Operation op;
 
                auto token = SingleshotTimer::start(cb, 100ms, op.callback());
 
                result.test_is_false("did not run yet", op);
 
-               auto& scheduled_op = cb.get_next_scheduled_operations();
+               cb->set_clock_forward(100ms);
+               const auto scheduled_op = cb->get_next_scheduled_operation();
                scheduled_op();
                result.test_is_true("deferred operation ran", op);
                scheduled_op();
                result.test_u32_eq("deferred operation ran only once", op, 1);
 
-               cb.advance(100ms);
+               cb->advance(100ms);
                result.test_u32_eq("deferred operation didn't run after deadline", op, 1);
             }),
 
       CHECK("detached operation runs only once, even when called multiple times",
             [&](Test::Result& result) {
-               Timer_Callbacks cb;
+               auto cb = std::make_shared<Timer_Callbacks>();
                Timer_Operation op;
 
                SingleshotTimer::start_detached(cb, 100ms, op.callback());
 
                result.test_is_false("did not run yet", op);
 
-               auto& scheduled_op = cb.get_next_scheduled_operations();
+               cb->set_clock_forward(100ms);
+               const auto scheduled_op = cb->get_next_scheduled_operation();
                scheduled_op();
                result.test_is_true("deferred operation ran", op);
                scheduled_op();
                result.test_u32_eq("deferred operation ran only once", op, 1);
 
-               cb.advance(100ms);
+               cb->advance(100ms);
                result.test_u32_eq("deferred operation didn't run after deadline", op, 1);
             }),
 
       CHECK("deferred operation does not re-run after throwing an exception",
             [&](Test::Result& result) {
-               Timer_Callbacks cb;
+               auto cb = std::make_shared<Timer_Callbacks>();
                uint32_t runs = 0;
 
                auto token = SingleshotTimer::start(cb, 100ms, [&runs] {
@@ -211,7 +254,8 @@ std::vector<Test::Result> singleshot_timer() {
 
                result.test_is_true("token is armed", token.armed());
 
-               auto& scheduled_op = cb.get_next_scheduled_operations();
+               cb->set_clock_forward(100ms);
+               const auto scheduled_op = cb->get_next_scheduled_operation();
                result.test_throws<TLS_Exception>(
                   "operation threw an exception", "operation failed", [&] { scheduled_op(); });
 
@@ -220,13 +264,13 @@ std::vector<Test::Result> singleshot_timer() {
                scheduled_op();
                result.test_u32_eq("operation did not re-run when called again", runs, 1);
 
-               cb.advance(100ms);
+               cb->advance(100ms);
                result.test_u32_eq("operation did not re-run after the deadline", runs, 1);
             }),
 
       CHECK("detached operation does not re-run after throwing an exception",
             [&](Test::Result& result) {
-               Timer_Callbacks cb;
+               auto cb = std::make_shared<Timer_Callbacks>();
                uint32_t runs = 0;
 
                SingleshotTimer::start_detached(cb, 100ms, [&runs] {
@@ -234,20 +278,59 @@ std::vector<Test::Result> singleshot_timer() {
                   throw TLS_Exception(Alert::None, "operation failed");
                });
 
-               auto& scheduled_op = cb.get_next_scheduled_operations();
+               cb->set_clock_forward(100ms);
+               const auto scheduled_op = cb->get_next_scheduled_operation();
                result.test_throws<TLS_Exception>(
                   "operation threw an exception", "operation failed", [&] { scheduled_op(); });
 
                scheduled_op();
                result.test_u32_eq("operation did not re-run when called again", runs, 1);
 
-               cb.advance(100ms);
+               cb->advance(100ms);
                result.test_u32_eq("operation did not re-run after the deadline", runs, 1);
+            }),
+
+      CHECK("early invocation honours the fudge",
+            [&](Test::Result& result) {
+               constexpr auto delay = 100ms;
+               const std::chrono::milliseconds fudge{DTLS_RETRANSMISSION_TIMER_FUDGE};
+
+               // Invoking the deferred operation with more than the fudge time
+               // remaining re-arms the timer for the rest of the original delay.
+               {
+                  auto cb = std::make_shared<Timer_Callbacks>();
+                  Timer_Operation op;
+                  [[maybe_unused]] auto token = SingleshotTimer::start(cb, delay, op.callback());
+
+                  const auto above_fudge = delay - fudge - 1ms;
+                  cb->set_clock_forward(above_fudge);
+                  cb->get_next_scheduled_operation()();
+                  result.test_is_false("invocation above the fudge did not run yet", op);
+                  result.test_u64_eq(
+                     "re-armed for the remaining time above the fudge", cb->next_remaining_ms(), fudge.count() + 1);
+
+                  cb->advance(above_fudge);
+                  result.test_is_true("re-armed timer fires at the original deadline", op);
+                  result.test_is_false("timer is no longer armed", token.armed());
+               }
+
+               // Invoking the deferred operation within the fudge time runs it
+               // immediately, as if the deadline had been reached.
+               {
+                  auto cb = std::make_shared<Timer_Callbacks>();
+                  Timer_Operation op;
+                  [[maybe_unused]] auto token = SingleshotTimer::start(cb, delay, op.callback());
+
+                  cb->set_clock_forward(delay - fudge);
+                  cb->get_next_scheduled_operation()();
+                  result.test_is_true("invocation within the fudge runs immediately", op);
+                  result.test_is_false("timer is no longer armed", token.armed());
+               }
             }),
 
       CHECK("deferred operation can be cancelled",
             [&](Test::Result& result) {
-               Timer_Callbacks cb;
+               auto cb = std::make_shared<Timer_Callbacks>();
                Timer_Operation op;
 
                auto token = SingleshotTimer::start(cb, 100ms, op.callback());
@@ -255,17 +338,20 @@ std::vector<Test::Result> singleshot_timer() {
                result.test_is_true("token is valid", token);
                result.test_is_true("token is armed", token.armed());
 
+               cb->set_clock_forward(10ms);
+               cb->get_next_scheduled_operation()();
+
                token.cancel();
                result.test_is_false("token is no longer valid", token);
                result.test_is_false("token is no longer armed", token.armed());
 
-               cb.advance(100ms);
+               cb->advance(100ms);
                result.test_is_false("deferred operation did not run", op);
             }),
 
       CHECK("deferred operation is cancelled when token is destroyed",
             [&](Test::Result& result) {
-               Timer_Callbacks cb;
+               auto cb = std::make_shared<Timer_Callbacks>();
                Timer_Operation op;
 
                {
@@ -273,9 +359,12 @@ std::vector<Test::Result> singleshot_timer() {
 
                   result.test_is_true("token is valid", token);
                   result.test_is_true("token is armed", token.armed());
+
+                  cb->set_clock_forward(10ms);
+                  cb->get_next_scheduled_operation()();
                }
 
-               cb.advance(100ms);
+               cb->advance(100ms);
                result.test_is_false("deferred operation did not run", op);
             }),
    };
@@ -344,8 +433,14 @@ std::vector<Test::Result> retransmission_timer() {
                cb->advance(100ms);
                result.test_u32_eq("first retransmission ran", op, 1);
 
+               cb->set_clock_forward(50ms);
+               const auto early_retransmit = cb->get_next_scheduled_operation();
+               result.test_no_throw("early retransmission timer invocation", [&] { early_retransmit(); });
+               result.test_u32_eq("early invocation did not retransmit", op, 1);
+               result.test_is_true("timer still armed after early invocation", timer.armed());
+
                // timeout doubled: 100ms -> 200ms
-               cb->advance(199ms);
+               cb->advance(149ms);
                result.test_u32_eq("did not retransmit before the doubled timeout", op, 1);
                cb->advance(1ms);
                result.test_u32_eq("second retransmission ran", op, 2);
@@ -390,6 +485,14 @@ std::vector<Test::Result> retransmission_timer() {
                result.test_u32_eq("first retransmission ran", op, 1);
                cb->advance(200ms);
                result.test_u32_eq("second retransmission ran", op, 2);
+
+               const auto early_final_timeout = cb->get_next_scheduled_operation();
+               result.test_no_throw("early final timeout invocations do not exhaust budget", [&] {
+                  early_final_timeout();
+                  early_final_timeout();
+                  early_final_timeout();
+               });
+               result.test_u32_eq("early invocations did not retransmit", op, 2);
 
                result.test_throws<TLS_Exception>("timer gave up after the maximum number of retransmissions",
                                                  "DTLS handshake timed out: maximum retransmissions exceeded",

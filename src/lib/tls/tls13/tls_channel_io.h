@@ -242,6 +242,8 @@ class BOTAN_TEST_API Channel_IO {
 
       Callbacks& callbacks() { return *m_callbacks; }
 
+      std::shared_ptr<Callbacks> shared_callbacks() const { return m_callbacks; }
+
    private:
       void maybe_send_opportunistic_key_update();
 

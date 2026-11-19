@@ -35,10 +35,10 @@ class DTLS_Channel_IO::TimerToken {
 DTLS_Channel_IO::DTLS_Channel_IO(Connection_Side side,
                                  std::shared_ptr<const Policy> policy_ptr,
                                  std::shared_ptr<Callbacks> callbacks) :
-      Channel_IO(side, TLS_Flavor::DTLS, std::move(policy_ptr), callbacks),
+      Channel_IO(side, TLS_Flavor::DTLS, std::move(policy_ptr), std::move(callbacks)),
       m_record_layer(policy()),
       m_handshake_layer(side),
-      m_retransmission_timer(policy(), std::move(callbacks)) {
+      m_retransmission_timer(policy(), shared_callbacks()) {
    // In DTLS we flush out the payload one datagram at a time. Hence, the output
    // buffer is capped to the application-defined MTU or the maximum record
    // length if the application provides a larger MTU.
@@ -362,16 +362,17 @@ void DTLS_Channel_IO::maybe_schedule_read_epoch_pruning(EpochNumber epoch_used_f
    //       acceptable as pathological.
    const auto is_initial_application_traffic_epoch = epoch_used_for_deprotection.application_traffic_index() == 0;
    const auto prune_delay = is_initial_application_traffic_epoch ? 4min : 2min;
-   SingleshotTimer::start_detached(callbacks(), prune_delay, [weak = weak_from_this(), epoch_used_for_deprotection] {
-      if(auto self = weak.lock()) {
-         if(auto cs = self->cipher_state()) {
-            auto* dcs = as_dtls_cipher_state(cs.get());
-            BOTAN_ASSERT_NONNULL(dcs);
-            dcs->prune_read_epochs_older_than(epoch_used_for_deprotection);
-            self->m_record_layer.prune_replay_windows_older_than(epoch_used_for_deprotection);
+   SingleshotTimer::start_detached(
+      shared_callbacks(), prune_delay, [weak = weak_from_this(), epoch_used_for_deprotection] {
+         if(auto self = weak.lock()) {
+            if(auto cs = self->cipher_state()) {
+               auto* dcs = as_dtls_cipher_state(cs.get());
+               BOTAN_ASSERT_NONNULL(dcs);
+               dcs->prune_read_epochs_older_than(epoch_used_for_deprotection);
+               self->m_record_layer.prune_replay_windows_older_than(epoch_used_for_deprotection);
+            }
          }
-      }
-   });
+      });
 }
 
 void DTLS_Channel_IO::arm_retransmission_timer() {
@@ -445,7 +446,7 @@ void DTLS_Channel_IO::process(const Handshake_Record& record) {
       // eventually emit ACKs to the peer.
       if(m_dtls_version_committed && !m_ack_timer.armed()) {
          const auto ack_time = std::chrono::milliseconds(policy().dtls_initial_timeout() / 4);
-         m_ack_timer = SingleshotTimer::start(callbacks(), ack_time, [weak = weak_from_this()] {
+         m_ack_timer = SingleshotTimer::start(shared_callbacks(), ack_time, [weak = weak_from_this()] {
             if(auto self = weak.lock()) {
                self->send_acknowledgements();
             }
