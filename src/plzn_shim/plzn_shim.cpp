@@ -279,8 +279,7 @@ class Shim_Policy final : public Botan::TLS::Policy {
       }
 
       bool allow_dtls13() const override {
-         return false;
-         // return m_cfg.is_dtls() && version_in_range(Botan::TLS::Protocol_Version::DTLS_V13);
+         return m_cfg.is_dtls() && version_in_range(Botan::TLS::Protocol_Version::DTLS_V13);
       }
 
       // Accept peer-initiated renegotiation when the runner asks for it (these
@@ -1257,9 +1256,6 @@ int main(int argc, char* argv[]) {
       return 2;
    }
 
-   if(cfg.requests_dtls13()) {
-      plzn::report_unsupported("versions", "Botan does not currently implement DTLS 1.3");
-   }
    if(!cfg.is_dtls() && (cfg.min_version.value_or(0x0303) < 0x0303 || cfg.max_version.value_or(0x0304) < 0x0303)) {
       plzn::report_unsupported("versions", "Botan 3 does not implement TLS 1.0 or TLS 1.1");
    }
