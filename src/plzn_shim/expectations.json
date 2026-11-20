@@ -1,13 +1,6 @@
 {
   "schema_version": 1,
-  "overrides": {
-    "dtls13/client-rejects-hello-verify-request": "alert fatal/protocol_version",
-    "dtls13/client-rejects-empty-cookie-hello-verify-request": "alert fatal/protocol_version",
-    "dtls13/client-rejects-unknown-key-update-request": "alert fatal/illegal_parameter",
-    "dtls13/server-rejects-unknown-key-update-request": "alert fatal/illegal_parameter",
-    "dtls13/server-rejects-ack-at-lower-epoch": "alert fatal/illegal_parameter",
-    "dtls13/server-rejects-overflowing-ack-epoch": "alert fatal/illegal_parameter"
-  },
+  "overrides": {},
   "patterns": [
     {
       "pattern": "dtls13/client-replay-window-non-monotonic",
