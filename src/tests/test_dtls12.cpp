@@ -200,6 +200,8 @@ class DTLS12_Policy : public Botan::TLS::Policy {
 
       bool allow_dtls12() const override { return true; }
 
+      bool allow_dtls13() const override { return false; }
+
    private:
       bool m_allow_tls12;
 };

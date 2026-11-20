@@ -632,6 +632,29 @@ class BOTAN_PUBLIC_API(2, 0) Policy /* NOLINT(*-special-member-functions) */ {
       virtual std::optional<size_t> dtls_maximum_hello_verify_requests() const;
 
       /**
+       * @return the maximum number of queued DTLS record acknowledgements.
+       *
+       * Dropping ACKs won't cause a connection to fail, but may result in
+       * spurious retransmissions. This is used to cap the amount of consumed
+       * memory for the stored ACK information.
+       *
+       * Default: 32
+       *
+       * @note Only applies for DTLS 1.3 associations.
+       */
+      virtual size_t dtls_maximum_queued_acknowledgements() const;
+
+      /**
+       * @return the maximum number of allowed record deprotection failures
+       *
+       * If a DTLS 1.3 association receives more than this many records which
+       * fail deprotection in a single epoch, the association is terminated.
+       *
+       * TODO: enforce this in DTLS 1.2 as well
+       */
+      virtual size_t dtls_maximum_deprotection_failures() const;
+
+      /**
       * @return the maximum size of a single handshake message, in bytes.
       * Messages larger than this will be rejected prior to processing.
       * Return 0 to disable this and accept any size.
@@ -874,6 +897,8 @@ class BOTAN_PUBLIC_API(2, 0) Datagram_Policy : public Policy {
       bool allow_tls13() const override { return false; }
 
       bool allow_dtls12() const override { return true; }
+
+      bool allow_dtls13() const override { return true; }
 };
 
 /*
@@ -967,6 +992,10 @@ class BOTAN_PUBLIC_API(2, 0) Text_Policy : public Policy {
       size_t dtls_maximum_timeout() const override;
 
       std::optional<size_t> dtls_maximum_hello_verify_requests() const override;
+
+      size_t dtls_maximum_queued_acknowledgements() const override;
+
+      size_t dtls_maximum_deprotection_failures() const override;
 
       std::optional<size_t> max_useless_records() const override;
 

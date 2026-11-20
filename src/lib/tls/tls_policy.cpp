@@ -317,6 +317,12 @@ bool Policy::acceptable_protocol_version(Protocol_Version version) const {
    }
 #endif
 
+#if defined(BOTAN_HAS_DTLS_13)
+   if(version == Protocol_Version::DTLS_V13 && allow_dtls13()) {
+      return true;
+   }
+#endif
+
 #if defined(BOTAN_HAS_TLS_12)
    if(version == Protocol_Version::TLS_V12 && allow_tls12()) {
       return true;
@@ -393,7 +399,11 @@ bool Policy::allow_dtls12() const {
 }
 
 bool Policy::allow_dtls13() const {
-   return false;  // DTLS 1.3 is not yet supported
+#if defined(BOTAN_HAS_DTLS_13)
+   return true;
+#else
+   return false;
+#endif
 }
 
 bool Policy::include_time_in_hello_random() const {
@@ -548,6 +558,30 @@ std::optional<size_t> Policy::dtls_maximum_retransmissions() const {
 size_t Policy::dtls_default_mtu() const {
    // default MTU is IPv6 min MTU minus UDP/IP headers
    return 1280 - 40 - 8;
+}
+
+size_t Policy::dtls_maximum_queued_acknowledgements() const {
+   // Matches BoringSSL's DTLS_MAX_ACK_BUFFER.
+   // Considering any reasonable DTLS configuration, there should be plenty of
+   // leeway for the expected amount of exchanged handshake records.
+   return 32;
+}
+
+size_t Policy::dtls_maximum_deprotection_failures() const {
+   // RFC 9147 4.5.3
+   //    For AEAD_AES_128_GCM, AEAD_AES_256_GCM, and AEAD_CHACHA20_POLY1305, the
+   //    limit on the number of records that fail authentication is 2^36. [...]
+   //    For AEAD_AES_128_CCM, the limit on the number of records that fail
+   //    authentication is 2^23.5 [...].
+   //    The AEAD_AES_128_CCM_8 AEAD, [...], does not have a limit on the number
+   //    of records that fail authentication that both limits the probability of
+   //    forgery by the same amount and does not expose implementations to the
+   //    risk of denial of service [...]. Therefore, TLS_AES_128_CCM_8_SHA256
+   //    MUST NOT be used in DTLS without additional safeguards against forgery.
+   //
+   // We take the lowest of these limits, and assume that the CCM_8 AEAD is not
+   // used by anyone who would want to use this default policy.
+   return 1 << 23;
 }
 
 std::vector<uint16_t> Policy::srtp_profiles() const {
