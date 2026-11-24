@@ -604,6 +604,26 @@ class BOTAN_PUBLIC_API(2, 0) Policy /* NOLINT(*-special-member-functions) */ {
       virtual size_t dtls_maximum_timeout() const;
 
       /**
+      * @return the maximum time in milliseconds allowed for a DTLS 1.3 flight
+      * to make progress before the connection is abandoned, or nullopt to
+      * disable the flight timeout.
+      *
+      * In DTLS 1.3, once a peer acknowledges all records of an outstanding
+      * flight (explicitly via an ACK record or implicitly by sending part of
+      * the next flight), retransmissions stop (RFC 9147 7.1/7.2). Without a
+      * flight timeout, a peer that acknowledges a flight and never completes
+      * its response can leave the handshake stuck indefinitely.
+      *
+      * By default, this returns the total duration of the retransmission
+      * schedule implied by dtls_initial_timeout(), dtls_maximum_timeout(), and
+      * dtls_maximum_retransmissions(), or nullopt if
+      * dtls_maximum_retransmissions() returns nullopt.
+      *
+      * @note Only applies for DTLS 1.3 associations.
+      */
+      virtual std::optional<size_t> dtls_flight_timeout() const;
+
+      /**
       * @return the maximum number of times a DTLS handshake flight will be
       * retransmitted on timeouts before the handshake is abandoned. After this
       * many timer-driven retransmissions without progress, timeout_check()
@@ -990,6 +1010,8 @@ class BOTAN_PUBLIC_API(2, 0) Text_Policy : public Policy {
       size_t dtls_initial_timeout() const override;
 
       size_t dtls_maximum_timeout() const override;
+
+      std::optional<size_t> dtls_flight_timeout() const override;
 
       std::optional<size_t> dtls_maximum_hello_verify_requests() const override;
 

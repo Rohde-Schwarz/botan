@@ -41,6 +41,7 @@ class DTLS_Channel_IO final : public Channel_IO,
       void notify_protocol_version_committed_and_flight_superseded() override;
       void notify_received_complete_flight() override;
       void notify_received_final_flight() override;
+      void notify_handshake_complete() override;
       void notify_closed_for_writing() override;
 
    private:
@@ -58,6 +59,7 @@ class DTLS_Channel_IO final : public Channel_IO,
       bool has_unacknowledged_key_update() const { return m_pending_key_update_record.has_value(); }
 
       void maybe_schedule_read_epoch_pruning(EpochNumber epoch_used_for_deprotection);
+      void arm_flight_timer();
       void arm_retransmission_timer();
       void maybe_clear_retransmission_buffer();
       void retransmit();
@@ -75,11 +77,14 @@ class DTLS_Channel_IO final : public Channel_IO,
       DTLS_Handshake_Layer m_handshake_layer;
 
       SingleshotTimer m_ack_timer;
+      SingleshotTimer m_flight_timer;
       RetransmissionTimer m_retransmission_timer;
 
+      std::weak_ptr<Channel_Impl_13> m_channel;
       std::optional<RecordNumber> m_pending_key_update_record;
 
       bool m_dtls_version_committed = false;
+      bool m_handshake_complete = false;
       EpochNumber m_newest_active_epoch = EpochNumber::unprotected();
 
       secure_vector<uint8_t> m_outgoing_datagram;

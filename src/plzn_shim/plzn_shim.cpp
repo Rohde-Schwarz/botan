@@ -345,9 +345,7 @@ class Shim_Policy final : public Botan::TLS::Policy {
       // `uut { min_key_update_interval_ms: N }`: a peer KeyUpdate arriving sooner
       // than N ms after the previous one is rejected with unexpected_message
       // (a solicited reciprocation is exempt); 0 disables the rate limit.
-      uint64_t minimum_key_update_interval_ms() const override {
-         return m_cfg.min_key_update_interval_ms.value_or(0);
-      }
+      uint64_t minimum_key_update_interval_ms() const override { return m_cfg.min_key_update_interval_ms.value_or(0); }
 
       size_t new_session_tickets_upon_handshake_success() const override {
          return m_cfg.session_tickets.value_or(Botan::TLS::Policy::new_session_tickets_upon_handshake_success());
@@ -359,6 +357,13 @@ class Shim_Policy final : public Botan::TLS::Policy {
 
       size_t dtls_maximum_timeout() const override {
          return m_cfg.dtls_max_timeout_ms.value_or(Botan::TLS::Policy::dtls_maximum_timeout());
+      }
+
+      std::optional<size_t> dtls_flight_timeout() const override {
+         if(m_cfg.dtls_flight_timeout_ms.has_value()) {
+            return static_cast<size_t>(*m_cfg.dtls_flight_timeout_ms);
+         }
+         return Botan::TLS::Policy::dtls_flight_timeout();
       }
 
       std::optional<size_t> dtls_maximum_retransmissions() const override {
@@ -774,7 +779,8 @@ class Shim_Credentials final : public Botan::Credentials_Manager {
 
 class Shim_Callbacks final : public Botan::TLS::Callbacks {
    public:
-      Shim_Callbacks(const ShimConfig& cfg, ShimSocket& socket) : m_cfg(cfg), m_socket(socket) {
+      Shim_Callbacks(const ShimConfig& cfg, ShimSocket& socket, std::optional<uint64_t> flight_timeout_ms) :
+            m_cfg(cfg), m_socket(socket), m_flight_timeout_ms(flight_timeout_ms) {
          // T6: `uut { ocsp_stapling }`: the DER OCSP response the runner wrote
          // for our certificate, stapled on request (RFC 6066 8 / RFC 8446
          // 4.4.2.1).
@@ -955,7 +961,28 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
       // the virtual clock, never from this callback.
       void tls_register_deferred_operation(uint64_t monotonic_delay_ms, std::function<void()> op) override {
          const uint64_t now = tls_current_monotonic_clock_ms();
-         m_deferred_operations.push_back({now + monotonic_delay_ms, monotonic_delay_ms, std::move(op)});
+         const uint64_t deadline = now + monotonic_delay_ms;
+
+         bool is_protocol = true;
+         if(m_running_op_kind == Running_Op_Kind::NonProtocol) {
+            is_protocol = false;
+         } else if(m_running_op_kind == Running_Op_Kind::Protocol) {
+            is_protocol = true;
+         } else if(monotonic_delay_ms > maximum_protocol_timeout_ms()) {
+            is_protocol = false;
+         } else if(m_flight_timeout_ms.has_value() && monotonic_delay_ms == *m_flight_timeout_ms) {
+            // DTLS_Channel_IO::arm_retransmission_timer() registers the flight
+            // timer immediately before the retransmission timer. If both share
+            // the same delay (e.g. dtls_max_retransmissions == 0), only the
+            // first registration at this deadline is the flight timer.
+            const bool already_registered_flight_timer = std::any_of(
+               m_deferred_operations.begin(), m_deferred_operations.end(), [&](const Deferred_Operation& pending) {
+                  return !pending.is_protocol && pending.deadline_ms == deadline;
+               });
+            is_protocol = already_registered_flight_timer;
+         }
+
+         m_deferred_operations.push_back({deadline, is_protocol, std::move(op)});
       }
 
       // Runs every queued operation, due or not. One that fires early re-arms
@@ -966,6 +993,16 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
          std::vector<Deferred_Operation> ops;
          ops.swap(m_deferred_operations);
          for(auto& deferred : ops) {
+            const auto prev_kind = m_running_op_kind;
+            m_running_op_kind = deferred.is_protocol ? Running_Op_Kind::Protocol : Running_Op_Kind::NonProtocol;
+
+            struct Reset {
+                  Running_Op_Kind& kind;
+                  Running_Op_Kind prev;
+
+                  ~Reset() { kind = prev; }
+            } reset{m_running_op_kind, prev_kind};
+
             deferred.op();
          }
       }
@@ -974,7 +1011,7 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
       // the retransmission backoff schedule starts at dtls_initial_timeout()
       // and caps at dtls_maximum_timeout(), the ACK delay is
       // dtls_initial_timeout()/4. Anything registered with a larger delay is a
-      // housekeeping timer (see next_timeout_ms()).
+      // housekeeping or flight-timeout timer (see next_timeout_ms()).
       uint64_t maximum_protocol_timeout_ms() const {
          static const Botan::TLS::Policy default_policy;
          const auto configured_max = m_cfg.dtls_max_timeout_ms.value_or(default_policy.dtls_maximum_timeout());
@@ -984,19 +1021,16 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
       // Remaining time until the next armed protocol timer (retransmission or
       // ACK) fires, if any.
       //
-      // Housekeeping timers must not show up in plzn's timeout assertions, as
-      // they are not part of the protocol's retransmission/ACK behavior. The
-      // most prominent example is Botan's DTLS 1.3 epoch pruning, which arms
-      // detached timers with 2min/4min delays (see
-      // DTLS_Channel_IO::maybe_schedule_read_epoch_pruning). Such timers are
-      // identified by their registration delay; the config validation in
-      // main() guarantees that this stays below
-      // maximum_protocol_timeout_ms().
+      // Housekeeping timers (DTLS 1.3 epoch pruning) and the flight timeout
+      // timer must not show up in plzn's timeout assertions, as they are not
+      // part of the protocol's retransmission/ACK behavior. Non-protocol
+      // timers are tagged on registration and keep that tag across early
+      // re-arms inside run_deferred_operations().
       std::optional<uint64_t> next_timeout_ms() const {
          std::optional<uint64_t> next;
          const uint64_t now = tls_current_monotonic_clock_ms();
          for(const auto& deferred : m_deferred_operations) {
-            if(deferred.delay_ms > maximum_protocol_timeout_ms()) {
+            if(!deferred.is_protocol) {
                continue;
             }
             const uint64_t remaining = deferred.deadline_ms > now ? deferred.deadline_ms - now : 0;
@@ -1052,12 +1086,16 @@ class Shim_Callbacks final : public Botan::TLS::Callbacks {
       bool m_key_material_sent = false;
       uint64_t m_dtls_timer_ns = 0;
 
+      enum class Running_Op_Kind : uint8_t { None, Protocol, NonProtocol };
+
       struct Deferred_Operation {
             uint64_t deadline_ms;
-            uint64_t delay_ms;  // registration delay; see next_timeout_ms()
+            bool is_protocol;  // false for housekeeping / flight-timeout timers; see next_timeout_ms()
             std::function<void()> op;
       };
 
+      std::optional<uint64_t> m_flight_timeout_ms;
+      Running_Op_Kind m_running_op_kind = Running_Op_Kind::None;
       std::vector<Deferred_Operation> m_deferred_operations;
 };
 
@@ -1074,7 +1112,9 @@ void run_tls_connection(const ShimConfig& cfg,
    socket.write_shim_id(cfg.shim_id);
 
    auto policy = std::make_shared<Shim_Policy>(cfg);
-   auto callbacks = std::make_shared<Shim_Callbacks>(cfg, socket);
+   const auto flight_timeout = policy->dtls_flight_timeout();
+   auto callbacks = std::make_shared<Shim_Callbacks>(
+      cfg, socket, flight_timeout.has_value() ? std::optional<uint64_t>(*flight_timeout) : std::nullopt);
 
    std::unique_ptr<Botan::TLS::Channel> chan;
    if(cfg.is_server()) {

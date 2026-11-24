@@ -263,6 +263,7 @@ void DTLS_Channel_IO::notify_protocol_version_committed_and_flight_superseded() 
 void DTLS_Channel_IO::notify_received_complete_flight() {
    // We have everything we needed, no reason to do any ACKing anymore
    record_layer().clear_outstanding_acknowledgements();
+   m_flight_timer.cancel();
 }
 
 void DTLS_Channel_IO::notify_received_final_flight() {
@@ -275,11 +276,18 @@ void DTLS_Channel_IO::notify_received_final_flight() {
    // cancel the opportunistic timer so that the ACK isn't emitted twice.
    send_acknowledgements();
    m_ack_timer.cancel();
+   m_flight_timer.cancel();
+}
+
+void DTLS_Channel_IO::notify_handshake_complete() {
+   m_handshake_complete = true;
+   m_flight_timer.cancel();
 }
 
 void DTLS_Channel_IO::notify_closed_for_writing() {
    Channel_IO::notify_closed_for_writing();
    m_ack_timer.cancel();
+   m_flight_timer.cancel();
    m_retransmission_timer.cancel();
    m_outgoing_datagram.clear();
 }
@@ -375,8 +383,34 @@ void DTLS_Channel_IO::maybe_schedule_read_epoch_pruning(EpochNumber epoch_used_f
       });
 }
 
+void DTLS_Channel_IO::arm_flight_timer() {
+   if(m_handshake_complete) {
+      return;
+   }
+
+   if(const auto cs = cipher_state(); cs != nullptr && cs->is_handshake_complete()) {
+      return;
+   }
+
+   const auto timeout_ms = policy().dtls_flight_timeout();
+   if(!timeout_ms.has_value()) {
+      return;
+   }
+
+   m_flight_timer =
+      SingleshotTimer::start(shared_callbacks(), std::chrono::milliseconds(*timeout_ms), [weak = weak_from_this()] {
+         if(auto self = weak.lock()) {
+            if(auto channel = self->m_channel.lock()) {
+               channel->shutdown();
+            }
+            throw TLS_Exception(Alert::None, "DTLS flight timed out");
+         }
+      });
+}
+
 void DTLS_Channel_IO::arm_retransmission_timer() {
    if(!m_retransmission_timer.armed()) {
+      arm_flight_timer();
       m_retransmission_timer.start([weak = weak_from_this()] {
          if(auto self = weak.lock()) {
             self->retransmit();
@@ -386,6 +420,7 @@ void DTLS_Channel_IO::arm_retransmission_timer() {
 }
 
 void DTLS_Channel_IO::init(const std::shared_ptr<Channel_Impl_13>& channel) {
+   m_channel = channel;
    m_retransmission_timer.set_timeout_handler([weak_channel = std::weak_ptr(channel)] {
       if(auto c = weak_channel.lock()) {
          c->shutdown();

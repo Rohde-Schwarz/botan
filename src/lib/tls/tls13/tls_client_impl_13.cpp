@@ -44,7 +44,6 @@ std::shared_ptr<Client_Impl_13> Client_Impl_13::create(const std::shared_ptr<Cal
    }
 #endif
 
-
    if(auto session = self->find_session_for_resumption()) {
       if(session->session.version().is_tls_13_or_later()) {
          self->m_handshake->resumed_session = std::move(session);
@@ -838,6 +837,8 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
 
    // derives the sending application traffic secrets
    cs->advance_with_client_finished(m_transcript_hash->current());
+
+   m_channel_io->notify_handshake_complete();
 
    // TODO: Create a dummy session object and invoke tls_session_established.
    //       Alternatively, consider changing the expectations described in the
