@@ -840,8 +840,6 @@ void Client_Impl_13::handle(const Finished_13& finished_msg) {
    // derives the sending application traffic secrets
    cs->advance_with_client_finished(m_transcript_hash->current());
 
-   m_channel_io->notify_handshake_complete();
-
    // TODO: Create a dummy session object and invoke tls_session_established.
    //       Alternatively, consider changing the expectations described in the
    //       callback's doc string.
