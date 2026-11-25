@@ -43,6 +43,8 @@ class DTLS_Channel_IO final : public Channel_IO,
       void notify_received_final_flight() override;
       void notify_closed_for_writing() override;
 
+      std::optional<std::chrono::milliseconds> next_retransmission_timeout() const override;
+
    private:
       void init(const std::shared_ptr<Channel_Impl_13>& channel) override;
 

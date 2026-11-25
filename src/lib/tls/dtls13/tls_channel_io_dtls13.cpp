@@ -285,6 +285,18 @@ void DTLS_Channel_IO::notify_closed_for_writing() {
    m_outgoing_datagram.clear();
 }
 
+std::optional<std::chrono::milliseconds> DTLS_Channel_IO::next_retransmission_timeout() const {
+   const auto next_ack = m_ack_timer.remaining(callbacks());
+   const auto next_retransmission = m_retransmission_timer.next_timeout();
+
+   if(!next_ack && !next_retransmission) {
+      return std::nullopt;
+   }
+
+   return std::min(next_ack.value_or(std::chrono::milliseconds::max()),
+                   next_retransmission.value_or(std::chrono::milliseconds::max()));
+}
+
 void DTLS_Channel_IO::maybe_clear_retransmission_buffer() {
    // If we're not sure that the peer is using DTLS 1.3, we must not clear
    // the resend buffer as soon as we received any fragment of the peer's
