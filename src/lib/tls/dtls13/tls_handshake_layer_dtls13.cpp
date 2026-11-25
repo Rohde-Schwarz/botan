@@ -217,18 +217,15 @@ Handshake_Layer::CopyDataResult DTLS_Handshake_Layer::copy_data(const Policy& po
    return CopyDataResult::DiscardedDuplicate;
 }
 
-std::optional<Handshake_Layer::MessageBufferView> DTLS_Handshake_Layer::fetch_next_message_buffer_view() {
+std::optional<Handshake_Layer::Message> DTLS_Handshake_Layer::next_message() {
    auto message = m_current_read_message.find(static_cast<uint16_t>(m_read_message_seq));
-   if(message == m_current_read_message.end()) {
+   if(message == m_current_read_message.end() || !message->second.complete) {
       return std::nullopt;
    }
 
-   auto& reassembled = message->second;
-   if(!reassembled.complete) {
-      return std::nullopt;
-   }
-
-   const bool is_final_message = m_current_read_message.size() == 1;
+   auto reassembled = std::move(message->second);
+   m_current_read_message.erase(message);
+   m_read_message_seq++;
 
    // We are going to emit the next message, and increase the incoming message
    // sequence number. Note that this increment might take the sequence number
@@ -237,11 +234,13 @@ std::optional<Handshake_Layer::MessageBufferView> DTLS_Handshake_Layer::fetch_ne
    // because their advertised sequence number is capped at 16-bits.
    static_assert(sizeof(m_read_message_seq) > sizeof(uint16_t));
 
-   return MessageBufferView(reassembled.epoch,
-                            is_final_message,
-                            reassembled.header,
-                            reassembled.payload,
-                            [this, seqno = m_read_message_seq++] { m_current_read_message.erase(seqno); });
+   return Message{
+      .type = static_cast<Handshake_Type>(reassembled.header[0]),
+      .epoch_number = reassembled.epoch,
+      .final_message_in_queue = m_current_read_message.empty(),
+      .header = reassembled.header,
+      .payload = std::move(reassembled.payload),
+   };
 }
 
 std::vector<MarshalledHandshakeMessageFragment> DTLS_Handshake_Layer::fragment_message(

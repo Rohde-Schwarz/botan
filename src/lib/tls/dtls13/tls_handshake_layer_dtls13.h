@@ -79,7 +79,7 @@ class BOTAN_TEST_API DTLS_Handshake_Layer final : public Handshake_Layer {
    protected:
       TLS_Flavor tls_flavor() const override { return TLS_Flavor::DTLS; }
 
-      std::optional<MessageBufferView> fetch_next_message_buffer_view() override;
+      std::optional<Message> next_message() override;
 
       Handshake_Message_13 parse_handshake_message(Handshake_Type type,
                                                    std::span<const uint8_t> msg,

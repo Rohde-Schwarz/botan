@@ -9,6 +9,7 @@
 #ifndef BOTAN_TLS_HANDSHAKE_LAYER_13_H_
 #define BOTAN_TLS_HANDSHAKE_LAYER_13_H_
 
+#include <deque>
 #include <optional>
 
 #include <botan/tls_magic.h>
@@ -157,51 +158,15 @@ class BOTAN_TEST_API Handshake_Layer {
       void set_selected_certificate_type(Certificate_Type cert_type) { m_certificate_type = cert_type; }
 
    protected:
-      /**
-       * This helper class represents a view into the handshake message buffer,
-       * along with meta information and a cleanup function that is called when
-       * the view goes out of scope. That way, we avoid copying the unparsed
-       * message from the read buffer for processing.
-       *
-       * Note that this is tightly coupled within the Handshake_Layer and its
-       * subclasses, so that potential life-time issues of the underlying buffer
-       * are manageable within this scope.
-       */
-      class MessageBufferView final {
-         public:
-            using CleanupFunction = std::function<void()>;
-
-         public:
-            MessageBufferView(std::optional<EpochNumber> epoch_number,
-                              bool final_message,
-                              HandshakeProtocolHeader header,
-                              StrongSpan<const SerializedHandshakeMessage> payload,
-                              CleanupFunction cleanup);
-
-            bool was_final_message_in_queue() const { return m_final_message; }
-
-            Handshake_Type type() const { return m_type; }
-
-            std::optional<EpochNumber> epoch_number() const { return m_epoch_number; }
-
-            HandshakeProtocolHeader header() const { return m_header; }
-
-            StrongSpan<const SerializedHandshakeMessage> payload() const { return m_payload; }
-
-            size_t payload_size() const { return m_payload.size(); }
-
-         private:
-            Handshake_Type m_type;
-            std::optional<EpochNumber> m_epoch_number;
-            bool m_final_message;
-            HandshakeProtocolHeader m_header;
-            StrongSpan<const SerializedHandshakeMessage> m_payload;
-            scoped_cleanup<CleanupFunction> m_cleanup;
+      struct Message final {
+            Handshake_Type type = Handshake_Type::None;
+            std::optional<EpochNumber> epoch_number;
+            bool final_message_in_queue = false;
+            HandshakeProtocolHeader header = {};
+            SerializedHandshakeMessage payload;
       };
 
-      std::optional<MessageBufferView> next_message_buffer_view(const Policy& policy);
-
-      virtual std::optional<MessageBufferView> fetch_next_message_buffer_view() = 0;
+      virtual std::optional<Message> next_message() = 0;
 
       virtual TLS_Flavor tls_flavor() const = 0;
 
@@ -222,7 +187,13 @@ class BOTAN_TEST_API Handshake_Layer {
 
 class BOTAN_TEST_API TLS_Handshake_Layer final : public Handshake_Layer {
    public:
-      explicit TLS_Handshake_Layer(Connection_Side whoami) : Handshake_Layer(whoami) {}
+      explicit TLS_Handshake_Layer(Connection_Side whoami);
+
+      TLS_Handshake_Layer(const TLS_Handshake_Layer&) = delete;
+      TLS_Handshake_Layer(TLS_Handshake_Layer&&) = delete;
+      TLS_Handshake_Layer& operator=(const TLS_Handshake_Layer&) = delete;
+      TLS_Handshake_Layer& operator=(TLS_Handshake_Layer&&) = delete;
+      ~TLS_Handshake_Layer() override;
 
       /**
        * Prepare the TLS message header according to RFC9846 Section 4
@@ -234,7 +205,7 @@ class BOTAN_TEST_API TLS_Handshake_Layer final : public Handshake_Layer {
          return header;
       }
 
-      bool has_pending_data() const override { return m_read_offset < m_read_buffer.size(); }
+      bool has_pending_data() const override { return !m_pending_messages.empty(); }
 
       CopyDataResult copy_data(const Policy& policy, const Handshake_Record& data_from_peer) override;
 
@@ -243,14 +214,15 @@ class BOTAN_TEST_API TLS_Handshake_Layer final : public Handshake_Layer {
          return concat<MarshalledHandshakeMessage>(prepare_header(message.wire_type(), bytes.size()), bytes);
       }
 
-   protected:
-      std::optional<MessageBufferView> fetch_next_message_buffer_view() override;
+   private:
+      class PendingMessage;
+
+      std::optional<Message> next_message() override;
 
       TLS_Flavor tls_flavor() const override { return TLS_Flavor::TLS; }
 
    private:
-      std::vector<uint8_t> m_read_buffer;
-      size_t m_read_offset = 0;
+      std::deque<PendingMessage> m_pending_messages;
 };
 
 }  // namespace Botan::TLS
