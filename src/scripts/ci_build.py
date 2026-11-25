@@ -65,11 +65,13 @@ def known_targets():
         'limbo',
         'minimized',
         'nist',
+        'no_dtls13',
         'no_pcurves',
         'no_tls12',
         'optional-rngs',
         'no_tls13',
         'pkcs11',
+        'plzn',
         'policy-bsi',
         'policy-fips140',
         'policy-modern',
@@ -118,7 +120,7 @@ class LoggingGroup:
             print("> Running '%s' took %d seconds" % (self.group_title, time_taken))
 
 def build_targets(target, target_os):
-    if target in ['shared', 'minimized', 'examples', 'limbo', 'optional-rngs', 'pkcs11', 'wycheproof', 'acvp'] or target.startswith('policy-'):
+    if target in ['shared', 'minimized', 'examples', 'limbo', 'optional-rngs', 'pkcs11', 'wycheproof', 'acvp', 'plzn'] or target.startswith('policy-'):
         yield 'shared'
     elif target in ['static', 'fuzzers', 'cross-arm32-baremetal', 'emscripten', 'strubbing']:
         yield 'static'
@@ -130,16 +132,18 @@ def build_targets(target, target_os):
         yield 'shared'
         yield 'static'
 
-    if target not in ['examples', 'limbo', 'wycheproof', 'acvp']:
+    if target not in ['examples', 'limbo', 'wycheproof', 'acvp', 'plzn']:
         yield 'cli'
 
-    if target not in ['examples', 'limbo', 'hybrid-tls13-interop-test', 'strubbing', 'wycheproof', 'acvp']:
+    if target not in ['examples', 'limbo', 'hybrid-tls13-interop-test', 'strubbing', 'wycheproof', 'acvp', 'plzn']:
         yield 'tests'
 
-    if target in ['coverage', 'no_tls12', 'no_tls13']:
+    if target in ['coverage', 'no_dtls13', 'no_tls12', 'no_tls13']:
         yield 'bogo_shim'
     if target in ['sanitizer'] and target_os not in ['windows']:
         yield 'bogo_shim'
+    if target in ['plzn']:
+        yield 'plzn_shim'
     if target in ['examples', 'amalgamation']:
         yield 'examples'
     if target in ['valgrind', 'valgrind-full', 'valgrind-ct', 'valgrind-ct-full']:
@@ -249,6 +253,9 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
     if target in ['no_pcurves']:
         flags += ['--disable-modules=pcurves_impl']
 
+    if target in ['no_dtls13']:
+        flags += ['--disable-modules=dtls13']
+
     if target in ['no_tls12']:
         flags += ['--disable-modules=tls12']
 
@@ -267,7 +274,7 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
     else:
         flags += ['--without-doc']
 
-    if target in ['docs', 'codeql', 'hybrid-tls13-interop-test', 'limbo', 'wycheproof', 'acvp']:
+    if target in ['docs', 'codeql', 'hybrid-tls13-interop-test', 'limbo', 'wycheproof', 'acvp', 'plzn']:
         test_cmd = None
 
     if target in ['codeql']:
@@ -459,7 +466,7 @@ def determine_flags(target, target_os, target_cpu, target_cc, cc_bin, ccache,
             flags += ['--with-commoncrypto']
 
         def add_boost_support(target, target_os):
-            if target in ['coverage', 'amalgamation', 'no_tls12', 'no_tls13']:
+            if target in ['coverage', 'amalgamation', 'no_dtls13', 'no_tls12', 'no_tls13']:
                 return True
 
             if target == 'sanitizer' and target_os == 'linux':
@@ -627,6 +634,8 @@ def parse_args(args):
                       help='Set directory to place build artifacts into (default %default)')
     parser.add_option('--boringssl-dir', metavar='D', default='boringssl',
                       help='Set directory of BoringSSL checkout to use for BoGo tests')
+    parser.add_option('--plzn-dir', metavar='D', default='plzn',
+                      help='Set directory of plzn checkout to use for TLS conformance tests')
     parser.add_option('--ci-image', default=None,
                       help='Set the Github Actions CI image name')
 
@@ -816,6 +825,7 @@ def main(args=None):
             'src/scripts/test_fuzzers.py',
             'src/scripts/test_cli.py',
             'src/scripts/repo_config.py',
+            'src/scripts/run_plzn_tests.py',
             'src/scripts/wycheproof.py',
             'src/scripts/python_unittests.py',
             'src/scripts/python_unittests_unix.py',
@@ -862,6 +872,9 @@ def main(args=None):
             options.compiler_cache, root_dir, build_dir, options.test_results_dir,
             options.pkcs11_lib, options.use_gdb, options.disable_werror,
             options.extra_cxxflags, options.custom_optimization_flags, options.disabled_tests)
+
+        if 'plzn_shim' in build_targets(target, options.os):
+            config_flags += ['--with-plzn-dir=%s' % (os.path.abspath(options.plzn_dir))]
 
         make_tool, make_opts = validate_make_tool(options.make_tool, options.build_jobs)
 
@@ -943,15 +956,18 @@ def main(args=None):
                          'src/scripts/run_tests_under_valgrind.py'] +
                         valgrind_script_options)
 
-        if target in ['coverage', 'sanitizer', 'no_tls12', 'no_tls13'] and options.os != 'windows':
+        if target in ['coverage', 'sanitizer', 'no_dtls13', 'no_tls12', 'no_tls13'] and options.os != 'windows':
             if not options.boringssl_dir:
                 raise Exception('%s build needs --boringssl-dir' % (target))
 
             runner_dir = os.path.abspath(os.path.join(options.boringssl_dir, 'ssl', 'test', 'runner'))
 
-            if target == 'no_tls12':
+            if target == 'no_dtls13':
+                shim_config = os.path.abspath(os.path.join(root_dir, 'src', 'bogo_shim', 'config_no_dtls13.json'))
+                extra_args = []
+            elif target == 'no_tls12':
                 shim_config = os.path.abspath(os.path.join(root_dir, 'src', 'bogo_shim', 'config_no_tls12.json'))
-                extra_args = ['-skip-tls12', '-skip-dtls']
+                extra_args = ['-skip-tls12']
             elif target == 'no_tls13':
                 shim_config = os.path.abspath(os.path.join(root_dir, 'src', 'bogo_shim', 'config_no_tls13.json'))
                 extra_args = ['-skip-tls13']
@@ -965,6 +981,14 @@ def main(args=None):
                          '-num-workers', str(4*get_concurrency()),
                          '-shim-path', os.path.abspath(os.path.join(build_dir, 'botan_bogo_shim')),
                          '-shim-config', shim_config] + extra_args)
+
+        if 'plzn_shim' in build_targets(target, options.os):
+            plzn_dir = os.path.abspath(options.plzn_dir)
+            cmds.append([py_interp, os.path.join(root_dir, 'src/scripts/run_plzn_tests.py'),
+                         '--plzn=%s' % (os.path.join(plzn_dir, 'target', 'release', 'plzn')),
+                         '--shim=%s' % (os.path.abspath(os.path.join(build_dir, 'botan_plzn_shim'))),
+                         '--jobs=%d' % (4*get_concurrency()),
+                         os.path.join(plzn_dir, 'suite')])
 
         if target in ['limbo']:
             cmds.append([py_interp, os.path.join(root_dir, 'src/scripts/run_limbo_tests.py'),

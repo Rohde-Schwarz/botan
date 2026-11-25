@@ -21,6 +21,7 @@ class Alert;
 class Record_Layer;
 class Handshake_Layer;
 class Cipher_State;
+class Channel_Impl_13;
 struct RecordNumber;
 
 /**
@@ -51,8 +52,11 @@ class BOTAN_TEST_API Channel_IO {
                                                 std::shared_ptr<Callbacks> callbacks);
 
    protected:
-      Channel_IO(Connection_Side side, std::shared_ptr<const Policy> policy, std::shared_ptr<Callbacks> callbacks) :
-            m_policy(std::move(policy)), m_callbacks(std::move(callbacks)), m_side(side) {}
+      Channel_IO(Connection_Side side,
+                 TLS_Flavor flavor,
+                 std::shared_ptr<const Policy> policy,
+                 std::shared_ptr<Callbacks> callbacks) :
+            m_policy(std::move(policy)), m_callbacks(std::move(callbacks)), m_side(side), m_flavor(flavor) {}
 
    public:
       Channel_IO(const Channel_IO&) = delete;
@@ -198,6 +202,8 @@ class BOTAN_TEST_API Channel_IO {
          notify_closed_for_writing();
       }
 
+      virtual void init(const std::shared_ptr<Channel_Impl_13>& channel) { BOTAN_UNUSED(channel); }
+
       void set_cipher_state(std::weak_ptr<Cipher_State> cipher_state) { m_cipher_state = std::move(cipher_state); }
 
       void set_record_size_limits(uint16_t out, uint16_t in);
@@ -211,6 +217,7 @@ class BOTAN_TEST_API Channel_IO {
       void send_dummy_change_cipher_spec();
 
       virtual void process(const Handshake_Record& record) = 0;
+      virtual void process(const ACK_Record& ack_record) = 0;
       virtual void validate(const TransparentRecord& record) = 0;
 
       virtual void send_data(Record_Type record_type, std::span<const uint8_t> payload, Cipher_State* cipher_state) = 0;
@@ -237,6 +244,8 @@ class BOTAN_TEST_API Channel_IO {
       const Callbacks& callbacks() const { return *m_callbacks; }
 
       Callbacks& callbacks() { return *m_callbacks; }
+
+      std::shared_ptr<Callbacks> shared_callbacks() const { return m_callbacks; }
 
    private:
       void maybe_send_opportunistic_key_update();
@@ -275,6 +284,7 @@ class BOTAN_TEST_API Channel_IO {
       std::shared_ptr<const Policy> m_policy;
       std::shared_ptr<Callbacks> m_callbacks;
       Connection_Side m_side;
+      TLS_Flavor m_flavor;
 };
 
 }  // namespace Botan::TLS

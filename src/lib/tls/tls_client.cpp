@@ -44,11 +44,6 @@ Client::Client(const std::shared_ptr<Callbacks>& callbacks,
    if(offer_version.is_tls_13_or_later()) {
       const auto flavor = offer_version.flavor();
 
-      if(flavor.is_datagram()) {
-         // DTLS 1.3 is not yet supported.
-         throw Not_Implemented("DTLS 1.3 is not yet supported");
-      }
-
       m_impl = Client_Impl_13::create(
          callbacks, session_manager, creds, policy, rng, flavor, std::move(info), next_protocols);
 

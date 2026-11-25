@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "overrides": {},
+  "patterns": [
+    {
+      "pattern": "dtls13/client-replay-window-non-monotonic",
+      "skip": "Botan's DTLS 1.3 replay window holds 64 records; RFC 9147 4.5.1 leaves the window size to the receiver, while this test requires a 256-deep reorder tolerance"
+    },
+    {
+      "pattern": "dtls13/client-retransmits-final-flight-after-live-mtu-change",
+      "skip": "Botan's plzn shim does not implement plzn's set_mtu ('M') opcode for live MTU changes"
+    }
+  ]
+}

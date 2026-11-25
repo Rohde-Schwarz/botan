@@ -101,6 +101,12 @@ class Channel_Impl_13 : public Channel_Impl {
       }
 
       /**
+       * Terminate the connection (on sending or receiving an error alert) and
+       * clear secrets
+       */
+      void shutdown();
+
+      /**
       * Attempt to update the session's traffic key material
       * Note that this is possible with a TLS 1.3 channel, only.
       *
@@ -143,6 +149,8 @@ class Channel_Impl_13 : public Channel_Impl {
       Cipher_State* cipher_state() { return m_cipher_state.get(); }
 
    protected:
+      void init();
+
       Cipher_State& setup_cipher_state(std::unique_ptr<Cipher_State> cipher_state);
 
       virtual void process_handshake_msg(Handshake_Message_13 msg) = 0;
@@ -176,12 +184,6 @@ class Channel_Impl_13 : public Channel_Impl {
       void process(const Alert_Record& alert_record);
       void process(const ChangeCipherSpec_Record& ccs_record);
       void process(const ApplicationData_Record& app_data_record);
-
-      /**
-       * Terminate the connection (on sending or receiving an error alert) and
-       * clear secrets
-       */
-      void shutdown();
 
    protected:
 #if defined(BOTAN_HAS_TLS_DOWNGRADE_SUPPORT)
