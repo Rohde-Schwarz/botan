@@ -176,14 +176,6 @@ class BOTAN_TEST_API Channel_IO {
        */
       virtual void notify_received_final_flight() {}
 
-      /**
-       * Notifies that the handshake has completed.
-       *
-       * This is relevant for DTLS 1.3: the flight timeout guarding against a
-       * stuck handshake flight is cancelled once the handshake succeeds.
-       */
-      virtual void notify_handshake_complete() {}
-
       std::optional<Epoch0_SequenceNumbers> epoch0_sequence_numbers() const;
 
       /// @}

@@ -821,7 +821,6 @@ void Server_Impl_13::handle(const Finished_13& finished_msg) {
    cs->advance_with_client_finished(m_transcript_hash->current());
 
    m_channel_io->notify_received_final_flight();
-   m_channel_io->notify_handshake_complete();
 
    // no more handshake messages expected
    m_handshake->transitions.set_expected_next({});
