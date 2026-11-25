@@ -17,6 +17,7 @@
 #include <botan/tls_signature_scheme.h>
 #include <botan/internal/stl_util.h>
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <sstream>
 
@@ -532,6 +533,45 @@ size_t Policy::dtls_initial_timeout() const {
 
 size_t Policy::dtls_maximum_timeout() const {
    return 60 * 1000;
+}
+
+std::optional<size_t> Policy::dtls_flight_timeout() const {
+   const auto max_retransmissions = dtls_maximum_retransmissions();
+   if(!max_retransmissions.has_value()) {
+      return std::nullopt;
+   }
+
+   const size_t max_timeout = dtls_maximum_timeout();
+   size_t timeout = dtls_initial_timeout();
+   size_t total = 0;
+   size_t remaining = *max_retransmissions;
+
+   // Upper bound of the retransmission schedule: RetransmissionTimer waits
+   // (max_retransmissions + 1) intervals, doubling timeout up to max_timeout
+   // after each retransmission.
+   while(true) {
+      if(total > std::numeric_limits<size_t>::max() - timeout) {
+         return std::numeric_limits<size_t>::max();
+      }
+      total += timeout;
+
+      if(remaining == 0 || timeout == 0) {
+         break;
+      }
+
+      if(timeout == max_timeout) {
+         if(max_timeout > 0 && remaining > (std::numeric_limits<size_t>::max() - total) / max_timeout) {
+            return std::numeric_limits<size_t>::max();
+         }
+         total += remaining * max_timeout;
+         break;
+      }
+
+      --remaining;
+      timeout = (timeout > max_timeout / 2) ? max_timeout : 2 * timeout;
+   }
+
+   return total;
 }
 
 // Generous next to the one or two a legitimate cookie-secret rotation can

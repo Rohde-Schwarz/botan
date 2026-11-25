@@ -195,6 +195,20 @@ size_t Text_Policy::dtls_maximum_timeout() const {
    return get_len("dtls_maximum_timeout", Policy::dtls_maximum_timeout());
 }
 
+std::optional<size_t> Text_Policy::dtls_flight_timeout() const {
+   const std::string v = get_str("dtls_flight_timeout");
+
+   if(v.empty()) {
+      return Policy::dtls_flight_timeout();
+   }
+
+   if(v == "none") {
+      return std::nullopt;
+   }
+
+   return to_u32bit(v);
+}
+
 std::optional<size_t> Text_Policy::dtls_maximum_hello_verify_requests() const {
    const std::string v = get_str("dtls_maximum_hello_verify_requests");
 
