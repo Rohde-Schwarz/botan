@@ -9,6 +9,7 @@
 #ifndef BOTAN_TLS_TIMER_DTLS13_H_
 #define BOTAN_TLS_TIMER_DTLS13_H_
 
+#include <botan/assert.h>
 #include <botan/tls_callbacks.h>
 #include <botan/tls_exceptn.h>
 #include <botan/tls_policy.h>
@@ -88,6 +89,17 @@ class SingleshotTimer final {
          return registration;
       }
 
+      static uint64_t remaining(const Token& token, Callbacks& callbacks) {
+         const auto now = callbacks.tls_current_monotonic_clock_ms();
+         const auto deadline = token.deadline_ms;
+
+         if(deadline <= now) {
+            return 0;
+         } else {
+            return deadline - now;
+         }
+      }
+
       static void run_or_rearm(const std::weak_ptr<Callbacks>& weak_callbacks,
                                const TokenHandle& token_handle,
                                const std::shared_ptr<Registration>& registration,
@@ -123,9 +135,7 @@ class SingleshotTimer final {
          // this particular registration is now being consumed.
          registration->consumed = true;
 
-         const uint64_t now_ms = cb->tls_current_monotonic_clock_ms();
-
-         const uint64_t remaining_ms = token->deadline_ms > now_ms ? token->deadline_ms - now_ms : 0;
+         const auto remaining_ms = remaining(*token, *cb);
          if(remaining_ms > DTLS_RETRANSMISSION_TIMER_FUDGE) {
             // The timer was called pre-maturely. We re-arm it with a new
             // registration for the remaining time until the deadline.
@@ -193,6 +203,21 @@ class SingleshotTimer final {
       // NOLINTNEXTLINE(*-explicit-conversions)
       operator bool() const { return armed(); }
 
+      /**
+       * @returns the remaining waiting time or std::nullopt if not armed
+       *
+       * Note that this might return 0ms if the timer is armed and the deadline
+       * has been reached, but the deferred operation has not yet been executed.
+       */
+      std::optional<std::chrono::milliseconds> remaining(Callbacks& callbacks) const {
+         if(!armed()) {
+            return std::nullopt;
+         }
+
+         BOTAN_DEBUG_ASSERT(m_token != nullptr);
+         return std::chrono::milliseconds(remaining(*m_token, callbacks));
+      }
+
    private:
       std::shared_ptr<Token> m_token;
 };
@@ -200,13 +225,18 @@ class SingleshotTimer final {
 /**
  * DTLS retransmission timer implementing the schedule of RFC 6347 sec 4.2.4.1:
  * the timeout starts at the policy's initial value and doubles with each
- * retransmission, capped at the policy's maximum.
+ * retransmission, capped at the policy's maximum. Additionally, a "flight
+ * timeout" can be configured to bound the waiting time for progress from the
+ * peer with a blanket timeout.
  *
- * The user can cancel and restart the timer as needed. If the timer object is
- * destroyed, the timer is automatically cancelled.
+ * Blanket flight timeouts are especially useful in DTLS 1.3 when the peer fully
+ * acknowledged our flight (either explicitly via ACKs or implicitly by
+ * responding with a partial flight) but then does not complete its flight.
  *
- * Premature invocations of the underlying deferred operation are handled by
- * SingleshotTimer (re-arm for remaining time).
+ * The user can cancel and restart the timer as needed. The retransmission timer
+ * can be cancelled without cancelling the blanket flight timeout in exactly the
+ * scenario described above. If the timer object is destroyed, both timers are
+ * automatically cancelled.
  */
 class RetransmissionTimer final {
    public:
@@ -227,6 +257,7 @@ class RetransmissionTimer final {
       struct Token {
             const std::chrono::milliseconds initial_timeout;
             const std::chrono::milliseconds max_timeout;
+            const std::optional<std::chrono::milliseconds> flight_timeout;
             const std::optional<size_t> max_retransmissions;
             const std::shared_ptr<Callbacks> callbacks;
 
@@ -235,13 +266,23 @@ class RetransmissionTimer final {
             size_t retransmissions;
             std::chrono::milliseconds next_timeout;
             SingleshotTimer retransmission_timer;
+            SingleshotTimer flight_timer;
       };
+
+      static std::optional<std::chrono::milliseconds> get_flight_timeout(const Policy& policy) {
+         // TODO(C++23): std::optional::transform
+         if(const auto timeout = policy.dtls_flight_timeout()) {
+            return std::chrono::milliseconds(*timeout);
+         }
+         return std::nullopt;
+      }
 
    public:
       RetransmissionTimer(const Policy& policy, std::shared_ptr<Callbacks> callbacks) :
             m_token(std::make_shared<Token>(Token{
                .initial_timeout = std::chrono::milliseconds(policy.dtls_initial_timeout()),
                .max_timeout = std::chrono::milliseconds(policy.dtls_maximum_timeout()),
+               .flight_timeout = get_flight_timeout(policy),
                .max_retransmissions = policy.dtls_maximum_retransmissions(),
                .callbacks = std::move(callbacks),
                .on_retransmission = {},
@@ -249,7 +290,10 @@ class RetransmissionTimer final {
                .retransmissions = 0,
                .next_timeout = std::chrono::milliseconds(policy.dtls_initial_timeout()),
                .retransmission_timer = {},
-            })) {}
+               .flight_timer = {},
+            })) {
+         BOTAN_ASSERT_NONNULL(m_token->callbacks);
+      }
 
       ~RetransmissionTimer() = default;
 
@@ -258,70 +302,130 @@ class RetransmissionTimer final {
       RetransmissionTimer(RetransmissionTimer&&) = default;
       RetransmissionTimer& operator=(RetransmissionTimer&&) = default;
 
-      /// @returns true if the timer is currently armed; false otherwise
-      bool armed() const { return m_token->retransmission_timer.armed(); }
+      /// @returns true if the retransmission timer is currently armed; false otherwise
+      bool retransmissions_armed() const { return m_token->retransmission_timer.armed(); }
 
-      // NOLINTNEXTLINE(*-explicit-conversions)
-      operator bool() const { return armed(); }
+      /// @returns true if the flight timer is currently armed; false otherwise
+      bool flight_timeout_armed() const { return m_token->flight_timer.armed(); }
+
+      /**
+       * @returns the time remaining until the next retransmission, the blanket
+       *          flight timeout or std::nullopt if neither timer is armed.
+       *
+       * Note that this might return 0ms if the timer is armed and a deadline
+       * has been reached, but the deferred operation has not yet been executed.
+       */
+      std::optional<std::chrono::milliseconds> next_timeout() const {
+         if(!retransmissions_armed() && !flight_timeout_armed()) {
+            return std::nullopt;
+         }
+
+         const auto next_retransmission = m_token->retransmission_timer.remaining(*m_token->callbacks);
+         const auto flight_timeout = m_token->flight_timer.remaining(*m_token->callbacks);
+         BOTAN_DEBUG_ASSERT(next_retransmission.has_value() || flight_timeout.has_value());
+
+         return std::min(next_retransmission.value_or(std::chrono::milliseconds::max()),
+                         flight_timeout.value_or(std::chrono::milliseconds::max()));
+      }
+
+      /**
+       * Stop any further time-based retransmissions. This is typically done
+       * when a flight has been acknowledged by the peer and no further
+       * retransmissions are needed. This does not affect the flight timer,
+       * which may be used to detect a flight timeout if no further progress
+       * is made after a flight was acknowledged.
+       */
+      void stop_retransmissions() { reset_retransmission_timer(); }
 
       /**
        * Disarm the timer and reset the retransmission counter. This is done
-       * when the peer has acknowledged the last flight and no further
-       * retransmissions are needed. Note that this doesn't necesarily mean
-       * that the handshake is complete!
+       * when progress is made by receiving a full flight from the peer and the
+       * responsibility to produce a new flight now lies on us. In contrast to
+       * stop_retransmissions(), this also cancels the flight timer.
        */
-      void cancel() { reset(); }
+      void cancel() {
+         reset_retransmission_timer();
+         m_token->flight_timer.cancel();
+      }
 
       /**
-       * Arm (or restart) the timer when a *new* flight was just sent.
+       * Arm (or restart) the timers when a *new* flight was just sent.
        * Resets the timeout span to the initial value and the retransmission
-       * counter to zero.
+       * counter to zero. Optionally starts the blanket flight timer if it is
+       * configured.
        *
        * The operation @p on_retransmission will be executed consecutively
        * with an exponential backoff until the configured maximum retransmission
        * count is reached or the timer is cancelled.
+       *
+       * If the optional flight timeout is reached, retransmissions will be
+       * stopped as well.
        */
       void start(DeferredOperation on_retransmission) {
-         reset(std::move(on_retransmission));
-         set_timer(m_token);
+         reset_retransmission_timer(std::move(on_retransmission));
+         set_retransmission_timer(m_token);
+         set_flight_timer();
       }
 
       /**
        * Allows registering a callback that is invoked when the maximum
-       * retransmission count is reached and the timer expires. The callback is
-       * needed because the emitted exception from within the deferred operation
-       * cannot be caught by higher layers as they typically aren't in the stack
-       * frame.
+       * retransmission count is reached or the blanket flight timeout expires.
+       * The callback is needed because the emitted exception from within the
+       * deferred operations cannot be caught by higher layers of the library's
+       * DTLS business logic as they typically are invoked by the application
+       * directly.
        */
       void set_timeout_handler(TimeoutHandler handler) { m_token->on_timeout = std::move(handler); }
 
    private:
-      void reset(DeferredOperation on_retransmission = {}) {
+      void set_flight_timer() {
+         if(auto timeout = m_token->flight_timeout) {
+            m_token->flight_timer = SingleshotTimer::start(m_token->callbacks, *timeout, on_flight_timeout(m_token));
+         }
+      }
+
+      void reset_retransmission_timer(DeferredOperation on_retransmission = {}) {
          m_token->on_retransmission = std::move(on_retransmission);
          m_token->retransmissions = 0;
          m_token->next_timeout = m_token->initial_timeout;
          m_token->retransmission_timer.cancel();
       }
 
-      static void set_timer(const std::shared_ptr<Token>& token) {
-         token->retransmission_timer = SingleshotTimer::start(token->callbacks, token->next_timeout, on(token));
+      static void set_retransmission_timer(const std::shared_ptr<Token>& token) {
+         token->retransmission_timer =
+            SingleshotTimer::start(token->callbacks, token->next_timeout, on_retransmission_timeout(token));
       }
 
-      static SingleshotTimer::DeferredOperation on(const std::shared_ptr<Token>& token) {
+      static SingleshotTimer::DeferredOperation on_flight_timeout(const std::shared_ptr<Token>& token) {
+         return [weak = std::weak_ptr(token)] {
+            if(auto handle = weak.lock()) {
+               handle->retransmission_timer.cancel();
+               if(handle->on_timeout) {
+                  handle->on_timeout();
+               }
+               throw TLS_Exception(Alert::None,
+                                   "DTLS (post-)handshake message exchange timed out: flight timeout exceeded");
+            }
+         };
+      }
+
+      static SingleshotTimer::DeferredOperation on_retransmission_timeout(const std::shared_ptr<Token>& token) {
          return [weak_token = std::weak_ptr(token)] {
             if(auto handle = weak_token.lock()) {
                if(handle->max_retransmissions.has_value() &&
                   handle->retransmissions >= handle->max_retransmissions.value()) {
+                  handle->flight_timer.cancel();
                   if(handle->on_timeout) {
                      handle->on_timeout();
                   }
-                  throw TLS_Exception(Alert::None, "DTLS handshake timed out: maximum retransmissions exceeded");
+                  throw TLS_Exception(
+                     Alert::None, "DTLS (post-)handshake message exchange timed out: maximum retransmissions exceeded");
                }
 
                handle->on_retransmission();
                handle->next_timeout = std::min(2 * handle->next_timeout, handle->max_timeout);
                handle->retransmissions++;
-               set_timer(handle);
+               set_retransmission_timer(handle);
             }
          };
       }

@@ -190,6 +190,8 @@ std::string map_to_bogo_error(const std::string& e, std::string_view test_name) 
       {"Counterparty sent inconsistent key and sig types", ":WRONG_SIGNATURE_TYPE:"},
       {"Downgrade attack detected", ":TLS13_DOWNGRADE:"},
       {"DTLS handshake timed out: maximum retransmissions exceeded", ":READ_TIMEOUT_EXPIRED:"},
+      {"DTLS (post-)handshake message exchange timed out: flight timeout exceeded", ":READ_TIMEOUT_EXPIRED:"},
+      {"DTLS (post-)handshake message exchange timed out: maximum retransmissions exceeded", ":READ_TIMEOUT_EXPIRED:"},
       {"Empty ALPN protocol not allowed", ":PARSE_TLSEXT:"},
       {"Empty PSK binders list", ":DECODE_ERROR: "},
       {"Encoding error: Cannot encode PSS string, output length too small", ":NO_COMMON_SIGNATURE_ALGORITHMS:"},
